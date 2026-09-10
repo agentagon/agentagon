@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "project", "from", "to", "method", "tool_version", "complete", "roots"],
+  "properties": {
+    "source": {"enum": ["braintrust", "langfuse", "langsmith", "phoenix", "otlp"]},
+    "project": {"type": "string", "minLength": 1},
+    "from": {"type": "string", "minLength": 1},
+    "to": {"type": "string", "minLength": 1},
+    "method": {"type": "string", "minLength": 1},
+    "tool_version": {"type": "string", "minLength": 1},
+    "complete": {"type": "boolean"},
+    "roots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "started_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "maxLength": 512},
+          "started_at": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

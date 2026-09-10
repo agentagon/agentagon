@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "evaluation_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "validation_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "validation_digest": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "reviewer": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail",
+        "pending"
+      ]
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "assessments": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "relevance": {
+          "type": "boolean"
+        },
+        "sensitivity": {
+          "type": "boolean"
+        },
+        "provenance": {
+          "type": "boolean"
+        },
+        "leakage": {
+          "type": "boolean"
+        },
+        "delivery_scope": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "relevance",
+        "sensitivity",
+        "provenance",
+        "leakage",
+        "delivery_scope"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "evaluation_id",
+    "validation_id",
+    "validation_digest",
+    "reviewer",
+    "verdict",
+    "rationale",
+    "assessments",
+    "evidence"
+  ]
+}

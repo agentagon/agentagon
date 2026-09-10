@@ -1,0 +1,26 @@
+{
+  "name": "ag",
+  "version": "0.1.0",
+  "description": "Review local changes, audit agent applications, and evaluate measured improvements.",
+  "author": {
+    "name": "Agentagon"
+  },
+  "license": "Apache-2.0",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agentagon",
+    "shortDescription": "Review, audit and improve agent applications",
+    "longDescription": "Prepare reviewed benchmarks, audit applications, coordinate bounded improvement experiments in the active host task, inspect task evidence and verified tradeoffs, and clean and reverify selected delivery branches.",
+    "developerName": "Agentagon",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Use ag:review to review my local changes.",
+      "Use ag:audit to audit this agent application."
+    ]
+  }
+}

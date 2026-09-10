@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "max_trials": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_elapsed_seconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "trial_timeout_seconds": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "max_trials",
+    "max_elapsed_seconds",
+    "trial_timeout_seconds"
+  ]
+}

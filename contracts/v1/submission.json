@@ -1,0 +1,427 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "const": "1"
+    },
+    "rubric_version": {
+      "const": "1"
+    },
+    "audit_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "packet_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "packet_digest": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "evidence",
+        "diagnosis",
+        "clustering"
+      ]
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "issue_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1
+          },
+          "finding_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uniqueItems": true,
+            "minItems": 1
+          }
+        },
+        "required": [
+          "key",
+          "issue_id",
+          "title",
+          "summary",
+          "rationale",
+          "finding_ids"
+        ]
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "host",
+        "model"
+      ]
+    }
+  },
+  "required": [
+    "contract_version",
+    "rubric_version",
+    "audit_id",
+    "packet_id",
+    "packet_digest",
+    "stage",
+    "items",
+    "groups",
+    "agent"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "stage": {
+            "const": "evidence"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "subject": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "judgments": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "subject": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "facet": {
+                        "type": "string",
+                        "enum": [
+                          "trace.goal",
+                          "trace.requirements",
+                          "trace.outcome",
+                          "trace.fulfillment",
+                          "trace.user_experience",
+                          "llm.user_sentiment",
+                          "llm.hallucination",
+                          "llm.goal_alignment",
+                          "llm.user_revision",
+                          "llm.reasoning_validity",
+                          "llm.verification",
+                          "llm.tone",
+                          "llm.tool_selection",
+                          "llm.task_resolution",
+                          "code.correctness",
+                          "code.prompt_tool_contracts",
+                          "code.recovery",
+                          "code.permissions",
+                          "code.resource_use",
+                          "code.verification"
+                        ]
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "computed",
+                          "unknown",
+                          "not_applicable",
+                          "not_evaluated",
+                          "error"
+                        ]
+                      },
+                      "value": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "confidence": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "evidence": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "uniqueItems": true
+                      }
+                    },
+                    "required": [
+                      "subject",
+                      "facet",
+                      "status",
+                      "value",
+                      "reason",
+                      "confidence",
+                      "evidence"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "subject",
+                "judgments"
+              ]
+            }
+          },
+          "groups": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "stage": {
+            "const": "diagnosis"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "subject": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "reviewed",
+                    "not_evaluated"
+                  ]
+                },
+                "summary": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "findings": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "basis": {
+                        "type": "string",
+                        "enum": [
+                          "implementation_only",
+                          "runtime_only",
+                          "correlated"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "title": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "observation": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "expected_behavior": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "authority": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": [
+                          "critical",
+                          "high",
+                          "medium",
+                          "low"
+                        ]
+                      },
+                      "confidence": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "evidence": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "uniqueItems": true,
+                        "minItems": 1
+                      },
+                      "hypothesis": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "improvement": {
+                        "type": "boolean"
+                      },
+                      "correlation_rationale": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "key",
+                      "basis",
+                      "kind",
+                      "title",
+                      "observation",
+                      "expected_behavior",
+                      "authority",
+                      "severity",
+                      "confidence",
+                      "evidence",
+                      "hypothesis",
+                      "improvement",
+                      "correlation_rationale"
+                    ]
+                  }
+                },
+                "flag_dispositions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "flag_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "finding",
+                          "dismissed",
+                          "insufficient_evidence"
+                        ]
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "finding_keys": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "uniqueItems": true
+                      }
+                    },
+                    "required": [
+                      "flag_id",
+                      "status",
+                      "reason",
+                      "finding_keys"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "subject",
+                "status",
+                "summary",
+                "findings",
+                "flag_dispositions"
+              ]
+            }
+          },
+          "groups": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "stage": {
+            "const": "clustering"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "items": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

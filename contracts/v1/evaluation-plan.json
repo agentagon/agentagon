@@ -1,0 +1,539 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "spec": {
+      "$ref": "#/$defs/spec"
+    },
+    "provenance": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "holdout",
+            "limited"
+          ]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "holdout_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "status",
+        "rationale",
+        "holdout_paths"
+      ]
+    },
+    "negative_cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "mutations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                }
+              },
+              "required": [
+                "source",
+                "path"
+              ]
+            }
+          },
+          "expected_checks": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "id",
+          "description",
+          "mutations",
+          "expected_checks"
+        ]
+      }
+    },
+    "deliver_paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "metric_cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "mutations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                }
+              },
+              "required": [
+                "source",
+                "path"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "description",
+          "mutations"
+        ]
+      }
+    },
+    "metric_comparisons": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "metric": {
+            "$ref": "#/$defs/name"
+          },
+          "better": {
+            "$ref": "#/$defs/name"
+          },
+          "worse": {
+            "$ref": "#/$defs/name"
+          },
+          "min_delta": {
+            "type": "number",
+            "minimum": 0,
+            "default": 0
+          }
+        },
+        "required": [
+          "metric",
+          "better",
+          "worse"
+        ]
+      }
+    }
+  },
+  "required": [
+    "spec",
+    "provenance",
+    "coverage",
+    "negative_cases"
+  ],
+  "$defs": {
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "allOf": [
+        {
+          "pattern": "\\S"
+        },
+        {
+          "not": {
+            "pattern": "\u0000"
+          }
+        }
+      ]
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{0,79}$"
+    },
+    "path": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/text"
+        },
+        {
+          "not": {
+            "pattern": "^/|\\\\|(?:^|/)(?:\\.\\.|\\.git)(?:/|$)"
+          }
+        }
+      ]
+    },
+    "executionFile": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/path"
+        },
+        {
+          "not": {
+            "pattern": "(?:^|/)\\.[aA][gG][eE][nN][tT][aA][gG][oO][nN](?:/|$)|^(?:\\./)*\\.?$"
+          }
+        }
+      ]
+    },
+    "argv": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/text"
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "argv"
+      ],
+      "properties": {
+        "argv": {
+          "$ref": "#/$defs/argv"
+        },
+        "cwd": {
+          "$ref": "#/$defs/path"
+        }
+      }
+    },
+    "spec": {
+      "title": "Agentagon frozen evaluation specification",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "editable_paths",
+        "evaluation_paths",
+        "benchmark",
+        "metrics"
+      ],
+      "properties": {
+        "goal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/text"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issue_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        },
+        "editable_paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/path"
+          }
+        },
+        "evaluation_paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/path"
+          }
+        },
+        "benchmark": {
+          "$ref": "#/$defs/command"
+        },
+        "metrics": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "direction",
+              "unit"
+            ],
+            "properties": {
+              "direction": {
+                "enum": [
+                  "min",
+                  "max"
+                ]
+              },
+              "unit": {
+                "$ref": "#/$defs/text"
+              }
+            }
+          }
+        },
+        "task_metrics": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "direction",
+              "unit"
+            ],
+            "properties": {
+              "direction": {
+                "enum": [
+                  "min",
+                  "max"
+                ]
+              },
+              "unit": {
+                "$ref": "#/$defs/text"
+              }
+            }
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "metric",
+              "op",
+              "bound"
+            ],
+            "properties": {
+              "metric": {
+                "$ref": "#/$defs/name"
+              },
+              "op": {
+                "enum": [
+                  "gte",
+                  "lte"
+                ]
+              },
+              "bound": {
+                "type": "number"
+              },
+              "reference": {
+                "enum": [
+                  "absolute",
+                  "baseline_delta",
+                  "baseline_ratio"
+                ],
+                "default": "absolute"
+              }
+            }
+          }
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "argv"
+            ],
+            "properties": {
+              "id": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/name"
+                  },
+                  {
+                    "not": {
+                      "pattern": "^(?:benchmark$|setup-)"
+                    }
+                  }
+                ]
+              },
+              "argv": {
+                "$ref": "#/$defs/argv"
+              },
+              "cwd": {
+                "$ref": "#/$defs/path"
+              },
+              "issue_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/text"
+                }
+              },
+              "baseline_expected": {
+                "enum": [
+                  "pass",
+                  "fail"
+                ],
+                "default": "pass"
+              },
+              "preflight": {
+                "type": "boolean",
+                "default": false,
+                "description": "Run before the benchmark; stop fix trials on an unexpected exit. Preparation always runs the full sequence."
+              }
+            }
+          }
+        },
+        "overlays": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "path"
+            ],
+            "properties": {
+              "source": {
+                "$ref": "#/$defs/path"
+              },
+              "path": {
+                "$ref": "#/$defs/executionFile"
+              },
+              "deliver": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "path"
+            ],
+            "properties": {
+              "source": {
+                "$ref": "#/$defs/path"
+              },
+              "path": {
+                "$ref": "#/$defs/executionFile"
+              }
+            }
+          }
+        },
+        "repetitions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 3
+        },
+        "seeds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "items": {
+            "type": "integer"
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "slots"
+          ],
+          "properties": {
+            "slots": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1024
+            }
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "goal"
+          ],
+          "properties": {
+            "goal": {
+              "$ref": "#/$defs/text"
+            }
+          }
+        },
+        {
+          "required": [
+            "issue_ids"
+          ],
+          "properties": {
+            "issue_ids": {
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    }
+  },
+  "dependentRequired": {
+    "metric_cases": [
+      "metric_comparisons"
+    ],
+    "metric_comparisons": [
+      "metric_cases"
+    ]
+  }
+}

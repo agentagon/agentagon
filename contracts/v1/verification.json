@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "checked_at",
+    "source_revision",
+    "reason",
+    "trials"
+  ],
+  "properties": {
+    "checked_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trials": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "role",
+          "command",
+          "exit_code",
+          "log_path"
+        ],
+        "properties": {
+          "role": {
+            "enum": [
+              "baseline",
+              "candidate",
+              "control"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "log_path": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "role": {
+                  "const": "baseline"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "exit_code": {
+                  "not": {
+                    "const": 0
+                  }
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "exit_code": {
+                  "const": 0
+                }
+              }
+            }
+          }
+        ]
+      },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "role": {
+                "const": "baseline"
+              }
+            }
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "role": {
+                "const": "candidate"
+              }
+            }
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "role": {
+                "const": "control"
+              }
+            }
+          },
+          "minContains": 1
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "description": "At least one of context or focus is required. Their combined length must be at most 4,000 characters, enforced by the client and service before and after redaction.",
+  "anyOf": [
+    {
+      "required": [
+        "context"
+      ]
+    },
+    {
+      "required": [
+        "focus"
+      ]
+    }
+  ],
+  "properties": {
+    "context": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "pattern": "\\S",
+      "description": "Privacy-safe project purpose, workflow, architecture, constraints and available evaluation or runtime evidence. No raw code, traces, PII or secrets."
+    },
+    "focus": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "pattern": "\\S",
+      "description": "Privacy-safe specific asks or investigation objectives, prepared separately from any stored raw audit goal."
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5
+    }
+  }
+}

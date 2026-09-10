@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "agentagon fix hook", "timeout": 5}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "agentagon fix hook", "timeout": 5}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "agentagon fix hook", "timeout": 5}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "agentagon fix hook", "timeout": 5}]}]
+  }
+}

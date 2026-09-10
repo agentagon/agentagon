@@ -1,0 +1,313 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "const": "1"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "braintrust",
+        "langfuse",
+        "langsmith",
+        "phoenix",
+        "otlp"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider_trace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "root_started_ns": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "completeness": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ]
+    },
+    "missing_parents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "spans": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/span"
+      }
+    },
+    "digest": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "contract_version",
+    "id",
+    "source",
+    "project",
+    "provider_trace_id",
+    "root_started_ns",
+    "completeness",
+    "missing_parents",
+    "spans",
+    "digest"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "span_id",
+        "trace_id",
+        "trace_key",
+        "parent_span_ids",
+        "kind",
+        "name",
+        "operation",
+        "status",
+        "error",
+        "started_ns",
+        "ended_ns",
+        "input",
+        "output",
+        "messages",
+        "tool_call_id",
+        "session_id",
+        "model",
+        "usage",
+        "attributes",
+        "metadata",
+        "resource",
+        "scope",
+        "events",
+        "links",
+        "raw_ref",
+        "source_digest"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "span_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trace_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trace_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parent_span_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "kind": {
+          "enum": [
+            "agent",
+            "task",
+            "llm",
+            "tool",
+            "generic"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "error",
+            "unknown"
+          ]
+        },
+        "error": {},
+        "started_ns": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ended_ns": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "input": {},
+        "output": {},
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/message"
+          }
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "input_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "output_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "total_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "cache_read_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "cost_usd": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        },
+        "attributes": {
+          "type": "object"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "resource": {
+          "type": "object"
+        },
+        "scope": {
+          "type": "object"
+        },
+        "events": {
+          "type": "array"
+        },
+        "links": {
+          "type": "array"
+        },
+        "raw_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "provider_id",
+        "role",
+        "parts",
+        "tool_call_id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string"
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

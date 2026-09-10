@@ -1,0 +1,51 @@
+{
+  "spans": [
+    {
+      "span_id": "1111111111111111",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "parent_id": null,
+      "name": "agent",
+      "start_time": "2026-08-10T12:00:00.000Z",
+      "end_time": "2026-08-10T12:00:01.000Z",
+      "status_code": "OK",
+      "attributes": {
+        "openinference.span.kind": "AGENT",
+        "input.value": "{\"question\":\"What is the temperature in London?\"}",
+        "output.value": "null"
+      }
+    },
+    {
+      "span_id": "2222222222222222",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "parent_id": "1111111111111111",
+      "name": "llm",
+      "start_time": "2026-08-10T12:00:01.000Z",
+      "end_time": "2026-08-10T12:00:02.000Z",
+      "status_code": "OK",
+      "attributes": {
+        "openinference.span.kind": "LLM",
+        "input.value": "[{\"role\":\"user\",\"content\":\"What is the temperature in London?\"}]",
+        "output.value": "[{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"weather-call\",\"type\":\"function\",\"function\":{\"name\":\"weather\",\"arguments\":\"{\\\"city\\\":\\\"London\\\"}\"}}]}]",
+        "llm.token_count.prompt": 10,
+        "llm.token_count.completion": 2,
+        "llm.cost.total": 0.001
+      }
+    },
+    {
+      "span_id": "3333333333333333",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "parent_id": "2222222222222222",
+      "name": "weather",
+      "start_time": "2026-08-10T12:00:02.000Z",
+      "end_time": "2026-08-10T12:00:03.000Z",
+      "status_code": "ERROR",
+      "attributes": {
+        "openinference.span.kind": "TOOL",
+        "input.value": "{\"city\":\"London\"}",
+        "output.value": "{\"error\":\"Weather service timed out\"}",
+        "tool.call.id": "weather-call",
+        "exception.message": "Weather service timed out"
+      }
+    }
+  ]
+}

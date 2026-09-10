@@ -1,0 +1,13 @@
+title = "Agentagon secret scanning"
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Exact public PostHog ingestion token in its shipped default"
+condition = "AND"
+paths = ['''^src/agentagon/usage\.py$''']
+regexTarget = "secret"
+regexes = ['''^phc_CUB2gYkuZX7TsLaJmTxqUg7iCbuitCxkYW4LVgcy9HKn$''']
