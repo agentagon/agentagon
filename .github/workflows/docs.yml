@@ -1,0 +1,95 @@
+name: Website checks and deployment
+
+on:
+  push:
+    paths:
+      - 'website/**'
+      - 'docs/**'
+      - 'docs_theme/**'
+      - 'mkdocs.yml'
+      - 'requirements-docs.txt'
+      - 'THIRD_PARTY_NOTICES.txt'
+      - 'scripts/docs_links.py'
+      - 'scripts/build_site.py'
+      - 'scripts/check_site.py'
+      - 'tests/test_site.py'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    paths:
+      - 'website/**'
+      - 'docs/**'
+      - 'docs_theme/**'
+      - 'mkdocs.yml'
+      - 'requirements-docs.txt'
+      - 'THIRD_PARTY_NOTICES.txt'
+      - 'scripts/docs_links.py'
+      - 'scripts/build_site.py'
+      - 'scripts/check_site.py'
+      - 'tests/test_site.py'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements-docs.txt 'pytest>=8,<10'
+      - name: Build and check website
+        env:
+          IS_PREVIEW: ${{ github.ref != 'refs/heads/main' }}
+        run: |
+          if [ "$IS_PREVIEW" = true ]; then
+            python scripts/build_site.py --preview
+          else
+            python scripts/build_site.py
+          fi
+          node --check website/assets/site.js
+          node --check website/assets/theme-init.js
+          python -m pytest tests/test_site.py --noconftest -q
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: website
+          path: site/
+          retention-days: 7
+      - name: Deploy production or trusted PR preview
+        if: >-
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'pull_request' &&
+           github.event.pull_request.head.repo.full_name == github.repository)
+        uses: Azure/static-web-apps-deploy@4d27395796ac319302594769cfe812bd207490b1 # v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: upload
+          app_location: site
+          output_location: ''
+          skip_app_build: true
+
+  close-preview:
+    if: >-
+      github.event_name == 'pull_request' && github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Azure/static-web-apps-deploy@4d27395796ac319302594769cfe812bd207490b1 # v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: close

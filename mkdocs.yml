@@ -1,0 +1,105 @@
+site_name: Agentagon Docs
+site_url: https://agentagon.ai/docs/
+site_description: Review agent applications, understand the evidence, and measure improvements before shipping.
+repo_url: https://github.com/agentagon/agentagon
+repo_name: agentagon/agentagon
+edit_uri: edit/main/docs/
+docs_dir: docs
+site_dir: site
+strict: true
+validation:
+  links:
+    anchors: warn
+    not_found: warn
+    unrecognized_links: warn
+exclude_docs: |
+  contributing/
+theme:
+  name: material
+  custom_dir: docs_theme
+  logo: assets/logo.png
+  favicon: assets/logo.png
+  font: false
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.footer
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+plugins:
+  - search
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+extra_css:
+  - assets/docs.css
+hooks:
+  - scripts/docs_links.py
+extra:
+  homepage: /
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/agentagon/agentagon
+      name: Agentagon on GitHub
+copyright: Agentagon · Apache 2.0
+nav:
+  - Getting started:
+      - Introduction: README.md
+      - Install: getting-started/install.md
+      - Quick start: getting-started/first-audit.md
+      - Bring one failure: getting-started/bring-one-failure.md
+  - Using Agentagon:
+      - Audit your application: audit.md
+      - Review your changes: review.md
+      - Read reports and issues: reports.md
+      - Prepare an evaluation: eval.md
+      - Measure candidate fixes: fix.md
+      - Select and deliver a fix: delivery.md
+      - Explore the dashboard: dashboard.md
+  - Concepts:
+      - How it works: concepts.md
+      - Where work runs: execution.md
+      - Privacy and data: privacy.md
+  - Reference:
+      - Settings and profiles: settings.md
+      - Connect execution traces: traces.md
+      - Agentagon Intelligence: intelligence.md
+      - Evaluation preparation: reference/evaluation.md
+      - Fix configuration and controls: reference/fix.md
+      - Coordinate work and resume: orchestration.md
+      - Task events and artifacts: task-evidence.md
+      - CLI reference: reference/cli.md
+      - Product telemetry: telemetry.md
+  - Help:
+      - Troubleshooting: troubleshooting.md
+      - Frequently asked questions: faq.md

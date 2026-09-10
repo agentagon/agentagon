@@ -1,0 +1,82 @@
+[
+  {
+    "id": "root",
+    "trace_id": "root",
+    "parent_run_id": null,
+    "run_type": "agent",
+    "name": "agent",
+    "start_time": "2026-08-10T12:00:00.000Z",
+    "end_time": "2026-08-10T12:00:01.000Z",
+    "inputs": {
+      "question": "What is the temperature in London?"
+    },
+    "outputs": null,
+    "error": null,
+    "extra": {
+      "metadata": {}
+    }
+  },
+  {
+    "id": "llm",
+    "trace_id": "root",
+    "parent_run_id": "root",
+    "run_type": "llm",
+    "name": "llm",
+    "start_time": "2026-08-10T12:00:01.000Z",
+    "end_time": "2026-08-10T12:00:02.000Z",
+    "inputs": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "What is the temperature in London?"
+        }
+      ]
+    },
+    "outputs": {
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "id": "weather-call",
+              "type": "function",
+              "function": {
+                "name": "weather",
+                "arguments": "{\"city\":\"London\"}"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "error": null,
+    "prompt_tokens": 10,
+    "completion_tokens": 2,
+    "total_cost": "0.001",
+    "extra": {
+      "metadata": {}
+    }
+  },
+  {
+    "id": "tool",
+    "trace_id": "root",
+    "parent_run_id": "llm",
+    "run_type": "tool",
+    "name": "weather",
+    "start_time": "2026-08-10T12:00:02.000Z",
+    "end_time": "2026-08-10T12:00:03.000Z",
+    "inputs": {
+      "city": "London"
+    },
+    "outputs": {
+      "error": "Weather service timed out"
+    },
+    "error": "Weather service timed out",
+    "extra": {
+      "metadata": {
+        "tool_call_id": "weather-call"
+      }
+    }
+  }
+]

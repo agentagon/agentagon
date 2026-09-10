@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Agentagon · Local dashboard</title>
+  <link rel="icon" href="/logo-split-crown-96.png" type="image/png">
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/workflow.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to results</a>
+  <header class="masthead">
+    <a class="brand" href="#main" aria-label="Agentagon dashboard"><img src="/logo-split-crown-96.png" width="96" height="96" alt=""><span translate="no">agentagon</span></a>
+    <span class="local-label">Local workspace</span>
+    <div class="header-actions">
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark theme" hidden>
+        <svg class="moon-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 13.2A9 9 0 0 1 10.8 3.2a9 9 0 1 0 10 10Z" /></svg>
+        <svg class="sun-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>
+      </button>
+      <button id="refresh" class="button" type="button">Refresh</button>
+    </div>
+  </header>
+  <div class="layout">
+    <aside class="sidebar" aria-label="Workspace history">
+      <p class="eyebrow">Current workspace</p>
+      <h1 id="workspace-name">Audit dashboard</h1>
+      <p id="workspace-path" class="workspace-path"></p>
+      <div class="view-switcher" role="group" aria-label="Dashboard view">
+        <button id="view-audit" class="button" type="button" aria-pressed="true">Audits &amp; reviews</button>
+        <button id="view-fix" class="button" type="button" aria-pressed="false">Fix runs</button>
+        <button id="view-eval" class="button" type="button" aria-pressed="false">Evaluations</button>
+      </div>
+      <div id="audit-history">
+        <label for="audit-select">Audit and review history</label>
+        <select id="audit-select" disabled><option>Loading audits…</option></select>
+        <p id="audit-count" class="muted small"></p>
+      </div>
+      <div id="fix-history" hidden>
+        <label for="run-select">Fix run history</label>
+        <select id="run-select" disabled><option>Loading fix runs…</option></select>
+        <p id="run-count" class="muted small"></p>
+      </div>
+      <div id="eval-history" hidden><label for="eval-select">Evaluation history</label><select id="eval-select" disabled><option>Loading evaluations…</option></select><p id="eval-count" class="muted small"></p></div>
+      <details class="sidebar-note"><summary>Commands for your coding agent</summary><p><code>ag:review</code> Inspect changes<br><code>ag:eval</code> Prepare a benchmark<br><code>ag:fix</code> Improve your agents</p></details>
+      <div class="workspace-landscape" aria-hidden="true"></div>
+    </aside>
+    <main id="main" tabindex="-1">
+      <p id="announcement" class="sr-only" aria-live="polite"></p>
+      <div id="error" class="error" role="alert" hidden></div>
+      <div id="loading" class="empty"><p class="eyebrow">Audit workspace</p><h2>Loading local audits…</h2></div>
+      <div id="empty" class="empty" hidden><p class="eyebrow">Your first audit</p><h2>Find failures.<br><em>Test improvements.</em></h2><p>Start with your existing agent and one concern. Audit its code and available traces, or bring a known failure straight into a measured fix.</p><div class="start-commands"><div><code>ag:audit</code><span>Audit your agent</span></div><div><code>ag:fix</code><span>Improve your agent</span></div></div><p class="muted small">Use ag:review for local changes or ag:eval for benchmark-only work. Run the workflow in your coding agent, then select Refresh.</p></div>
+      <div id="fix-empty" class="empty" hidden><p class="eyebrow">Fix runs</p><h2>No fix runs yet.</h2><p>Invoke ag:fix in your coding agent to investigate a measured improvement. Candidate comparisons and reviewable branches will appear here.</p><code class="command">ag:fix</code></div>
+      <div id="eval-empty" class="empty" hidden><p class="eyebrow">Evaluation preparation</p><h2>Start with <em>useful checks.</em></h2><p>Invoke ag:eval with a goal or saved findings. Baseline and deliberately incorrect cases will appear here.</p><code class="command">ag:eval</code></div>
+      <article id="evaluation" hidden><div class="audit-top"><p id="eval-date" class="eyebrow"></p><span id="eval-state" class="status"></span></div><h2>Evaluation preparation</h2><p id="eval-goal" class="goal"></p><div id="eval-content"></div></article>
+      <article id="audit" hidden>
+        <div class="audit-top"><p id="audit-date" class="eyebrow"></p><span id="audit-state" class="status"></span></div>
+        <h2 id="audit-title">Audit overview</h2>
+        <p id="goal" class="goal"></p>
+        <div id="audit-meta" class="audit-meta"></div>
+        <section id="progress-section" class="progress-section" aria-labelledby="progress-heading">
+          <div class="section-heading"><h3 id="progress-heading">Review progress</h3><span id="progress-caption" class="muted small"></span></div>
+          <ol id="stages" class="stages" aria-label="Audit stages"></ol>
+          <div id="coverage" class="coverage"></div>
+          <p id="pending" class="pending"></p>
+        </section>
+        <section class="issues-section" aria-labelledby="issues-heading">
+          <div class="section-heading"><h3 id="issues-heading">Issues and recommendations</h3><span id="issue-count" class="count"></span></div>
+          <p class="muted section-intro">Ordered by severity, affected traces, and confidence.</p>
+          <div id="issues"></div>
+        </section>
+        <section id="ungrouped-section" class="ungrouped-section" aria-labelledby="ungrouped-heading" hidden><h3 id="ungrouped-heading">Findings awaiting grouping</h3><div id="ungrouped"></div></section>
+        <details class="scope-details"><summary>Scope and limits</summary><div id="scope" class="details-body"></div></details>
+        <footer class="audit-footer"><span id="audit-id"></span><span>Stored in this workspace</span></footer>
+      </article>
+      <article id="fix-run" hidden>
+        <div class="audit-top"><p id="run-date" class="eyebrow"></p><span id="run-state" class="status"></span></div>
+        <h2>Fix run</h2>
+        <p id="run-goal" class="goal"></p>
+        <div id="run-meta" class="audit-meta"></div>
+        <section class="progress-section" aria-labelledby="run-result-heading">
+          <h3 id="run-result-heading">Result for review</h3>
+          <div id="run-result" class="run-result"></div>
+        </section>
+        <section id="fix-controls" class="fix-controls" aria-labelledby="controls-heading" hidden>
+          <div class="section-heading"><h3 id="controls-heading">Guide this run</h3><span class="status">Controls enabled</span></div>
+          <p class="muted section-intro">Strategy and candidate decisions apply here. Proposals, directives and continuation wait for your coding agent.</p>
+          <p id="control-feedback" class="control-feedback" role="status" aria-live="polite" hidden></p>
+          <fieldset id="control-fields" class="control-fields">
+            <legend class="sr-only">Fix run controls</legend>
+            <div class="control-grid">
+              <details class="control-panel" open>
+                <summary>Search strategy</summary>
+                <form id="policy-form" class="control-form">
+                  <label for="policy-strategy">Strategy</label>
+                  <select id="policy-strategy"><option value="pareto">Pareto frontier</option><option value="argmax">Best objective value</option><option value="top_k">Top K candidates</option><option value="epsilon_greedy">Epsilon greedy</option><option value="softmax">Softmax sampling</option><option value="pareto_per_task">Per-task winners</option></select>
+                  <div id="policy-objective-field"><label for="policy-objective">Objective</label><select id="policy-objective"></select></div>
+                  <div id="policy-k-field" hidden><label for="policy-k">Candidates to consider</label><input id="policy-k" type="number" min="1" step="1" value="3"></div>
+                  <div id="policy-epsilon-field" hidden><label for="policy-epsilon">Exploration probability</label><input id="policy-epsilon" type="number" min="0" max="1" step="0.01" value="0.2"></div>
+                  <div id="policy-temperature-field" hidden><label for="policy-temperature">Sampling temperature</label><input id="policy-temperature" type="number" min="0.000001" step="any" value="1"></div>
+                  <label for="policy-seed">Random seed</label><input id="policy-seed" type="number" step="1" value="0" required>
+                  <button class="button" type="submit">Save strategy</button>
+                </form>
+              </details>
+              <details class="control-panel" open>
+                <summary>Propose a candidate</summary>
+                <form id="expand-form" class="control-form">
+                  <label for="expand-parent">Start from candidate</label><select id="expand-parent" required></select>
+                  <label for="expand-hypothesis">Improvement to investigate</label><textarea id="expand-hypothesis" rows="3" maxlength="4096" required></textarea>
+                  <p class="muted small">Your coding agent authors and evaluates the proposal when it resumes this run.</p>
+                  <button id="expand-submit" class="button" type="submit">Queue proposal</button>
+                </form>
+              </details>
+              <details class="control-panel">
+                <summary>Send a directive</summary>
+                <form id="directive-form" class="control-form">
+                  <label for="directive-text">Guidance for your coding agent</label><textarea id="directive-text" rows="3" maxlength="4096" required></textarea>
+                  <button class="button" type="submit">Queue directive</button>
+                </form>
+              </details>
+              <details class="control-panel">
+                <summary>Stop or continue</summary>
+                <div class="control-form"><button id="stop-run" class="button control-stop" type="button">Stop run</button></div>
+                <form id="continue-form" class="control-form">
+                  <label for="continue-limits">New execution limits (optional JSON)</label><textarea id="continue-limits" class="json-input" rows="4" spellcheck="false" placeholder="Leave empty to keep current limits"></textarea>
+                  <p class="muted small">Exhausted runs require explicit larger limits. Continuing queues work for your coding agent.</p>
+                  <button id="continue-submit" class="button" type="submit">Queue continuation</button>
+                </form>
+              </details>
+              <details class="control-panel">
+                <summary>Select a branch</summary>
+                <form id="select-form" class="control-form">
+                  <label for="select-candidate">Candidate on the verified frontier</label><select id="select-candidate" required></select>
+                  <p class="muted small">Creates a reviewable branch. Applying it and resolving issues remain separate decisions.</p>
+                  <button id="select-submit" class="button" type="submit">Select branch</button>
+                </form>
+              </details>
+              <details class="control-panel">
+                <summary>Exclude a candidate</summary>
+                <form id="candidate-action-form" class="control-form">
+                  <label for="candidate-action-target">Candidate</label><select id="candidate-action-target" required></select>
+                  <label for="candidate-action">Decision</label><select id="candidate-action"><option value="exhaust">Stop exploring descendants</option><option value="invalidate">Invalidate candidate and descendants</option></select>
+                  <label for="candidate-action-reason">Reason</label><textarea id="candidate-action-reason" rows="2" maxlength="4096" required></textarea>
+                  <button id="candidate-action-submit" class="button" type="submit">Record decision</button>
+                </form>
+              </details>
+            </div>
+          </fieldset>
+        </section>
+        <section id="run-operations" class="run-operations" aria-labelledby="operations-heading" hidden>
+          <div class="section-heading"><h3 id="operations-heading">Control history</h3><span id="operations-count" class="count"></span></div>
+          <p class="muted section-intro">Queued work waits for your coding agent. Applied controls have taken effect; candidate verification is tracked separately.</p>
+          <ol id="operation-list" class="operation-list"></ol>
+        </section>
+        <section class="workflow-section" aria-labelledby="work-heading"><h3 id="work-heading">Work in progress</h3><div id="run-work"></div></section>
+        <section class="workflow-section" aria-labelledby="tree-heading"><h3 id="tree-heading">Experiment tree</h3><div id="experiment-tree"></div></section>
+        <section class="workflow-section" aria-labelledby="objectives-heading"><h3 id="objectives-heading">Objective comparison</h3><div class="plot-controls"><label>X objective <select id="objective-x"></select></label><label>Y objective <select id="objective-y"></select></label></div><div id="objective-plot"></div><p class="muted small">Each point is one candidate. Select a point or tree entry to inspect its evidence. Every objective remains separate.</p></section>
+        <section class="issues-section" aria-labelledby="candidates-heading">
+          <div class="section-heading"><h3 id="candidates-heading">Candidate comparisons</h3><span id="candidate-count" class="count"></span></div>
+          <p class="muted section-intro">Measured values and changes from the baseline. The frontier retains eligible tradeoffs; it does not imply one winner.</p>
+          <div id="candidate-table" class="table-scroll" role="region" aria-label="Candidate metrics, constraints and review" tabindex="0"></div>
+        </section>
+        <section class="workflow-section" aria-labelledby="inspect-heading"><h3 id="inspect-heading">Candidate evidence</h3><label for="inspect-candidate">Inspect candidate</label><select id="inspect-candidate"></select><div id="candidate-inspector" aria-live="polite"></div></section>
+        <section class="workflow-section" aria-labelledby="lessons-heading"><h3 id="lessons-heading">Lessons</h3><div id="run-lessons"></div></section>
+        <details class="scope-details"><summary>Run bounds and usage</summary><div id="run-bounds" class="details-body"></div></details>
+        <footer class="audit-footer"><span id="run-id"></span><span id="run-access">Read-only · Stored in this workspace</span></footer>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

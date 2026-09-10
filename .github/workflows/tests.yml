@@ -1,0 +1,80 @@
+name: Audit checks
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: '3.12'
+          - os: ubuntu-latest
+            python-version: '3.13'
+          - os: macos-latest
+            python-version: '3.13'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - run: python -m pip install '.[dev]'
+      - run: python -m ruff check src tests skills/eval/helpers scripts examples
+      - run: python -m ruff format --check src tests skills/eval/helpers scripts examples
+      - name: Check shipped JavaScript and shell syntax
+        run: |
+          for script in src/agentagon/dashboard_assets/*.js skills/eval/helpers/*.cjs; do
+            node --check "$script"
+          done
+          sh -n scripts/install.sh
+      - run: python -m pytest -q
+      - run: python -m build
+      - name: Install and exercise the built wheel outside the checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -m venv "$RUNNER_TEMP/agentagon-wheel"
+          "$RUNNER_TEMP/agentagon-wheel/bin/python" -m pip install "$GITHUB_WORKSPACE"/dist/*.whl
+          "$RUNNER_TEMP/agentagon-wheel/bin/python" "$GITHUB_WORKSPACE/scripts/check_installed.py"
+          "$RUNNER_TEMP/agentagon-wheel/bin/python" "$GITHUB_WORKSPACE/examples/local-audit/demo.py"
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - run: python -m pip install '.[dev,browser]'
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m pytest tests/test_dashboard_browser.py -q
+
+  source-package:
+    name: Source package and website
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - run: python -m pip install '.[dev]' 'twine>=6,<7' -r requirements-docs.txt
+      - run: python -m build && python -m twine check --strict dist/*
+      - name: Build the website from the extracted source package
+        run: |
+          mkdir "$RUNNER_TEMP/source-package"
+          tar -xzf dist/*.tar.gz -C "$RUNNER_TEMP/source-package"
+          cd "$RUNNER_TEMP"/source-package/agentagon-*
+          python scripts/build_site.py
+          python -m pytest tests/test_site.py --noconftest -q

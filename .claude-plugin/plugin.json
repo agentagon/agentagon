@@ -1,0 +1,8 @@
+{
+  "name": "ag",
+  "version": "0.1.1",
+  "description": "Review local changes, audit agent applications, and evaluate measured improvements.",
+  "author": {"name": "Agentagon"},
+  "license": "Apache-2.0",
+  "skills": "./skills/"
+}

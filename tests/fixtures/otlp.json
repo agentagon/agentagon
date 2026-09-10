@@ -1,0 +1,148 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "fixture-agent"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openinference",
+            "version": "1"
+          },
+          "spans": [
+            {
+              "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "spanId": "1111111111111111",
+              "name": "agent",
+              "startTimeUnixNano": "1786363200000000000",
+              "endTimeUnixNano": "1786363201000000000",
+              "status": {
+                "code": 1
+              },
+              "attributes": [
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "AGENT"
+                  }
+                },
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"question\":\"What is the temperature in London?\"}"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "null"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "spanId": "2222222222222222",
+              "parentSpanId": "1111111111111111",
+              "name": "llm",
+              "startTimeUnixNano": "1786363201000000000",
+              "endTimeUnixNano": "1786363202000000000",
+              "status": {
+                "code": 1
+              },
+              "attributes": [
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "LLM"
+                  }
+                },
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"content\":\"What is the temperature in London?\"}]"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"weather-call\",\"type\":\"function\",\"function\":{\"name\":\"weather\",\"arguments\":\"{\\\"city\\\":\\\"London\\\"}\"}}]}]"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt",
+                  "value": {
+                    "doubleValue": 10
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion",
+                  "value": {
+                    "doubleValue": 2
+                  }
+                },
+                {
+                  "key": "llm.cost.total",
+                  "value": {
+                    "doubleValue": 0.001
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "spanId": "3333333333333333",
+              "parentSpanId": "2222222222222222",
+              "name": "weather",
+              "startTimeUnixNano": "1786363202000000000",
+              "endTimeUnixNano": "1786363203000000000",
+              "status": {
+                "code": 2
+              },
+              "attributes": [
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "TOOL"
+                  }
+                },
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"city\":\"London\"}"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"error\":\"Weather service timed out\"}"
+                  }
+                },
+                {
+                  "key": "tool.call.id",
+                  "value": {
+                    "stringValue": "weather-call"
+                  }
+                },
+                {
+                  "key": "exception.message",
+                  "value": {
+                    "stringValue": "Weather service timed out"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

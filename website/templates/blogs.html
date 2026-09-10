@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<main class="reading-main" id="main">
+  <header class="editorial-header">
+    <p class="eyebrow">The Agentagon blog</p>
+    <h1>Better agents.<br /><em>Measured, not assumed.</em></h1>
+    <p class="reading-lead">Notes on understanding agent behavior, finding regressions, and proving that a change helps.</p>
+  </header>
+  <div class="post-list">
+    {% for post in posts %}
+    <article class="post-preview">
+      <p class="post-meta"><time datetime="{{ post.published_at }}">{{ post.published_label }}</time> · {{ post.author }}</p>
+      <h2><a href="{{ post.path }}">{{ post.title }}</a></h2>
+      <p>{{ post.description }}</p>
+      <a class="read-link" href="{{ post.path }}" aria-label="Read {{ post.title }}">Read article <span aria-hidden="true">↗</span></a>
+    </article>
+    {% endfor %}
+  </div>
+</main>
+{% endblock %}

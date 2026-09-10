@@ -1,0 +1,88 @@
+[
+  {
+    "span_id": "root",
+    "root_span_id": "root",
+    "span_parents": [],
+    "span_attributes": {
+      "type": "agent",
+      "name": "agent"
+    },
+    "metrics": {
+      "start": 1786363200,
+      "end": 1786363201
+    },
+    "input": {
+      "question": "What is the temperature in London?"
+    },
+    "output": null,
+    "error": null,
+    "metadata": {}
+  },
+  {
+    "span_id": "llm",
+    "root_span_id": "root",
+    "span_parents": [
+      "root"
+    ],
+    "span_attributes": {
+      "type": "llm",
+      "name": "llm"
+    },
+    "metrics": {
+      "start": 1786363201,
+      "end": 1786363202,
+      "prompt_tokens": 10,
+      "completion_tokens": 2,
+      "cost": 0.001
+    },
+    "input": [
+      {
+        "role": "user",
+        "content": "What is the temperature in London?"
+      }
+    ],
+    "output": [
+      {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "weather-call",
+            "type": "function",
+            "function": {
+              "name": "weather",
+              "arguments": "{\"city\":\"London\"}"
+            }
+          }
+        ]
+      }
+    ],
+    "error": null,
+    "metadata": {}
+  },
+  {
+    "span_id": "tool",
+    "root_span_id": "root",
+    "span_parents": [
+      "llm"
+    ],
+    "span_attributes": {
+      "type": "tool",
+      "name": "weather"
+    },
+    "metrics": {
+      "start": 1786363202,
+      "end": 1786363203
+    },
+    "input": {
+      "city": "London"
+    },
+    "output": {
+      "error": "Weather service timed out"
+    },
+    "error": "Weather service timed out",
+    "metadata": {
+      "tool_call_id": "weather-call"
+    }
+  }
+]

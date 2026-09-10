@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "description": "Fix guidance requires a privacy-safe issue focus; context is optional. Combined text is limited to 4,000 characters before and after redaction.",
+  "properties": {
+    "context": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "pattern": "\\S",
+      "description": "Privacy-safe project purpose, workflow, architecture, constraints and available evaluation or runtime evidence. No raw code, traces, PII or secrets."
+    },
+    "focus": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "pattern": "\\S",
+      "description": "Privacy-safe known issue or concrete improvement problem, prepared separately from saved goals and evidence."
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5
+    }
+  },
+  "required": [
+    "focus"
+  ]
+}
