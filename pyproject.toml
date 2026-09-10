@@ -21,7 +21,7 @@ Changelog = "https://github.com/agentagon/agentagon/releases"
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff==0.16.6", "build>=1.2"]
-browser = ["playwright==1.57.0"]
+browser = ["playwright==1.62.0"]
 e2b = ["e2b==2.46.4"]
 
 [project.scripts]
