@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<main class="reading-main" id="main">
+  <article>
+    <header class="editorial-header article-header">
+      <a class="eyebrow back-link" href="/blogs/">← All articles</a>
+      <h1>{{ article.title }}</h1>
+      <p class="reading-lead">{{ article.description }}</p>
+      <p class="post-meta">{{ article.author }} · Published <time datetime="{{ article.published_at }}">{{ article.published_label }}</time></p>
+    </header>
+    <div class="article-body">{{ article.html | safe }}</div>
+    <aside class="article-next" aria-label="Try Agentagon">
+      <h2>Start with one audit.</h2>
+      <p><a href="/docs/getting-started/install/">Install Agentagon</a>, inspect your agent’s code, and decide what to test next.</p>
+      <a class="button" href="/docs/getting-started/first-audit/#your-first-audit">Get Started</a>
+    </aside>
+  </article>
+  <nav class="related-posts" aria-label="Related articles">
+    <p class="eyebrow">Read next</p>
+    {% for post in posts if post.path != path %}<a href="{{ post.path }}">{{ post.title }} <span aria-hidden="true">↗</span></a>{% endfor %}
+  </nav>
+</main>
+{% endblock %}

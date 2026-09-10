@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ title }}</title>
+    <meta name="description" content="{{ description }}" />
+    <meta name="theme-color" content="#f5f8fb" />
+    {% if noindex %}<meta name="robots" content="noindex" />{% else %}<link rel="canonical" href="{{ origin }}{{ path }}" />{% endif %}
+    <meta property="og:title" content="{{ title }}" />
+    <meta property="og:description" content="{{ description }}" />
+    <meta property="og:type" content="{{ 'article' if article else 'website' }}" />
+    <meta property="og:url" content="{{ origin }}{{ path }}" />
+    <meta property="og:image" content="{{ origin }}/assets/tidal-causeway-light-sun.png" />
+    <meta property="og:image:alt" content="A pixel-art causeway leading across the water toward a distant tower." />
+    <meta name="twitter:card" content="summary_large_image" />
+    {% if article %}
+    <meta property="article:published_time" content="{{ article.published_at }}" />
+    <meta property="article:modified_time" content="{{ article.updated_at }}" />
+    <meta property="article:author" content="{{ article.author }}" />
+    <script type="application/ld+json">{{ article.structured_data | tojson }}</script>
+    {% endif %}
+    <link rel="icon" type="image/png" href="/assets/logo-split-crown-96.png" />
+    <script src="/assets/theme-init.js"></script>
+    <link rel="stylesheet" href="/assets/site.css" />
+    <script src="/assets/site.js" defer></script>
+  </head>
+  <body class="{% block page_class %}reading-page{% endblock %}">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="page">
+      {% block landscape %}{% endblock %}
+      {% include "header.html" %}
+      {% block content %}{% endblock %}
+      {% block footer %}
+      <footer class="site-footer">
+        <span>Agentagon · Apache 2.0</span>
+        <nav aria-label="Footer navigation">
+          <a href="/docs/">Docs</a>
+          <a href="/blogs/">Blogs</a>
+          <a href="/docs/privacy/">Privacy</a>
+          <a href="mailto:founders@agentagon.ai">Talk to us</a>
+        </nav>
+      </footer>
+      {% endblock %}
+    </div>
+  </body>
+</html>

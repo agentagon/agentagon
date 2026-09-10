@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block page_class %}landing-page{% endblock %}
+{% block landscape %}<div class="landscape" aria-hidden="true"></div>{% endblock %}
+{% block content %}
+      <main class="hero" id="main" aria-labelledby="hero-title">
+        <p class="eyebrow">Agent engineering, end to end</p>
+        <h1 id="hero-title">Improve your AI agents.<br /><em>Continuously.</em></h1>
+        <p class="hero-description benefit-line">
+          <span class="benefit-static">Make your agents more capable, accurate, reliable, secure, efficient, and trusted - while reducing costs, latency, and regressions.</span>
+          <span class="benefit-visual" aria-hidden="true">
+            <span class="benefit-subject">
+              <span class="benefit-prefix">Make your agents more</span>
+              <span class="benefit-words">
+                <span data-word="capable" class="benefit-word is-active">capable</span>
+                <span data-word="accurate" class="benefit-word">accurate</span>
+                <span data-word="reliable" class="benefit-word">reliable</span>
+                <span data-word="secure" class="benefit-word">secure</span>
+                <span data-word="efficient" class="benefit-word">efficient</span>
+                <span data-word="trusted" class="benefit-word">trusted</span>
+              </span>
+            </span>
+            <span class="benefit-ending benefit-subject">
+              <span> - while reducing</span>
+              <span class="benefit-words">
+                <span data-word="costs" class="benefit-word is-active">costs</span>
+                <span data-word="latency" class="benefit-word">latency</span>
+                <span data-word="regressions" class="benefit-word">regressions</span>
+              </span>
+            </span>
+          </span>
+        </p>
+        <div class="contact-block">
+          <div class="hero-buttons">
+            <a class="button" href="/docs/getting-started/first-audit/#your-first-audit">Get Started</a>
+            <a class="button button-secondary" href="mailto:founders@agentagon.ai">Talk to us</a>
+          </div>
+          <p class="contact-note">Your stack. Your workflow.<br />You stay in control.</p>
+        </div>
+      </main>
+{% endblock %}
+{% block footer %}{% endblock %}

@@ -1,0 +1,423 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentagon execution profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runner",
+    "limits"
+  ],
+  "properties": {
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "local",
+            "ssh",
+            "e2b"
+          ]
+        },
+        "host": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$"
+        },
+        "remote_root": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/text"
+            },
+            {
+              "pattern": "^/"
+            }
+          ]
+        },
+        "python": {
+          "$ref": "#/$defs/text"
+        },
+        "template": {
+          "$ref": "#/$defs/text"
+        },
+        "api_key_env": {
+          "$ref": "#/$defs/environmentName"
+        },
+        "sandbox_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "independent_capacity": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "ssh"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "host",
+              "remote_root"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "e2b"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "template"
+            ]
+          }
+        }
+      ]
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    },
+    "search": {
+      "$ref": "#/$defs/search"
+    },
+    "scans": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_scans",
+        "max_input_bytes",
+        "scan_timeout_seconds"
+      ],
+      "properties": {
+        "max_scans": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_input_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 1048576
+        },
+        "scan_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "repetitions": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    },
+    "env": {
+      "type": "object",
+      "propertyNames": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/environmentName"
+          },
+          {
+            "not": {
+              "pattern": "^(?:AGENTAGON_|E2B_API_KEY$)"
+            }
+          }
+        ]
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/environmentName"
+      }
+    },
+    "setup": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/argv"
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_events",
+        "max_event_bytes",
+        "max_artifacts",
+        "max_artifact_bytes",
+        "max_total_artifact_bytes"
+      ],
+      "properties": {
+        "max_events": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "max_event_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 524288
+        },
+        "max_artifacts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "max_artifact_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "max_total_artifact_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2097152
+        }
+      }
+    },
+    "orchestration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "round_width",
+        "host_capacity",
+        "branch_depth",
+        "resource_slots",
+        "scan_workers",
+        "ideation_passes"
+      ],
+      "properties": {
+        "round_width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "host_capacity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "branch_depth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "resource_slots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "scan_workers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "ideation_passes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        }
+      }
+    }
+  },
+  "$defs": {
+    "search": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": {
+          "enum": [
+            "pareto",
+            "argmax",
+            "top_k",
+            "epsilon_greedy",
+            "softmax",
+            "pareto_per_task"
+          ],
+          "default": "pareto"
+        },
+        "seed": {
+          "type": "integer",
+          "default": 0
+        },
+        "objective": {
+          "type": "string",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{0,79}$"
+        },
+        "k": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3
+        },
+        "epsilon": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.1
+        },
+        "temperature": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "strategy"
+            ],
+            "properties": {
+              "strategy": {
+                "enum": [
+                  "argmax",
+                  "top_k",
+                  "epsilon_greedy",
+                  "softmax"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "objective"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "objective"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "k"
+            ]
+          },
+          "then": {
+            "required": [
+              "strategy"
+            ],
+            "properties": {
+              "strategy": {
+                "const": "top_k"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "epsilon"
+            ]
+          },
+          "then": {
+            "required": [
+              "strategy"
+            ],
+            "properties": {
+              "strategy": {
+                "const": "epsilon_greedy"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "temperature"
+            ]
+          },
+          "then": {
+            "required": [
+              "strategy"
+            ],
+            "properties": {
+              "strategy": {
+                "const": "softmax"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "allOf": [
+        {
+          "pattern": "\\S"
+        },
+        {
+          "not": {
+            "pattern": "\u0000"
+          }
+        }
+      ]
+    },
+    "environmentName": {
+      "type": "string",
+      "pattern": "^[A-Z_][A-Z0-9_]*$"
+    },
+    "argv": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/text"
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_candidates",
+        "max_trials",
+        "max_elapsed_seconds",
+        "parallel_candidates",
+        "parallel_trials",
+        "trial_timeout_seconds"
+      ],
+      "properties": {
+        "max_candidates": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_trials": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_elapsed_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "parallel_candidates": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "parallel_trials": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "trial_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stagnation_rounds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3
+        }
+      }
+    }
+  }
+}

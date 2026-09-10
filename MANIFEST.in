@@ -1,0 +1,14 @@
+include .codex-plugin/plugin.json .claude-plugin/plugin.json
+include .gitignore AGENTS.md CODE_OF_CONDUCT.md CONTRIBUTING.md SECURITY.md
+include .gitleaks.toml mkdocs.yml requirements-docs.txt THIRD_PARTY_NOTICES.txt
+recursive-include .github *.yml *.md
+recursive-include skills *.md *.py *.cjs
+recursive-include scripts *.sh *.py
+recursive-include examples *.py *.md
+recursive-include hooks *.json
+recursive-include docs *.md *.css *.js *.png *.svg *.txt
+recursive-include docs_theme *.html
+recursive-include website *.md *.html *.css *.js *.png *.svg
+recursive-include tests *.py *.json
+prune assets
+prune knowledge

@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentagon"
+version = "0.1.2"
+description = "Evidence-backed audits, evaluations, and measured improvements for any AI agent"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.txt"]
+dependencies = ["click>=8.1,<9", "jsonschema>=4.21,<5", "httpx>=0.28,<1"]
+
+[project.urls]
+Homepage = "https://agentagon.ai"
+Documentation = "https://agentagon.ai/docs/"
+Source = "https://github.com/agentagon/agentagon"
+Issues = "https://github.com/agentagon/agentagon/issues"
+Changelog = "https://github.com/agentagon/agentagon/releases"
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff==0.16.6", "build>=1.2"]
+browser = ["playwright==1.57.0"]
+e2b = ["e2b==2.46.4"]
+
+[project.scripts]
+agentagon = "agentagon.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+agentagon = ["dashboard_assets/*"]
+
+[tool.setuptools.data-files]
+"share/agentagon/contracts/v1" = ["contracts/v1/*.json"]
+"share/agentagon/signals" = ["signals/*.json"]
+"share/agentagon/hooks" = ["hooks/*.json"]
+"share/agentagon/.codex-plugin" = [".codex-plugin/plugin.json"]
+"share/agentagon/.claude-plugin" = [".claude-plugin/plugin.json"]
+"share/agentagon/skills/audit" = ["skills/audit/SKILL.md"]
+"share/agentagon/skills/audit/references" = ["skills/audit/references/*.md"]
+"share/agentagon/skills/review" = ["skills/review/SKILL.md"]
+"share/agentagon/skills/setup" = ["skills/setup/SKILL.md"]
+"share/agentagon/skills/dashboard" = ["skills/dashboard/SKILL.md"]
+"share/agentagon/skills/fix" = ["skills/fix/SKILL.md"]
+"share/agentagon/skills/fix/references" = ["skills/fix/references/*.md"]
+"share/agentagon/skills/ship" = ["skills/ship/SKILL.md"]
+"share/agentagon/skills/eval" = ["skills/eval/SKILL.md"]
+"share/agentagon/skills/eval/references" = ["skills/eval/references/*.md"]
+"share/agentagon/skills/eval/helpers" = ["skills/eval/helpers/*.py", "skills/eval/helpers/*.cjs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
+
+[tool.ruff.per-file-target-version]
+"skills/eval/helpers/*.py" = "py310"

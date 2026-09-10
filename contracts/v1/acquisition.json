@@ -1,0 +1,71 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "source": {
+      "type": "string",
+      "enum": [
+        "braintrust",
+        "langfuse",
+        "langsmith",
+        "phoenix",
+        "otlp"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1
+    },
+    "method": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fetched_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "completeness": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ]
+    },
+    "pagination_complete": {
+      "type": "boolean"
+    },
+    "selected_trace_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "failed_trace_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "source",
+    "project",
+    "method",
+    "tool_version",
+    "fetched_at",
+    "completeness",
+    "pagination_complete",
+    "selected_trace_ids",
+    "failed_trace_ids"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

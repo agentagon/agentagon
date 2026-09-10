@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentagon explicit run control",
+  "type": "object",
+  "required": ["version", "operation_id", "expected_revision", "action"],
+  "properties": {
+    "version": {"const": 1, "type": "integer"},
+    "operation_id": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$"},
+    "expected_revision": {"type": "integer", "minimum": 0},
+    "action": {"type": "string"}
+  },
+  "allOf": [{
+    "oneOf": [
+      {"properties": {"action": {"const": "policy"}, "policy": {"type": "object"}}, "required": ["policy"]},
+      {"properties": {"action": {"const": "directive"}, "text": {"$ref": "#/$defs/text"}}, "required": ["text"]},
+      {"properties": {"action": {"const": "expand"}, "parent_id": {"$ref": "#/$defs/text"}, "hypothesis": {"$ref": "#/$defs/text"}}, "required": ["parent_id", "hypothesis"]},
+      {"properties": {"action": {"const": "stop"}}},
+      {"properties": {"action": {"const": "continue"}, "limits": {"type": "object"}}},
+      {"properties": {"action": {"const": "select"}, "candidate_id": {"$ref": "#/$defs/text"}}, "required": ["candidate_id"]},
+      {"properties": {"action": {"enum": ["invalidate", "exhaust"]}, "candidate_id": {"$ref": "#/$defs/text"}, "reason": {"$ref": "#/$defs/text"}}, "required": ["candidate_id", "reason"]},
+      {"properties": {"action": {"const": "cancel"}, "target_operation_id": {"$ref": "#/$defs/text"}}, "required": ["target_operation_id"]},
+      {"properties": {"action": {"const": "ack"}, "target_operation_id": {"$ref": "#/$defs/text"}, "host_id": {"$ref": "#/$defs/text"}}, "required": ["target_operation_id", "host_id"]},
+      {"properties": {"action": {"const": "scan"}}},
+      {"properties": {"action": {"const": "insights"}, "response": {"type": "object"}}, "required": ["response"]},
+      {"properties": {"action": {"const": "scan_fail"}, "scan_id": {"$ref": "#/$defs/text"}, "reason": {"$ref": "#/$defs/text"}}, "required": ["scan_id", "reason"]}
+    ]
+  }],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "maxLength": 4096, "allOf": [{"pattern": "\\S"}, {"not": {"pattern": "\u0000"}}]}
+  }
+}

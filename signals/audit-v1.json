@@ -1,0 +1,245 @@
+{
+  "version": "1",
+  "judgment_rules": [
+    "These facets are contextual audit judgments, not independent scores or a universal quality grade. Goal, requirements and outcome describe evidence; sentiment describes the user message, not agent quality.",
+    "Use status computed only with a supported value and cited evidence. For all other statuses use value null: unknown for inconclusive or missing evidence, not_applicable when the criterion does not apply, not_evaluated before inspection, and error when evaluation fails.",
+    "Judge each LLM span's output and local responsibility using its available input and relevant trace context. Do not grade earlier conversation copied into its input as newly generated output or count one correction repeatedly across later spans.",
+    "Distinguish observed failure from unavailable telemetry. Absence of evidence establishes neither success nor failure. Cite the specific claim, requirement, message, tool result, code path or artifact that supports the judgment.",
+    "Negative judgments are candidates for diagnosis, not proven agent-caused defects. Explain attribution and limitations; group overlapping facets about the same problem rather than counting them as separate failures."
+  ],
+  "semantic": [
+    {
+      "id": "trace.goal",
+      "scope": "trace",
+      "values": null,
+      "rubric": "Describe the user's desired result within the captured task boundary. Cite the request and subsequent changes; distinguish explicit requests from inferred intent. Use unknown if the goal cannot be established.",
+      "counterexamples": [
+        "An assistant's proposed implementation is not itself the user's goal."
+      ]
+    },
+    {
+      "id": "trace.requirements",
+      "scope": "trace",
+      "values": null,
+      "rubric": "Describe observable completion requirements and applicable constraints, citing their authority and any authorized changes. Include relevant instruction, permission, privacy and domain requirements when supported. Distinguish explicit requirements from inferred ones; use unknown when the available evidence cannot establish them.",
+      "counterexamples": [
+        "Existing implementation or tests may be wrong; they do not override an authoritative requirement."
+      ]
+    },
+    {
+      "id": "trace.outcome",
+      "scope": "trace",
+      "values": null,
+      "rubric": "Describe the observed result, including known omissions, failures and evidence limits. Inspect the answer or artifact for content tasks and tool results or resulting state for external actions. State which parts remain unverified; use unknown when no result can be established.",
+      "counterexamples": [
+        "An assistant saying a booking succeeded does not establish that a reservation exists."
+      ]
+    },
+    {
+      "id": "trace.fulfillment",
+      "scope": "trace",
+      "values": [
+        "fulfilled",
+        "partial",
+        "unfulfilled"
+      ],
+      "rubric": "Compare trace.outcome with trace.requirements for the captured task. Use fulfilled when all requirements are evidenced as met, partial when meaningful requirements are met and others are evidenced as unmet, and unfulfilled when the required result is evidenced as not achieved. Missing evidence alone is unknown, not partial or unfulfilled. Describe verified progress separately when completion remains unknown; do not infer fault from the outcome alone.",
+      "counterexamples": [
+        "A truncated trace with no final response is not proof of task failure.",
+        "An accurate refusal may satisfy applicable constraints while leaving the requested external outcome unfulfilled."
+      ]
+    },
+    {
+      "id": "trace.user_experience",
+      "scope": "trace",
+      "values": [
+        "positive",
+        "mixed",
+        "negative"
+      ],
+      "rubric": "Assess user feedback attributable to the agent's response or result. Cite both the feedback message and what it addresses. Use positive for supported favorable feedback, negative for unfavorable feedback, and mixed when both are evidenced. Without attributable feedback use unknown; do not infer satisfaction from silence or technical success.",
+      "counterexamples": [
+        "Frustration expressed before the agent responds is not feedback about that response.",
+        "A polite acknowledgement without evaluative content does not establish satisfaction."
+      ]
+    },
+    {
+      "id": "llm.user_sentiment",
+      "scope": "llm",
+      "values": [
+        "frustrated",
+        "negative",
+        "neutral",
+        "positive"
+      ],
+      "rubric": "Classify the expressed tone of the latest user message in this span and cite that message. Use frustrated for explicit frustration, negative for other unfavorable sentiment, positive for favorable sentiment, and neutral for clearly non-evaluative tone; use unknown for ambiguity and not_applicable when no user message exists. Treat this as context, not agent quality, and do not infer private feelings or satisfaction with a later answer.",
+      "counterexamples": [
+        "A user describing a frustrating problem may still be satisfied with the agent's eventual help.",
+        "Quoted anger or uppercase text alone does not establish the user's sentiment."
+      ]
+    },
+    {
+      "id": "llm.hallucination",
+      "scope": "llm",
+      "values": [
+        "present",
+        "absent"
+      ],
+      "rubric": "Check factual claims in this span's output against reliable evidence. Use present for an evidenced false claim, fabricated citation, or claim of observation or completed action that the trace contradicts. Use absent only when the relevant claims can be checked and none show such errors, unknown when material claims cannot be checked, and not_applicable when there are no factual claims. Identify the claim and supporting or contradicting evidence.",
+      "counterexamples": [
+        "Clearly labeled speculation or requested fiction is not a factual hallucination.",
+        "A claim missing from retrieved context is not necessarily false; unavailable verification calls for unknown."
+      ]
+    },
+    {
+      "id": "llm.goal_alignment",
+      "scope": "llm",
+      "values": [
+        "aligned",
+        "misaligned"
+      ],
+      "rubric": "Judge whether this span's response or action advances the supported user goal within applicable instructions and authorized scope. Use aligned for an appropriate step, including necessary clarification or refusal, and misaligned for an evidenced departure. Assess the decision using information available at that point; an unsuccessful result alone does not establish misalignment. Use unknown when the goal or decision context is missing.",
+      "counterexamples": [
+        "A necessary clarification can be aligned even though it does not finish the task."
+      ]
+    },
+    {
+      "id": "llm.user_revision",
+      "scope": "llm",
+      "values": [
+        "present",
+        "absent"
+      ],
+      "rubric": "Judge whether a later user message corrects an inadequacy in this span's output. For present, cite the output, correction and prior requirement showing the inadequacy. Use absent when attributable follow-up is available and contains no such correction; without follow-up use unknown. Ordinary clarification, a new preference or a changed requirement is not a revision caused by agent failure. Attribute a correction to the response it corrects, not the later span receiving it.",
+      "counterexamples": [
+        "'Actually, use blue instead' is a scope change if no earlier requirement specified blue.",
+        "A correction repeated in later prompt history is still one correction to the original response."
+      ]
+    },
+    {
+      "id": "llm.reasoning_validity",
+      "scope": "llm",
+      "values": [
+        "valid",
+        "invalid"
+      ],
+      "rubric": "Assess only the reasoning explicitly expressed in this span's output, such as a stated explanation or derivation. Use valid when the stated steps support the conclusion under the stated premises and invalid for a specific evidenced inference error. Check factual premises separately under hallucination. Use not_applicable when no reasoning is expressed and unknown when the visible explanation cannot be assessed. This facet makes no claim about hidden reasoning or internal faithfulness.",
+      "counterexamples": [
+        "A correct answer alone does not establish that the reasoning was valid.",
+        "A concise answer without an explanation is not invalid reasoning."
+      ]
+    },
+    {
+      "id": "llm.verification",
+      "scope": "llm",
+      "values": [
+        "verified",
+        "unverified"
+      ],
+      "rubric": "Assess checks warranted before this span's claim or completion decision, based on applicable requirements and the action's consequences. Use verified when relevant checks and results support the claim, unverified when warranted checks are evidenced as omitted or inadequate, unknown when the check history is unavailable, and not_applicable when verification is not warranted or is not yet due. Identify the needed check and whether it was applicable and feasible; explain an unavailable check as a limitation rather than automatically blaming the agent.",
+      "counterexamples": [
+        "An early tool-planning turn is not unverified merely because final validation has not happened yet.",
+        "Running an unrelated passing test does not verify the claimed behavior."
+      ]
+    },
+    {
+      "id": "llm.tone",
+      "scope": "llm",
+      "values": [
+        "appropriate",
+        "inappropriate"
+      ],
+      "rubric": "Judge user-facing wording in this span against the request, expressed preferences and conversational context. Use appropriate when it fits that context and inappropriate for a specific mismatch with a supported expectation. Use not_applicable for output with no user-facing language and unknown when context is insufficient. Cite the wording and expectation; avoid universal preferences about warmth, length or formality.",
+      "counterexamples": [
+        "A concise refusal or a direct correction is not inherently rude."
+      ]
+    },
+    {
+      "id": "llm.tool_selection",
+      "scope": "llm",
+      "values": [
+        "appropriate",
+        "inappropriate"
+      ],
+      "rubric": "Assess tool choices, arguments and warranted omissions in this span against the available tool contracts, user goal, authorization and information available at the decision. Use appropriate for a suitable choice and inappropriate for an evidenced mismatch. Use unknown when relevant contracts or context are unavailable and not_applicable when no tool decision is relevant. Distinguish selection from execution success; later results may corroborate an error but must not impose hindsight-only expectations.",
+      "counterexamples": [
+        "A well-chosen tool timing out does not establish inappropriate tool selection.",
+        "Answering directly is appropriate when tools would add no needed information."
+      ]
+    },
+    {
+      "id": "llm.task_resolution",
+      "scope": "llm",
+      "values": [
+        "resolved",
+        "unresolved"
+      ],
+      "rubric": "Assess whether this span delivers the result it is responsible for when resolution is due. Use resolved when that local obligation is evidenced as met and unresolved when it is evidenced as unmet. Use not_applicable for intermediate tool requests, necessary clarifications or handoffs that are not expected to resolve the task, and unknown when responsibility or the result cannot be established. Reserve trace.fulfillment for the complete task; a successful intermediate step does not prove overall completion.",
+      "counterexamples": [
+        "A weather-tool request is not unresolved merely because the temperature arrives in a later turn."
+      ]
+    }
+  ],
+  "code": [
+    {
+      "id": "code.correctness",
+      "scope": "code",
+      "values": null,
+      "rubric": "Inspect whether reachable code implements supported requirements, including applicable domain constraints, data handling and edge cases. Cite the code path, triggering input or state, expected behavior and observed or logically established discrepancy. Separate proven defects from hypotheses; a reviewed path without a supported defect does not establish correctness of the entire application.",
+      "counterexamples": [
+        "A hypothetical input excluded by an enforced caller contract does not establish a reachable defect."
+      ]
+    },
+    {
+      "id": "code.prompt_tool_contracts",
+      "scope": "code",
+      "values": null,
+      "rubric": "Inspect agreement between prompts, tool definitions, argument schemas, implementations and result handling, including the boundary between instructions and untrusted content. Cite a concrete mismatch and its reachable effect. Use not_applicable when no prompt or tool interface is relevant and unknown when required contracts cannot be inspected.",
+      "counterexamples": [
+        "A prompt's preferred format differing from an internal type is not a defect if an adapter correctly converts between them."
+      ]
+    },
+    {
+      "id": "code.recovery",
+      "scope": "code",
+      "values": null,
+      "rubric": "Inspect behavior after relevant failures or interruptions: bounded retries, timeouts, cancellation, resumability, cleanup, idempotency and accurate error reporting where required. Cite a failure path and its effect on state or task completion. Require only recovery appropriate to the operation and applicable requirements; distinguish a surfaced, handled error from an unhandled defect.",
+      "counterexamples": [
+        "Not retrying a non-idempotent payment may be correct; automatic repetition could charge twice."
+      ]
+    },
+    {
+      "id": "code.permissions",
+      "scope": "code",
+      "values": null,
+      "rubric": "Inspect authorization, approval scope, isolation, credential handling and sensitive-data access or disclosure at relevant boundaries. Include whether untrusted content can expand authority. Cite the actor, operation, data or resource, applicable policy and reachable enforcement gap. Do not treat tool availability or local storage as permission.",
+      "counterexamples": [
+        "Possessing a credential does not authorize every action it technically permits.",
+        "A missing local permission check is not a bypass when a verified upstream boundary enforces the requirement."
+      ]
+    },
+    {
+      "id": "code.resource_use",
+      "scope": "code",
+      "values": null,
+      "rubric": "Inspect bounded work and relevant token, memory, latency, concurrency, tool and monetary costs. Cite the resource path and an applicable budget, limit or comparable baseline; use measurements for savings claims. Consider freshness, retries, rate limits and coordination overhead before recommending caching, deletion or parallel work. Distinguish an evidenced defect from an improvement hypothesis.",
+      "counterexamples": [
+        "A large token count alone does not prove waste without the task requirements and a useful comparison."
+      ]
+    },
+    {
+      "id": "code.verification",
+      "scope": "code",
+      "values": null,
+      "rubric": "Inspect checks and evaluations for required observable behavior and relevant failure cases, including whether assertions establish the claimed result and whether runtime success checks inspect the resulting state. Cite the requirement, affected code and specific missing or inadequate check. Separate proposed coverage from executed evidence; missing a test is a coverage opportunity, not proof that behavior is wrong.",
+      "counterexamples": [
+        "A passing test that mocks away the behavior under review does not verify that behavior."
+      ]
+    }
+  ],
+  "opportunities": [
+    "redundant_work",
+    "avoidable_serialization",
+    "unnecessary_context_or_tools"
+  ]
+}

@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vX.Y.Z tag to publish or resume
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  AGENTAGON_TELEMETRY_DISABLED: '1'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - name: Require matching versions and successful checks on protected main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/release.py gate --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY"
+      - name: Reuse staged release files when resuming
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          if python -c 'import json, os, sys; sys.exit(not any(r["tag_name"] == os.environ["RELEASE_TAG"] for r in json.load(open(sys.argv[1]))))' "$RUNNER_TEMP/releases.json"; then
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
+              --pattern '*.whl' --pattern '*.tar.gz' --pattern SHA256SUMS --pattern RELEASE_NOTES.md
+            python scripts/release.py verify --tag "$RELEASE_TAG"
+            echo 'found=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and validate one set of distribution files
+        if: steps.reuse.outputs.found != 'true'
+        run: |
+          python -m pip install 'build>=1.2' 'twine>=6,<7' -r requirements-docs.txt
+          python -m build
+          python -m twine check --strict dist/*
+          python scripts/release.py manifest --tag "$RELEASE_TAG"
+          cp "docs/releases/${RELEASE_TAG#v}.md" dist/RELEASE_NOTES.md
+          printf '\nSource revision: `%s`\n' "$(git rev-parse HEAD)" >> dist/RELEASE_NOTES.md
+          python -m venv "$RUNNER_TEMP/release-wheel"
+          "$RUNNER_TEMP/release-wheel/bin/python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/release-wheel/bin/python" "$GITHUB_WORKSPACE/scripts/check_installed.py"
+          "$RUNNER_TEMP/release-wheel/bin/python" "$GITHUB_WORKSPACE/examples/local-audit/demo.py"
+          mkdir release-source
+          tar -xzf "$GITHUB_WORKSPACE/dist/agentagon-${RELEASE_TAG#v}.tar.gz" -C release-source
+          cd "release-source/agentagon-${RELEASE_TAG#v}"
+          python scripts/build_site.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-packages
+          path: dist/
+          retention-days: 90
+          if-no-files-found: error
+
+  stage:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-packages
+          path: dist/
+      - name: Preserve reviewed files in a draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/release.py stage --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY"
+
+  pypi:
+    needs: stage
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/agentagon
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-packages
+          path: dist/
+      - name: Verify existing PyPI hashes and select only missing files
+        id: pending
+        run: |
+          python scripts/release.py pypi --tag "$RELEASE_TAG"
+          if [ -n "$(ls -A pending)" ]; then echo 'upload=true' >> "$GITHUB_OUTPUT"; fi
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        if: steps.pending.outputs.upload == 'true'
+        with:
+          packages-dir: pending/
+      - name: Verify every published PyPI digest
+        run: |
+          python scripts/release.py pypi --tag "$RELEASE_TAG" --pending verify-published
+          test -z "$(ls -A verify-published)"
+
+  publish:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the staged GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

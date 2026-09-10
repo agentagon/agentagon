@@ -1,0 +1,59 @@
+{
+  "data": [
+    {
+      "id": "root",
+      "traceId": "root",
+      "parentObservationId": null,
+      "type": "AGENT",
+      "name": "agent",
+      "startTime": "2026-08-10T12:00:00.000Z",
+      "endTime": "2026-08-10T12:00:01.000Z",
+      "input": "{\"question\":\"What is the temperature in London?\"}",
+      "output": "null",
+      "level": "DEFAULT",
+      "statusMessage": null,
+      "usageDetails": {},
+      "costDetails": {},
+      "metadata": {}
+    },
+    {
+      "id": "llm",
+      "traceId": "root",
+      "parentObservationId": "root",
+      "type": "GENERATION",
+      "name": "llm",
+      "startTime": "2026-08-10T12:00:01.000Z",
+      "endTime": "2026-08-10T12:00:02.000Z",
+      "input": "[{\"role\":\"user\",\"content\":\"What is the temperature in London?\"}]",
+      "output": "[{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"weather-call\",\"type\":\"function\",\"function\":{\"name\":\"weather\",\"arguments\":\"{\\\"city\\\":\\\"London\\\"}\"}}]}]",
+      "level": "DEFAULT",
+      "statusMessage": null,
+      "usageDetails": {
+        "input": 10,
+        "output": 2
+      },
+      "costDetails": {
+        "total": 0.001
+      },
+      "metadata": {}
+    },
+    {
+      "id": "tool",
+      "traceId": "root",
+      "parentObservationId": "llm",
+      "type": "TOOL",
+      "name": "weather",
+      "startTime": "2026-08-10T12:00:02.000Z",
+      "endTime": "2026-08-10T12:00:03.000Z",
+      "input": "{\"city\":\"London\"}",
+      "output": "{\"error\":\"Weather service timed out\"}",
+      "level": "ERROR",
+      "statusMessage": "Weather service timed out",
+      "usageDetails": {},
+      "costDetails": {},
+      "metadata": {
+        "tool_call_id": "weather-call"
+      }
+    }
+  ]
+}

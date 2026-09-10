@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentagon diagnostic task event (JSONL)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "event",
+    "task_id",
+    "at",
+    "data"
+  ],
+  "properties": {
+    "version": {
+      "const": 1,
+      "type": "integer"
+    },
+    "event": {
+      "enum": [
+        "task_start",
+        "progress",
+        "input",
+        "output",
+        "failure",
+        "artifact",
+        "task_end"
+      ]
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "at": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "data": {
+      "type": "object"
+    }
+  }
+}

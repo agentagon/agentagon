@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "description": "Evaluation guidance requires context, goal, or both. Combined text is limited to 4,000 characters before and after redaction.",
+  "anyOf": [
+    {
+      "required": [
+        "context"
+      ]
+    },
+    {
+      "required": [
+        "goal"
+      ]
+    }
+  ],
+  "properties": {
+    "context": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "pattern": "\\S",
+      "description": "Privacy-safe project purpose, workflow, architecture, constraints and available evaluation or runtime evidence. No raw code, traces, PII or secrets."
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5
+    },
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "pattern": "\\S",
+      "description": "Privacy-safe evaluation goal, hypothesis or quality question, prepared separately from any stored raw goal. No protected evaluation material."
+    }
+  }
+}
