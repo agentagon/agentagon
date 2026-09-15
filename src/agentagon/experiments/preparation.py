@@ -856,6 +856,27 @@ def check(workspace: Workspace, evaluation_id: str, plan: dict) -> dict:
     return status(workspace, evaluation_id)
 
 
+def _observed_trials(workspace: Workspace, data: dict, record: dict) -> list[dict]:
+    """Revalidate retained runner and grading evidence for freeze and delivery."""
+    observed = []
+    cases = [*record["plan"]["negative_cases"], *record["plan"].get("metric_cases", [])]
+    for trial in record["trials"]:
+        _validate_admission(workspace, data, trial)
+        result = read_result(workspace, trial["artifact"])
+        case = next((c for c in cases if c["id"] == trial["case_id"]), None)
+        outcome = _outcome(record["plan"]["spec"], trial, result, case)
+        if trial.get("grading"):
+            from agentagon.experiments import grading
+
+            outcome["metrics"] = grading.observed_evaluation(
+                workspace, data, record, trial, outcome["metrics"]
+            )
+            if outcome != trial["outcome"]:
+                raise AuditError("preparation measurements changed after validation")
+        observed.append({**trial, "outcome": outcome})
+    return observed
+
+
 def freeze(workspace: Workspace, evaluation_id: str, review: dict) -> dict:
     validate_record("evaluation-review", review)
     with locked(workspace, evaluation_id) as root:
@@ -900,23 +921,7 @@ def freeze(workspace: Workspace, evaluation_id: str, review: dict) -> dict:
             workspace.root, record["source_revision"]
         ):
             raise AuditError("benchmark changed after validation; run eval check again")
-        # Re-read the content-addressed observations instead of trusting supplied review prose.
-        observed_trials = []
-        cases = [*record["plan"]["negative_cases"], *record["plan"].get("metric_cases", [])]
-        for trial in record["trials"]:
-            _validate_admission(workspace, data, trial)
-            result = read_result(workspace, trial["artifact"])
-            case = next((c for c in cases if c["id"] == trial["case_id"]), None)
-            outcome = _outcome(record["plan"]["spec"], trial, result, case)
-            if trial.get("grading"):
-                from agentagon.experiments import grading
-
-                outcome["metrics"] = grading.observed_evaluation(
-                    workspace, data, record, trial, outcome["metrics"]
-                )
-            if trial.get("grading") and outcome != trial["outcome"]:
-                raise AuditError("preparation measurements changed after validation")
-            observed_trials.append({**trial, "outcome": outcome})
+        observed_trials = _observed_trials(workspace, data, record)
         comparisons = _metric_comparisons(record["plan"], observed_trials)
         if comparisons != record.get("metric_comparisons", []) or not all(
             c["passed"] for c in comparisons

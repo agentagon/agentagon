@@ -11,16 +11,23 @@ from agentagon.experiments import engine, optimize_run
 from agentagon.experiments.store import load_run
 
 
-def _start(application, specification, optimizer="gepa", target=None):
+def _start(
+    application, specification, optimizer="gepa", target=None, repetitions=1, max_trials=None
+):
     pytest.importorskip("gepa.oa.ensemble")
     specification["scoring"] = definition()
     if target is not None:
         specification["scoring"]["target"] = target
-    specification["repetitions"] = 1
-    specification["seeds"] = [0]
+    specification["repetitions"] = repetitions
+    specification["seeds"] = list(range(repetitions))
     started = engine.start(application, specification, "local")
     optimize_run.configure(
-        application, started["run_id"], host="fake-codex", model="fake-model", optimizer=optimizer
+        application,
+        started["run_id"],
+        host="fake-codex",
+        model="fake-model",
+        optimizer=optimizer,
+        max_trials=max_trials,
     )
     return started["run_id"]
 
@@ -83,6 +90,36 @@ def test_application_proposal_cannot_touch_evaluator(application, specification)
     assert len(data["candidates"]) == 1
     failed = [op for op in result["budget"]["operations"].values() if op["status"] == "failed"]
     assert "protected" in failed[-1]["result"]["error"]
+
+
+@pytest.mark.parametrize("max_trials", [19, 20])
+def test_repeated_trials_leave_room_for_every_omni_stage(application, specification, max_trials):
+    from agentagon.experiments.budget import BudgetLedger
+
+    run_id = _start(application, specification, "omni", repetitions=3, max_trials=max_trials)
+    assert optimize_run.advance(application, run_id)["state"] == "host_pending"
+    stages = []
+
+    def host(request):
+        response = _host(request)
+        if request["role"] == "proposal":
+            stages.append(request["payload"]["stage"])
+            proposal = json.loads(response["candidate"])
+            app = json.loads(proposal["files"]["app.json"])
+            app["variant"] = request["request_id"]
+            proposal["files"]["app.json"] = json.dumps(app)
+            response["candidate"] = json.dumps(proposal)
+        return response
+
+    result = optimize_run.advance(application, run_id, host_handler=host)
+    assert result["state"] == "completed", result
+    assert set(stages) == {"gepa", "autoresearch", "meta_harness", "refinement"}
+    assert result["selection"]["winner"]
+    assert BudgetLedger.spent(result["budget"], "optimization") == 12
+    assert BudgetLedger.spent(result["budget"], "verification") == 3
+    assert len(executions()) == BudgetLedger.spent(result["budget"]) == 18
+    assert optimize_run.advance(application, run_id, host_handler=host)["state"] == "completed"
+    assert len(executions()) == 18
 
 
 def test_configure_requires_frozen_agreed_scoring(application, specification):

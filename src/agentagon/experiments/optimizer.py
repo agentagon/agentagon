@@ -213,16 +213,25 @@ class OptimizerCoordinator:
             raise AuditError("incompatible optimizer state")
         return state
 
-    def advance(self, evaluate_trial, *, host_handler=None, count_callback_as_trial=True) -> dict:
+    def advance(
+        self,
+        evaluate_trial,
+        *,
+        host_handler=None,
+        count_callback_as_trial=True,
+        trials_per_evaluation=1,
+    ) -> dict:
         """Run until complete, budget exhausted, or native work needs collection.
 
         ``evaluate_trial(candidate, operation_id=..., timeout_seconds=...)`` must
         return Agentagon's score observation (or an object containing ``score``).
-        By default each callback is one actual trial. A bounded multi-trial
-        pipeline sets ``count_callback_as_trial=False`` and admits each actual
-        trial into this ledger itself. It must reuse existing executions on
-        replay and use the supplied deadline for its runner.
+        ``trials_per_evaluation`` bounds each callback's actual trial cost.
+        A pipeline with an already measured seed sets ``count_callback_as_trial=False``
+        and admits its actual trials into this ledger itself. It must reuse
+        existing executions on replay and use the supplied deadline for its runner.
         """
+        if type(trials_per_evaluation) is not int or trials_per_evaluation < 1:
+            raise AuditError("trials per evaluation must be a positive integer")
         try:
             from gepa.oa.ensemble import optimize_parallel_with_server
         except ImportError as exc:
@@ -245,6 +254,10 @@ class OptimizerCoordinator:
             stop_requested = threading.Event()
             config = state["config"]
             try:
+                if any(stage["max_evals"] < trials_per_evaluation for stage in state["stages"]):
+                    raise BudgetExhausted(
+                        "optimization stages cannot cover the required trial repetitions"
+                    )
                 batches = (
                     [state["stages"][:-1], state["stages"][-1:]]
                     if config["engine"] == "omni"
@@ -275,6 +288,7 @@ class OptimizerCoordinator:
                                 evaluate_trial,
                                 host_handler,
                                 count_callback_as_trial,
+                                trials_per_evaluation,
                                 stop_requested,
                             )
                             for stage in unfinished
@@ -337,6 +351,7 @@ class OptimizerCoordinator:
         evaluator,
         host_handler,
         count_trial,
+        trials_per_evaluation,
         stop_requested,
     ):
         from gepa.oa.budget import BudgetTracker
@@ -398,7 +413,10 @@ class OptimizerCoordinator:
             }
             with semaphore:
                 operation = self.ledger.admit(
-                    operation_id, "optimization", units=int(count_trial), binding=binding
+                    operation_id,
+                    "optimization",
+                    units=trials_per_evaluation if count_trial else 0,
+                    binding=binding,
                 )
                 if operation["replay"]:
                     if operation["status"] == "running":
@@ -456,7 +474,10 @@ class OptimizerCoordinator:
                 objective=config["objective"],
             ),
             evaluate,
-            BudgetTracker(max_evals=stage["max_evals"]),
+            # Replayed seeds are already measured by the enclosing application pipeline.
+            BudgetTracker(
+                max_evals=stage["max_evals"] // trials_per_evaluation + int(not count_trial)
+            ),
             max_concurrency=1,
         )
         if stage["engine"] == "gepa":
@@ -470,7 +491,13 @@ class OptimizerCoordinator:
                 engine="gepa",
                 run_dir=f"{run_dir}/{stage['id']}",
                 engine_config={
-                    "engine": {"parallel": False, "use_cloudpickle": False, "seed": 0},
+                    "engine": {
+                        "parallel": False,
+                        "use_cloudpickle": False,
+                        "seed": 0,
+                        "cache_evaluation": not count_trial,
+                        "cache_evaluation_storage": "memory" if not count_trial else "auto",
+                    },
                     "reflection": {
                         "reflection_lm": None,
                         "custom_candidate_proposer": gepa_propose,

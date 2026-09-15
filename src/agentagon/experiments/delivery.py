@@ -11,7 +11,6 @@ from urllib.parse import urlsplit
 
 from agentagon.core.records import AuditError, digest, identifier, now
 from agentagon.experiments import checkouts, engine, evaluation, patches, preparation, store
-from agentagon.experiments.evidence import read_result
 from agentagon.storage.workspace import Workspace
 
 
@@ -157,14 +156,10 @@ def _summary(workspace: Workspace, data: dict, candidate: dict) -> dict:
     from agentagon.reporting import _score_projection, _scoring_definition_projection
 
     baseline = data["candidates"][data["baseline_id"]]
+    # Selection has revalidated these observations, including bound host grades.
     metrics, variation = evaluation.aggregate(
         data["spec"],
-        [
-            engine._validate_result(
-                data, candidate, trial, read_result(workspace, trial["artifact"])
-            )[0]
-            for trial in engine._completed(candidate)
-        ],
+        [trial["metrics"] for trial in engine._completed(candidate)],
     )
     # Only structural IDs, numeric aggregates and booleans leave the private archive.
     # Goal, hypothesis, reviewer prose, commands, environment and raw evidence stay local.
@@ -666,14 +661,7 @@ def _evaluation_source(workspace: Workspace, data: dict) -> dict:
         or package["plan"] != record["plan"]
     ):
         raise AuditError("frozen evaluation review or validation evidence changed")
-    observed = []
-    cases = [*record["plan"]["negative_cases"], *record["plan"].get("metric_cases", [])]
-    for trial in record["trials"]:
-        case = next((c for c in cases if c["id"] == trial["case_id"]), None)
-        outcome = preparation._outcome(
-            record["plan"]["spec"], trial, read_result(workspace, trial["artifact"]), case
-        )
-        observed.append({**trial, "outcome": outcome})
+    observed = preparation._observed_trials(workspace, data, record)
     comparisons = preparation._metric_comparisons(record["plan"], observed)
     if comparisons != record.get("metric_comparisons", []) or not all(
         c["passed"] for c in comparisons

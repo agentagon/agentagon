@@ -247,6 +247,25 @@ def test_real_gepa_host_pending_restart_never_repeats_work(workspace):
     )
 
 
+def test_callback_trial_cost_bounds_search_without_spending_verification(workspace):
+    optimizer = coordinator(workspace, engine="autoresearch")
+    calls = []
+
+    def evaluate(candidate, **kwargs):
+        calls.append(candidate)
+        return {"state": "measured", "value": int(candidate), "eligible": True}
+
+    result = optimizer.advance(
+        evaluate,
+        host_handler=lambda req: {"candidate": str(int(req["payload"]["candidate"]) + 1)},
+        trials_per_evaluation=3,
+    )
+    assert result["state"] == "completed"
+    assert len(calls) == result["budget"]["allocations"]["optimization"] // 3
+    assert BudgetLedger.spent(result["budget"], "optimization") == len(calls) * 3
+    assert BudgetLedger.spent(result["budget"], "verification") == 0
+
+
 def test_failed_measurement_preserved_without_zero_score(workspace):
     optimizer = coordinator(workspace, engine="gepa")
     calls = []

@@ -435,7 +435,10 @@ class _ApplicationOptimizer:
                     optimized = {"state": "target_reached"}
                 else:
                     optimized = coordinator.advance(
-                        self.evaluate, host_handler=self.host_handler, count_callback_as_trial=False
+                        self.evaluate,
+                        host_handler=self.host_handler,
+                        count_callback_as_trial=False,
+                        trials_per_evaluation=data["spec"]["repetitions"],
                     )
                 self.state["optimizer_state"] = optimized["state"]
                 if optimized["state"] == "host_pending":

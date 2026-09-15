@@ -7,7 +7,7 @@ from support.evaluation import draft, review_for
 from support.experiments import executions, git, passing_review
 
 from agentagon.core.records import AuditError, identifier
-from agentagon.experiments import engine, grading, preparation
+from agentagon.experiments import delivery, engine, grading, preparation
 from agentagon.experiments.budget import BudgetLedger
 from agentagon.experiments.host_bridge import HostBridge
 from agentagon.experiments.store import load_run
@@ -264,9 +264,11 @@ def test_missing_saved_binding_rejects_grading_as_invalid_evidence(application, 
         grading.observed(application, data, candidate, trial, {"latency": 100})
 
 
-def preparation_pending(application, specification):
+def preparation_pending(application, specification, *, compare=False):
     start(application, specification, prepare_only=True)
     started, plan = draft(application, specification)
+    checks = application.root / started["worktree"] / "checks.py"
+    checks.write_text(checks.read_text() + "\n# Reviewed evaluator version\n")
     wrong = application.state / "wrong-behavior.json"
     wrong.write_text(
         json.dumps(
@@ -279,6 +281,23 @@ def preparation_pending(application, specification):
             }
         )
     )
+    if compare:
+        lower = application.state / "lower-score.json"
+        lower.write_text(
+            json.dumps({"latency": 100, "quality": 0.8, "answer": "success", "variant": "lower"})
+        )
+        plan["metric_cases"] = [
+            {
+                "id": "lower-score",
+                "description": "Valid execution with a worse judged answer",
+                "mutations": [
+                    {"path": "app.json", "source": str(lower.relative_to(application.root))}
+                ],
+            }
+        ]
+        plan["metric_comparisons"] = [
+            {"metric": "quality", "better": "baseline", "worse": "lower-score", "min_delta": 0.5}
+        ]
     pending = preparation.check(application, started["evaluation_id"], plan)
     assert pending["state"] == "awaiting_grading", pending
     return started["evaluation_id"], plan, pending
@@ -334,6 +353,62 @@ def test_preparation_freeze_rechecks_grading_reply_binding(application, specific
     application.write(bridge.path, state)
     with pytest.raises(AuditError, match="admitted host-work evidence"):
         preparation.freeze(application, evaluation_id, review_for(checked))
+
+
+@pytest.mark.parametrize("compare", [False, True])
+def test_evaluation_delivery_rechecks_host_grades(application, specification, compare):
+    evaluation_id, plan, _ = preparation_pending(application, specification, compare=compare)
+    bridge = HostBridge(application, evaluation_id)
+    while bridge.pending():
+        request = bridge.pending()[0]
+        reply(bridge, request, judgment(request))
+        checked = preparation.check(application, evaluation_id, plan)
+    assert checked["state"] == "awaiting_review", checked
+    preparation.freeze(application, evaluation_id, review_for(checked))
+    assert delivery.deliver(application, evaluation_id=evaluation_id)["state"] == "prepared"
+    trial = checked["checks"][-1]["trials"][0]
+    (application.root / trial["grading"]["observation"]).write_text("{}")
+    with pytest.raises(AuditError, match="checksum|observation changed"):
+        delivery.deliver(application, evaluation_id=evaluation_id)
+
+
+def test_candidate_delivery_includes_validated_host_metrics(application, specification):
+    from pathlib import Path
+
+    from support.experiments import propose
+
+    start(application, specification, prepare_only=True)
+    specification["scoring"]["primary"] = "latency"
+    specification["scoring"]["metrics"]["latency"] = {
+        "direction": "min",
+        "unit": "ms",
+        "aggregation": "mean",
+        "missing": "unknown",
+    }
+    budget_id = identifier("budget", str(application.root))
+    BudgetLedger(application, budget_id).create(10, 600)
+    started = engine.start(application, specification, "local", budget_id=budget_id)
+    bridge = HostBridge(application, budget_id)
+    run_id = started["run_id"]
+
+    def verify_candidate(candidate_id=None):
+        engine.run(application, run_id, candidate_id)
+        request = bridge.pending()[0]
+        reply(bridge, request, judgment(request))
+        measured = engine.run(application, run_id, candidate_id)
+        engine.run(application, run_id, candidate_id, review=passing_review(measured))
+
+    verify_candidate()
+    created, _ = propose(application, run_id, latency=80)
+    candidate_id = created["candidate_id"]
+    verify_candidate(candidate_id)
+    engine.select(application, run_id, candidate_id)
+    shipped = delivery.ship(application, run_id)
+    summary = json.loads(Path(shipped["artifacts"]["summary"]).read_text())
+    assert summary["metrics"]["quality"]["candidate"] == 1
+    assert summary["metrics"]["quality"]["min"] == summary["metrics"]["quality"]["max"] == 1
+    assert summary["metrics"]["latency"]["candidate"] == 80
+    assert summary["candidate_score"]["score"] > summary["baseline_score"]["score"]
 
 
 def test_preparation_execution_failure_never_requests_judgment(application, specification):
