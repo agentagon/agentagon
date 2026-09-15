@@ -81,6 +81,7 @@ See the [evaluation walkthrough](../eval.md) or [preparation reference](evaluati
 | `agentagon fix run RUN_ID CANDIDATE_ID` | Seal and execute that candidate. |
 | `agentagon fix run RUN_ID CANDIDATE_ID --review-file FILE` | Submit its actual independent review and continue. |
 | `agentagon status --run RUN_ID --candidate CANDIDATE_ID` | Inspect candidate state. |
+| `agentagon fix report RUN_ID` | Export current fix-run Markdown and JSON reports. |
 | `agentagon fix stop RUN_ID` | Stop the run and cancel owned execution. |
 | `agentagon fix run RUN_ID --continue` | Explicitly continue stopped work. |
 | `agentagon fix steer RUN_ID --control-file FILE` | Submit a revision-checked control operation. |

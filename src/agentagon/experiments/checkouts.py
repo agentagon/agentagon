@@ -155,6 +155,42 @@ def remove(root: Path, destination: Path) -> bool:
     return True
 
 
+def release(
+    root: Path, destination: Path, revision: str, retained_ref: str, parent_revision: str
+) -> bool:
+    """Release a finished editing tree only when every file is retained in Git.
+
+    Unlike execution scratch trees, these may contain new user work. Never force
+    removal, and preserve ignored files as well as unstaged and untracked edits.
+    """
+    try:
+        if git(root, "rev-parse", retained_ref) != revision:
+            return False
+        if not destination.exists():
+            return True
+        if destination.is_symlink() or not (destination / ".git").is_file():
+            return False
+        if git(destination, "rev-parse", "--symbolic-full-name", "HEAD") != "HEAD":
+            return False
+        common = ("rev-parse", "--path-format=absolute", "--git-common-dir")
+        if git(destination, *common) != git(root, *common):
+            return False
+        head = git(destination, "rev-parse", "HEAD")
+        if head not in {revision, parent_revision}:
+            return False
+        if git(destination, "ls-files", "--others", "-z"):
+            return False
+        git(destination, "diff", "--quiet", "--no-ext-diff", revision, "--")
+        git(destination, "diff", "--cached", "--quiet", "--no-ext-diff", revision, "--")
+        # snapshot() creates a commit without moving this detached HEAD. Align
+        # only the reference; git worktree remove performs the final dirty check.
+        git(destination, "update-ref", "--no-deref", "HEAD", revision, head)
+        git(root, "worktree", "remove", str(destination))
+    except (AuditError, OSError):
+        return False
+    return True
+
+
 def source_manifest(root: Path) -> dict:
     """Read executable inputs; runtime-created files are excluded by caller comparison."""
     try:

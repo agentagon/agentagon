@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 from agentagon.core.records import AuditError, digest, identifier, now
 from agentagon.experiments import checkouts, engine, evaluation, patches, preparation, store
+from agentagon.experiments.evidence import read_result
 from agentagon.storage.workspace import Workspace
 
 
@@ -148,7 +149,7 @@ def _summary(workspace: Workspace, data: dict, candidate: dict) -> dict:
         data["spec"],
         [
             engine._validate_result(
-                data, candidate, trial, workspace.read_artifact(trial["artifact"])
+                data, candidate, trial, read_result(workspace, trial["artifact"])
             )[0]
             for trial in engine._completed(candidate)
         ],
@@ -584,7 +585,7 @@ def _evaluation_source(workspace: Workspace, data: dict) -> dict:
     for trial in record["trials"]:
         case = next((c for c in cases if c["id"] == trial["case_id"]), None)
         outcome = preparation._outcome(
-            record["plan"]["spec"], trial, workspace.read_artifact(trial["artifact"]), case
+            record["plan"]["spec"], trial, read_result(workspace, trial["artifact"]), case
         )
         observed.append({**trial, "outcome": outcome})
     comparisons = preparation._metric_comparisons(record["plan"], observed)

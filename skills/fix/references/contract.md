@@ -1,6 +1,6 @@
 # Fix inputs and execution contract
 
-All commands use `agentagon --workspace ORIGIN_CHECKOUT`. Canonical run, snapshot, trial and report records stay in that checkout's ignored `.agentagon/`, even when a candidate worktree or remote runner executes checks.
+All commands use `agentagon --workspace ORIGIN_CHECKOUT`. Canonical run, snapshot and trial records, plus exported report snapshots, stay in that checkout's ignored `.agentagon/`, even when a candidate worktree or remote runner executes checks.
 
 Use `agentagon resources` to locate installed JSON contracts. Its `contracts` directory contains `fix-profile.json`, `fix-spec.json`, `fix-review.json` and `fix-control.json`; do not assume repository-relative schema paths exist in a native plugin installation.
 
@@ -128,16 +128,18 @@ agentagon --workspace CHECKOUT fix new RUN_ID --hypothesis HYPOTHESIS --author A
 agentagon --workspace CHECKOUT fix run RUN_ID CANDIDATE_ID
 agentagon --workspace CHECKOUT fix run RUN_ID CANDIDATE_ID --review-file REVIEW_JSON
 agentagon --workspace CHECKOUT status --run RUN_ID --candidate CANDIDATE_ID
+agentagon --workspace CHECKOUT fix report RUN_ID
 agentagon --workspace CHECKOUT fix select RUN_ID CANDIDATE_ID
 agentagon --workspace CHECKOUT fix stop RUN_ID
 agentagon --workspace CHECKOUT fix steer RUN_ID --control-file CONTROL_JSON
 agentagon --workspace CHECKOUT fix ship RUN_ID
+agentagon --workspace CHECKOUT fix report RUN_ID
 ```
 
 Use the emitted review template rather than inventing a review schema. Independent review must bind the exact candidate, frozen evaluation and engine-produced trials. The engine determines eligibility and frontier membership. Its evidence archive is authoritative for supported claims, but does not prove arbitrary evaluator quality or defend against a malicious operating-system account owning the files.
 
 Submitted reviews follow `contracts/v1/fix-review.json`: version, run/candidate/source/evaluation/input identities, trial IDs, reviewer, verdict, rationale, evidence and four boolean assessments. Verdicts are `pass` or `reject`; an unfilled `pending` template is deliberately invalid. Unknown fields cannot supply alternate metrics, outcomes or promotion decisions.
 
-Run transitions automatically update Markdown/JSON reports. `status` returns their paths; `audit report` remains the separate audit-report command. Invalid, rejected, interrupted and dominated experiments remain part of the archive.
+Run transitions save canonical state; `status` exposes its path in `artifacts.state` without creating reports. Before inspecting or presenting a report, run `fix report RUN_ID` and use its returned `markdown` and `json` paths. The export also returns the saved run `revision`. Reports are snapshots: export again after selection, cleanup or delivery changes before returning a final report. `audit report` remains the separate audit-report command. Invalid, rejected, interrupted and dominated experiments remain part of the archive.
 
 `fix new --operation-id ID` makes a candidate reservation resumable with identical arguments. After the user's selection, [delivery](delivery.md) prepares delivery locally; publishing the selected branch and a GitHub draft PR requires explicit authorization and `fix ship --publish`.

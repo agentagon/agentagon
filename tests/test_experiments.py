@@ -178,10 +178,14 @@ def test_selected_branch_preserves_exact_binary_mode_snapshot_and_origin(
     (checkout / "model.bin").write_bytes(expected_binary)
     (checkout / "tool.sh").write_text("#!/bin/sh\nprintf 'improved\\n'\n")
     (checkout / "tool.sh").chmod(0o755)
-    verified = verify(application, start["run_id"], candidate["candidate_id"])
-    snapshot = verified["candidate"]["source_revision"]
+    measured = engine.run(application, start["run_id"], candidate["candidate_id"])
+    snapshot = measured["candidate"]["source_revision"]
     # Later host edits are not allowed to silently inherit the measured commit's verification.
     (checkout / "model.bin").write_bytes(b"unmeasured later edit")
+    engine.run(
+        application, start["run_id"], candidate["candidate_id"], review=passing_review(measured)
+    )
+    assert (checkout / "model.bin").read_bytes() == b"unmeasured later edit"
     selected = engine.select(application, start["run_id"], candidate["candidate_id"])
     branch = selected["selected_branch"]
     assert git(application.root, "rev-parse", branch) == snapshot

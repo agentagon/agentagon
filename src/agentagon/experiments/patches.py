@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from agentagon.core.records import AuditError, digest, identifier, load_json, now, validate_record
-from agentagon.experiments import checkouts, runners, store
+from agentagon.experiments import checkouts, evidence, runners, store
 from agentagon.experiments.spec import argv, path, text
 from agentagon.storage.workspace import Workspace
 
@@ -179,7 +179,7 @@ def _known_failures(workspace: Workspace, source_digest: str) -> None:
 
 
 def _passing(workspace: Workspace, data: dict, record: dict) -> dict:
-    result = workspace.read_artifact(record["artifact"])
+    result = evidence.read_result(workspace, record["artifact"])
     expected = data["plan"]["checks"]
     if (
         result.get("attempt_id") != record["check_id"]
@@ -272,7 +272,7 @@ def _execute(workspace: Workspace, data: dict, record: dict, root: Path) -> None
     result = runners.execute(
         profile, job / "source", job / "execution", record["request"], checks_only=True
     )
-    record["artifact"] = workspace.artifact(result)
+    record["artifact"] = evidence.retain_result(workspace, job / "execution", result)
     if not result.get("finalized"):
         record["state"] = data["state"] = "interrupted"
         _save(workspace, data)

@@ -646,6 +646,9 @@ def cleanup(profile: dict, attempt_dir: Path) -> dict:
     if not collected.exists():
         raise AuditError("collect or cancel the attempt before cleanup")
     result = json.loads(collected.read_text())
+    if result.get("cleanup_pending") is False:
+        return result
+    previous = dict(result)
     try:
         if descriptor["runner"]["kind"] != "local" and descriptor.get("state") not in {
             "expired",
@@ -659,5 +662,6 @@ def cleanup(profile: dict, attempt_dir: Path) -> dict:
         result["cleanup_error"] = (
             "remote cleanup did not complete; retry cleanup when connectivity returns"
         )
-    _save(collected, result)
+    if result != previous:
+        _save(collected, result)
     return result

@@ -78,9 +78,11 @@ def test_missing_benchmark_is_added_only_to_preparation_and_review_branch(
         verify(application, fix["run_id"], fix["candidate_id"])["candidate"]["state"] == "verified"
     )
     run = engine.status(application, fix["run_id"], fix["candidate_id"])
-    baseline_path = application.root / run["candidate"]["worktree"]
-    assert (baseline_path / "checks.py").exists()
-    assert not (baseline_path / "benchmark.py").exists()
+    sealed_files = git(
+        application.root, "ls-tree", "--name-only", run["candidate"]["source_revision"]
+    ).splitlines()
+    assert "checks.py" in sealed_files
+    assert "benchmark.py" not in sealed_files
 
 
 def test_vacuous_or_crashed_check_cannot_prove_sensitivity(application, specification):

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 from agentagon.core.records import AuditError, digest, encoded, identifier, now
 from agentagon.experiments import checkouts, evaluation
+from agentagon.experiments.evidence import read_result
 from agentagon.experiments.store import list_runs
 
 LIMIT_KEYS = {"max_scans", "max_input_bytes", "scan_timeout_seconds"}
@@ -79,7 +80,7 @@ def _summary(workspace, data: dict, candidate: dict) -> dict:
         item = {key: trial[key] for key in ("trial_id", "state", "error") if key in trial}
         artifact = trial.get("artifact")
         if artifact:
-            result = workspace.read_artifact(artifact)
+            result = read_result(workspace, artifact)
             evidence.append(artifact)
             # Logs are already runner-redacted. Excerpts remain untrusted text.
             item["failed_commands"] = [

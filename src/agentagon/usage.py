@@ -72,7 +72,9 @@ def _connect(config: Config) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     os.close(descriptor)
-    db = sqlite3.connect(path, timeout=0.1)
+    # Concurrent CLI writers can exceed 100 ms on a busy filesystem. Allow a
+    # bounded wait for their short transactions; delivery runs outside the lock.
+    db = sqlite3.connect(path, timeout=1)
     try:
         db.row_factory = sqlite3.Row
         db.executescript("""

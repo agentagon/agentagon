@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from agentagon.core.records import AuditError, digest, identifier, now, validate_record
-from agentagon.experiments import checkouts, evaluation, runners, search
+from agentagon.experiments import checkouts, evaluation, evidence, runners, search
 from agentagon.experiments.spec import validate_limits, validate_spec
 from agentagon.experiments.store import list_runs, load_run, locked, run_dir, save_run
 from agentagon.storage.config import Config
@@ -106,6 +106,32 @@ def _frontier_vectors(data: dict, candidates: dict) -> set[tuple]:
 def _save(workspace: Workspace, data: dict) -> None:
     _update(data)
     save_run(workspace, data)
+    released = False
+    for candidate in data["candidates"].values():
+        if (
+            candidate["state"] in TERMINAL
+            and candidate.get("source_revision")
+            and not candidate.get("worktree_released")
+            and not any(t["state"] in {"running", "interrupted"} for t in candidate["trials"])
+        ):
+            destination = (
+                run_dir(workspace, data["run_id"]) / "candidates" / candidate["candidate_id"]
+            )
+            if _owned(workspace, data, candidate["worktree"]) != destination:
+                continue
+            retained = f"refs/agentagon/fix/{data['run_id']}/{candidate['candidate_id']}"
+            if checkouts.release(
+                workspace.root,
+                destination,
+                candidate["source_revision"],
+                retained,
+                candidate.get("parent_revision", data["origin_revision"]),
+            ):
+                candidate["worktree_released"] = True
+                released = True
+    if released:
+        # Snapshot identity is already durable before any worktree is released.
+        workspace.write(run_dir(workspace, data["run_id"]) / "state.json", data)
 
 
 def _candidate(data: dict, candidate_id: str | None) -> dict:
@@ -703,7 +729,9 @@ def _validate_result(
 
 
 def _collect(workspace: Workspace, data: dict, candidate: dict, trial: dict, result: dict) -> None:
-    trial["artifact"] = workspace.artifact(result)
+    trial["artifact"] = evidence.retain_result(
+        workspace, _owned(workspace, data, trial["attempt_dir"]), result
+    )
     observations = trial.setdefault("observations", [])
     if trial["artifact"] not in observations:
         observations.append(trial["artifact"])
@@ -815,7 +843,7 @@ def _accept_review(workspace: Workspace, data: dict, candidate: dict, review: di
     task_samples = []
     for trial in _completed(candidate):
         metrics, checks, tasks = _validate_result(
-            data, candidate, trial, workspace.read_artifact(trial["artifact"])
+            data, candidate, trial, evidence.read_result(workspace, trial["artifact"])
         )
         if (
             metrics != trial["metrics"]
@@ -1049,7 +1077,7 @@ def _verified_evidence(workspace: Workspace, data: dict, candidate: dict) -> Non
     metrics, all_checks, task_samples = [], [], []
     for trial in _completed(candidate):
         observed, checks, tasks = _validate_result(
-            data, candidate, trial, workspace.read_artifact(trial["artifact"])
+            data, candidate, trial, evidence.read_result(workspace, trial["artifact"])
         )
         if tasks != trial.get("task_metrics", {}):
             raise AuditError("recorded tasks do not match retained execution evidence")
@@ -1165,12 +1193,7 @@ def status(
     report["scan_pending"] = learning.pending(data)
     report["lesson_context"] = learning.context(workspace, data)
     report["intelligence_receipts"] = copy.deepcopy(data.get("intelligence", []))
-    directory = run_dir(workspace, run_id)
-    report["artifacts"] = {
-        "state": str(directory / "state.json"),
-        "markdown": str(directory / "report.md"),
-        "json": str(directory / "report.json"),
-    }
+    report["artifacts"] = {"state": str(run_dir(workspace, run_id) / "state.json")}
     report["usage"]["elapsed_seconds"] = _elapsed(data)
     report["pending_actions"] = []
     chosen = [_candidate(data, candidate_id)] if candidate_id else list(data["candidates"].values())
@@ -1178,7 +1201,9 @@ def status(
         entry = {
             "candidate_id": candidate["candidate_id"],
             "state": candidate["state"],
-            "worktree": str(workspace.root / candidate["worktree"]),
+            "worktree": None
+            if candidate.get("worktree_released")
+            else str(workspace.root / candidate["worktree"]),
         }
         if evaluation.invalidated(data, candidate):
             entry["action"] = (

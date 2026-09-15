@@ -767,6 +767,17 @@ def fix_inspect(path: Path, run_id: str, candidate_id: str) -> dict:
     return inspection.candidate(Workspace(path), run_id, candidate_id)
 
 
+@fix_group.command("report")
+@click.argument("run_id")
+@click.pass_obj
+@output
+def fix_report(path: Path, run_id: str) -> dict:
+    """Export the current saved run as Markdown and JSON."""
+    from agentagon.experiments.store import export_report
+
+    return export_report(Workspace(path), run_id)
+
+
 @fix_group.command("ideate")
 @click.argument("run_id")
 @click.option(
