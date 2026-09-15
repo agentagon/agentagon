@@ -19,7 +19,9 @@ The plan passed to `eval check --plan-file` contains:
 
 `spec.overlays` and `spec.inputs` can import regular checkout-local files into the evaluation. Their source may be in ignored `.agentagon/` storage; their destination is relative to the evaluation source tree. Inputs are excluded from the benchmark review branch. To keep generated helpers private, list them as inputs; ordinary instrumentation can be an evaluation file reviewed on the benchmark branch while omitted from fix delivery.
 
-Preparation may add or replace evaluation files, but cannot delete files or modify application source. The frozen package is an overlay and cannot represent deletions. Use explicit evaluation paths; protecting `.` is not allowed during preparation.
+Preparation may add, replace or delete files only within explicitly named `evaluation_paths`; it cannot modify application source. Delete a scoped file in the preparation worktree. Validation records the removal as a tombstone in the new frozen package so evaluation execution, later versions and Fix use the file's absence. Protecting `.` is not allowed, and every declared evaluation path must contain a frozen file or a scoped deletion.
+
+List a deleted path in `deliver_paths` only when removing that regression test is an intentional public deliverable. Private input deletions are never deliverable. When retiring a private input, remove its evaluation scope to omit it from public deletion records; retain its explicit scope only when later versions must preserve the tombstone. A path cannot appear in more than one of `overlays`, `inputs` and `deletions`. Use `eval start --from EVALUATION_ID` for dataset or evaluator repairs: the new version carries scoped deletions while the earlier frozen package remains immutable.
 
 The check result includes a `review_template`. Preserve `evaluation_id`, `validation_id`, `validation_digest`, and every evidence reference. Supply a distinct nonempty `reviewer`, `verdict: "pass"`, a substantive `rationale`, and `true` for every named assessment only after independent inspection. Changed benchmarks or evidence invalidate that review.
 
