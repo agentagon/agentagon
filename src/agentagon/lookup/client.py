@@ -3,11 +3,13 @@
 import asyncio
 import json
 import re
+import secrets
+import sys
 import time
 
 import httpx
 
-from agentagon.core.records import AuditError, digest, now, validate_record
+from agentagon.core.records import AuditError, digest, encoded, load_json, now, validate_record
 from agentagon.lookup import owners
 from agentagon.storage.config import Config, credential
 from agentagon.storage.workspace import Workspace
@@ -123,13 +125,19 @@ def lookup(
     limit: int = 5,
     phase: str = "initial",
     refresh: bool = False,
+    approval_id: str | None = None,
+    decline: bool = False,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict:
     """Consult guidance for an audit, evaluation or fix run using explicit text only.
 
     ``audit_id`` remains the positional owner ID for compatibility with audit callers.
+    In ask mode, return a preview without HTTP until the host supplies its ID after
+    user consent. Every outgoing request is announced on stderr before dispatch.
     """
     started = time.monotonic()
+    if decline and approval_id is None:
+        raise AuditError("declining a lookup requires its prepared approval ID")
     owners.validate_workflow(workflow)
     if phase not in {"initial", "follow_up"}:
         raise AuditError("lookup phase must be initial or follow_up")
@@ -142,17 +150,25 @@ def lookup(
     _validate_request(payload, workflow)
     settings = Config().effective(workspace.root)
     key = credential(settings, "intelligence")
-    secrets = (
+    credentials = (
         key,
         credential(settings, "traces"),
         credential(settings, "traces", "public_key_env"),
     )
     for field in ("context", "focus", "goal"):
         if field in payload:
-            payload[field] = redact_query(payload[field], secrets)
+            payload[field] = redact_query(payload[field], credentials)
     _validate_request(payload, workflow)
     endpoint = service_url(settings, workflow)
     request_digest = digest([endpoint, phase, payload])
+    preview = {
+        "purpose": f"Consult Agentagon Intelligence for {workflow} guidance",
+        "workflow": workflow,
+        "phase": phase,
+        "endpoint": endpoint,
+        "request": payload,
+        "mode": settings["intelligence"]["mode"],
+    }
     cached = None
     with owners.locked(workspace, workflow, audit_id):
         audit = owners.load(workspace, workflow, audit_id)
@@ -169,6 +185,54 @@ def lookup(
                 }
                 break
         generation = owners.binding(workflow, audit)
+        approval_path = owners.approval_path(workspace, workflow, audit_id)
+        binding = digest(
+            [request_digest, generation, refresh, settings["intelligence"]["api_key_env"]]
+        )
+        prepared = load_json(workspace.checked(approval_path)) if approval_path.exists() else None
+        if approval_id is not None:
+            if (
+                not prepared
+                or prepared.get("approval_id") != approval_id
+                or prepared.get("status") != "pending"
+                or prepared.get("binding") != binding
+                or prepared.get("preview") != preview
+            ):
+                raise AuditError(
+                    "lookup approval is stale, already used or does not match this request"
+                )
+            # Consume before dispatch, including failures. Concurrent callers cannot reuse it.
+            prepared["status"] = "declined" if decline else "consumed"
+            workspace.write(approval_path, prepared)
+            payload = prepared["preview"]["request"]
+            preview["request"] = payload
+            if decline:
+                return {
+                    **preview,
+                    "status": "declined",
+                    "approval_id": approval_id,
+                    "cached": False,
+                }
+        elif cached is None and key and endpoint and settings["intelligence"]["mode"] == "ask":
+            if (
+                not prepared
+                or prepared.get("status") != "pending"
+                or prepared.get("binding") != binding
+                or prepared.get("preview") != preview
+            ):
+                prepared = {
+                    "approval_id": "intel_" + secrets.token_hex(16),
+                    "binding": binding,
+                    "status": "pending",
+                    "preview": preview,
+                }
+                workspace.write(approval_path, prepared)
+            return {
+                **preview,
+                "status": "approval_required",
+                "approval_id": prepared["approval_id"],
+                "cached": False,
+            }
     owner_field = {"audit": "audit_id", "eval": "evaluation_id", "fix": "run_id"}[workflow]
     if cached is not None:
         track(
@@ -185,6 +249,13 @@ def lookup(
     elif endpoint is None:
         outcome = {"status": "missing_endpoint"}
     else:
+        # stderr keeps the CLI's final stdout record machine-readable. The host must
+        # show this event even in full_access mode; credentials never enter it.
+        print(
+            encoded({**preview, "status": "sending", "approval_id": approval_id}),
+            file=sys.stderr,
+            flush=True,
+        )
         outcome = asyncio.run(_request(endpoint, key, payload, transport))
     record = {
         "phase": phase,

@@ -279,3 +279,80 @@ def test_dashboard_progress_and_findings_use_one_report_snapshot(workspace, impo
     assert detail["coverage"]["findings"] == len(detail["issues"][0]["findings"]) == 1
     assert detail["coverage"]["issue_groups"] == len(detail["issues"]) == 1
     assert next(snapshots) is pending_audit  # No second read can mix an earlier/later generation.
+
+
+def test_benchmark_dashboard_projects_readiness_without_exposing_inputs_or_running_work(
+    workspace, monkeypatch
+):
+    from agentagon.experiments import benchmarks, worker
+
+    private = "private-dataset-and-intelligence-payload"
+    (workspace.root / "cases.json").write_text(json.dumps({"input": private}))
+    (workspace.root / "evaluate.py").write_text("raise RuntimeError('must not run')\n")
+    assessment = {
+        "goal": "Find missing timeout coverage",
+        "author": "audit-host",
+        "dataset_paths": ["cases.json"],
+        "entrypoint_paths": ["evaluate.py"],
+        "assessments": {
+            topic: {"status": "unknown", "rationale": private, "evidence": []}
+            for topic in benchmarks.ASSESSMENTS
+        },
+        "proposed_cases": [private],
+    }
+    saved = benchmarks.draft(workspace, assessment)
+    benchmark_id = saved["benchmark_id"]
+    state = benchmarks.load(workspace, benchmark_id)
+    state["intelligence"] = {"request": private}
+    workspace.write(workspace.state / "benchmarks" / benchmark_id / "state.json", state)
+    (workspace.root / "cases.json").write_text("changed after audit")
+    before = {path: path.read_bytes() for path in workspace.state.rglob("*") if path.is_file()}
+    monkeypatch.setattr(worker, "run", lambda *args, **kwargs: pytest.fail("dashboard ran work"))
+    monkeypatch.setattr(
+        benchmarks, "prepare", lambda *args, **kwargs: pytest.fail("dashboard prepared work")
+    )
+    with running(workspace) as server:
+        for endpoint in ("/api/audits", "/api/evaluations", "/api/benchmarks"):
+            status, _, body = request(server, endpoint)
+            assert status == 200
+            draft = json.loads(body)["benchmark_drafts"][0]
+            assert draft["benchmark_id"] == benchmark_id
+            assert draft["goal"] == assessment["goal"]
+            assert draft["state"] == "draft"
+            assert draft["measurement_status"] == "not_measured"
+            assert draft["validation_label"] == "Draft; not measured"
+            assert draft["dataset_files"] == draft["entrypoint_files"] == 1
+            assert draft["assessment_counts"] == {"supported": 0, "concern": 0, "unknown": 7}
+            assert {item["code"] for item in draft["readiness"]["missing"]} >= {
+                "input_changed",
+                "execution_plan_missing",
+                "profile_missing",
+                "budget_missing",
+            }
+            assert private.encode() not in body
+            assert "snapshot" not in draft
+            assert "artifacts" not in draft
+            assert json.loads(request(server, draft["report_url"])[2]) == draft
+        assert request(server, "/api/benchmarks/benchmark_" + "f" * 24)[0] == 404
+        assert request(server, "/api/benchmarks/../../workspace.json")[0] == 404
+    assert {
+        path: path.read_bytes() for path in workspace.state.rglob("*") if path.is_file()
+    } == before
+
+
+def test_new_journey_collections_are_empty_before_initialization(workspace):
+    for path in workspace.state.iterdir():
+        path.unlink()
+    workspace.state.rmdir()
+    with running(workspace) as server:
+        for endpoint, field in (
+            ("/api/audits", "benchmark_drafts"),
+            ("/api/evaluations", "benchmark_drafts"),
+            ("/api/benchmarks", "benchmark_drafts"),
+            ("/api/runs", "reviewed_patches"),
+            ("/api/patches", "reviewed_patches"),
+        ):
+            status, _, body = request(server, endpoint)
+            assert status == 200
+            assert json.loads(body)[field] == []
+    assert not workspace.state.exists()

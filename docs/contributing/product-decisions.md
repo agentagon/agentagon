@@ -2,13 +2,19 @@
 
 These decisions explain the workflow boundaries contributors should preserve. Commands and configuration belong in the [user guides](../README.md); the [implementation map](capabilities.md) links behavior to source and tests.
 
-## Separate triggers define the evidence scope
+<span id="separate-triggers-define-the-evidence-scope"></span>
 
-Review and audit share an analysis engine but answer different questions. `ag:review` assesses local uncommitted changes; `ag:audit` investigates the current application broadly. Separate entry points let users choose the scope without having it expand silently. Related code can explain a change, but review findings must concern the captured changes.
+## Two journeys preserve explicit evidence scope
 
-Reviews default to code-only. Runtime evidence can inform a combined review when its relationship to the changes is stated. Full audits can use supplied traces with uncommitted code or without Git, retaining uncertainty about revision alignment. A missing finding in a narrow review cannot resolve an existing issue.
+`ag:audit` assesses existing agents, local changes or evals. `ag:fix` makes requested improvements and carries them through review and delivery. Setup and Dashboard remain utilities; evaluation preparation, changes review and delivery are internal procedures with existing low-level CLI operations.
 
-See [scope and goal](../audit.md#scope-and-goal) for capture rules and trace requirements.
+Audit defaults to the current application broadly. A named agent resolves to explicit paths. Changes-only scope includes the captured uncommitted diff; related code can explain a change but cannot expand the finding scope. A missing finding in a narrow audit cannot resolve an existing issue.
+
+Changes-only audits default to code without traces. Full audits accept dirty and non-Git directories and retain uncertainty about trace revision alignment. Existing-eval assessments save content-pinned drafts independently of execution readiness. Running and freezing a benchmark still requires clean committed source, trustworthy expectations, authorized limits, sensitivity checks and independent review. Missing execution prerequisites do not block the assessment.
+
+Dataset creation or repair belongs to Fix and creates a new evaluator version. Compare coverage, labels and sensitivity at fixed application source; aggregate scores on changed datasets are not a like-for-like application improvement. Application candidates still cannot change their frozen evaluator.
+
+See [scope and goal](../audit.md#scope-and-goal) and [benchmark readiness](../benchmarks.md).
 
 ## Goals change emphasis
 
@@ -40,10 +46,18 @@ Skills open it automatically through the [shared dashboard lifecycle](../../skil
 
 Controls are opt-in and use the CLI's validated operations. Work requiring the coding agent remains queued until the active host acknowledges it. See [inspection](../audit.md#review-resume-and-inspect) and [controls](../reference/fix.md#dashboard-controls-and-delivery).
 
+## Intelligence requests require explicit consent
+
+Intelligence defaults to `ask`, including existing configured installations. The host shows the exact redacted request and destination, obtains consent, then submits the single-use approval ID. The shared client binds consent to the owner generation and request and consumes it before one HTTP attempt. Changed requests and retries need new consent; cached local receipts do not send data.
+
+Only an explicit Agentagon `full_access` setting skips approval prompts. It never inherits coding-host permissions and still shows each call, preserves privacy restrictions and retains receipts. Declining does not block local work.
+
 ## Fixes preserve measurement and user choice
 
 The host authors candidates and supplies independent reviews; the engine freezes execution inputs, records measurements and applies constraints. Freezing the benchmark before the baseline keeps comparisons consistent. Search policies and retained lessons guide exploration without replacing execution or review.
 
 Keep every verified alternative that is not dominated across the declared objectives. The user chooses a final candidate because tradeoffs between objectives depend on their priorities. Failed and dominated experiments remain useful evidence.
 
-Selection, publication, merging and deployment are separate actions. A selected branch is reviewable before publication, and changes introduced during delivery need fresh verification. See [measured fixes](../fix.md), [evaluation preparation](../eval.md) and the [shipping procedure](../../skills/ship/SKILL.md).
+Selection, publication, merging and deployment are separate actions. A selected branch is reviewable before publication, and changes introduced during delivery need fresh verification. See [measured fixes](../fix.md), [evaluation preparation](../eval.md) and the [shipping procedure](../../skills/fix/references/delivery.md).
+
+Reviewed patches without a trusted baseline use a separate record and independent review of exact source, available checks and limitations. They never enter the measured frontier or establish verified issue resolution. Known failures cannot be bypassed by relabeling the result. Local delivery accepts measured fixes, reviewed eval changes and reviewed unmeasured patches without a remote; publication validates the destination separately.

@@ -205,6 +205,7 @@ def validate_spec(value: dict) -> dict:
                 "checks",
                 "overlays",
                 "inputs",
+                "deletions",
                 "repetitions",
                 "seeds",
                 "resources",
@@ -314,9 +315,29 @@ def validate_spec(value: dict) -> dict:
                 entry.setdefault("deliver", True)
                 if type(entry["deliver"]) is not bool:
                     raise AuditError("overlay deliver must be a boolean")
-    destinations = [entry["path"] for key in ("overlays", "inputs") for entry in value[key]]
+    if "deletions" in value:
+        if not isinstance(value["deletions"], list):
+            raise AuditError("deletions must be an array")
+        for entry in value["deletions"]:
+            object_keys(entry, {"path", "deliver", "kind"}, {"path"}, "evaluation deletion")
+            entry["path"] = path(entry["path"])
+            entry.setdefault("deliver", False)
+            if type(entry["deliver"]) is not bool:
+                raise AuditError("deletion deliver must be a boolean")
+            if entry.get("kind", "overlays") not in {"overlays", "inputs"}:
+                raise AuditError("deletion kind must be overlays or inputs")
+            if entry.get("kind") == "inputs" and entry["deliver"]:
+                raise AuditError("private input deletions cannot be deliverable")
+            if not any(
+                scope != "." and (entry["path"] == scope or entry["path"].startswith(scope + "/"))
+                for scope in value["evaluation_paths"]
+            ):
+                raise AuditError("deletions must stay inside explicitly named evaluation paths")
+    destinations = [
+        entry["path"] for key in ("overlays", "inputs", "deletions") for entry in value.get(key, [])
+    ]
     if len(destinations) != len(set(destinations)):
-        raise AuditError("overlay and input destinations must be distinct")
+        raise AuditError("overlay, input and deletion destinations must be distinct")
     value.setdefault("repetitions", 3)
     if type(value["repetitions"]) is not int or not 1 <= value["repetitions"] <= 1000:
         raise AuditError("repetitions must be between 1 and 1000")

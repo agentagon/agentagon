@@ -9,7 +9,7 @@ The prompts below are examples. Replace IDs, paths, metrics, and limits to fit y
 | Configure execution or saved defaults | Select **ag:setup**, then send the prompt. | Start the prompt with `/ag:setup`. |
 | Define, run, or steer a comparison | Select **ag:fix**, then send the prompt. | Start the prompt with `/ag:fix`. |
 | Inspect results or use visual controls | Select **ag:dashboard**, then send the prompt. | Start the prompt with `/ag:dashboard`. |
-| Prepare a chosen candidate for delivery | Select **ag:ship**, then send the prompt. | Start the prompt with `/ag:ship`. |
+| Prepare a chosen candidate for delivery | Select **ag:fix**, then send the prompt. | Start the prompt with `/ag:fix`. |
 
 Use the dashboard to compare results and operate run controls. Expand the technical details only when you need the exact CLI or file format.
 
@@ -30,7 +30,7 @@ For remote execution, name your SSH host or E2B template and the inputs it may r
 
     Start in a clean application Git checkout with an existing commit. Initialize ignored local state with `agentagon --workspace CHECKOUT init` if needed. Keep run specifications, private data and review responses in `.agentagon/`; do not commit them merely to satisfy the clean-checkout requirement. Existing unrelated edits must be handled by their owner before starting a run.
 
-    If Git or the initial commit is missing, `ag:fix` and `ag:eval` stop, explain what is missing, and ask you to set it up or approve setup by the agent. They do not fall back to an untracked manual fix. Authorized setup reviews the files and ignore rules, excludes private state and credentials, and creates a local application baseline before resuming. It does not create a remote or publish code. `agentagon init` initializes Agentagon state, not a Git repository.
+    If Git or the initial commit is missing, `ag:fix` and `ag:fix` stop, explain what is missing, and ask you to set it up or approve setup by the agent. They do not fall back to an untracked manual fix. Authorized setup reviews the files and ignore rules, excludes private state and credentials, and creates a local application baseline before resuming. It does not create a remote or publish code. `agentagon init` initializes Agentagon state, not a Git repository.
 
     Choose a named execution profile through `ag:setup`. The first use requires explicit limits for candidates, trials, elapsed time, candidate/trial concurrency and individual trial timeout. Reuse the saved profile for later runs. This example illustrates the shape; choose limits appropriate to the authorized work before saving it:
 
@@ -307,7 +307,7 @@ Open run RUN_ID in the dashboard with controls enabled so I can compare
 candidates and steer the run.
 ```
 
-After choosing a candidate, use **ag:ship**:
+After choosing a candidate, use **ag:fix**:
 
 ```text
 Prepare delivery for the selected candidate in run RUN_ID. Check for useful
@@ -327,9 +327,9 @@ Tell the coding agent when you are ready to publish. See [the delivery guide](..
 
     Open the exact localhost URL from startup. The controls use the same revisions and operations as the CLI. They can change search policy, queue proposals/directives/continuation, stop, select, invalidate/exhaust candidates and cancel queued work. The page shows pending work and outcomes; it never calls a model service or acknowledges host work. Scans and host acknowledgment remain in the coding-agent workflow. Session credentials are temporary and are not stored in run records. See [ag:dashboard](../../skills/dashboard/SKILL.md).
 
-    After selection, `ag:ship` inspects the application diff for useful cleanup. `fix cleanup RUN_ID --operation-id ID --author AUTHOR` reserves a separate candidate from that winner. It uses the same frozen benchmark and remaining optimization budget. Execute it with `fix run`, obtain a fresh independent review, then compare with `fix cleanup RUN_ID --finish CLEANUP_ID`. Automatic substitution requires frontier admission and no worse results on every objective, including declared task objectives. Failed or regressed cleanup preserves the original selection and evidence; changed tradeoffs require a user decision. Cleanup cannot edit frozen evaluation files.
+    After selection, `ag:fix` inspects the application diff for useful cleanup. `fix cleanup RUN_ID --operation-id ID --author AUTHOR` reserves a separate candidate from that winner. It uses the same frozen benchmark and remaining optimization budget. Execute it with `fix run`, obtain a fresh independent review, then compare with `fix cleanup RUN_ID --finish CLEANUP_ID`. Automatic substitution requires frontier admission and no worse results on every objective, including declared task objectives. Failed or regressed cleanup preserves the original selection and evidence; changed tradeoffs require a user decision. Cleanup cannot edit frozen evaluation files.
 
-    `agentagon --workspace CHECKOUT fix ship RUN_ID` prepares a local delivery summary and draft PR body, including any verified cleanup comparison. When publication to the chosen destination is authorized, repeat with `--publish` to push the exact selected branch and create a GitHub draft PR. Follow [ag:ship](../../skills/ship/SKILL.md) for evidence checks, destination choices and interruption recovery. Shipping does not merge, deploy or resolve an audit issue.
+    `agentagon --workspace CHECKOUT fix ship RUN_ID` prepares a local delivery summary and draft PR body, including any verified cleanup comparison. When publication to the chosen destination is authorized, repeat with `--publish` to push the exact selected branch and create a GitHub draft PR. Follow [ag:fix](../../skills/fix/references/delivery.md) for evidence checks, destination choices and interruption recovery. Shipping does not merge, deploy or resolve an audit issue.
 
 ## What verification means
 

@@ -73,7 +73,13 @@ def received(posthog):
 
 
 def receipt_for(workspace, audit_id, monkeypatch):
-    Config().update("user", values={"intelligence.endpoint": "https://guidance.example"})
+    Config().update(
+        "user",
+        values={
+            "intelligence.endpoint": "https://guidance.example",
+            "intelligence.mode": "full_access",
+        },
+    )
     monkeypatch.setenv("AGENTAGON_API_KEY", "agi_privateCustomerKey")
     with monkeypatch.context() as isolated:
         isolated.setenv("AGENTAGON_TELEMETRY_DISABLED", "1")
@@ -158,8 +164,8 @@ def test_disable_clears_queue_and_prevents_backfill(posthog):
     assert len(posthog["requests"]) == 1
     Config().update("user", values={"telemetry.enabled": True})
     posthog["response"] = httpx.Response(200, json={"status": 1})
-    assert track("skill_invoked", skill="review")["status"] == "accepted"
-    assert [event["properties"]["skill"] for event in received(posthog)] == ["audit", "review"]
+    assert track("skill_invoked", skill="fix")["status"] == "accepted"
+    assert [event["properties"]["skill"] for event in received(posthog)] == ["audit", "fix"]
     assert received(posthog)[-1]["uuid"] != original_id
 
 
@@ -200,7 +206,7 @@ def test_retry_keeps_identity_and_applies_global_backoff(posthog):
     assert 115 <= due - time.time() <= 121
     retry_now()
     posthog["response"] = httpx.Response(200, json={"status": 1})
-    assert track("skill_invoked", skill="review")["status"] == "accepted"
+    assert track("skill_invoked", skill="fix")["status"] == "accepted"
     assert received(posthog)[1] == first
     assert pending() == []
 
@@ -252,7 +258,7 @@ def test_async_python_caller_enqueues_without_nested_loop(posthog):
 
     assert asyncio.run(call()) == {"status": "queued"}
     assert posthog["requests"] == [] and len(pending()) == 1
-    assert track("skill_invoked", skill="review")["status"] == "accepted"
+    assert track("skill_invoked", skill="fix")["status"] == "accepted"
     assert len(received(posthog)) == 2
 
 
@@ -272,7 +278,7 @@ def test_queue_count_bytes_expiry_and_one_batch_limit(posthog, monkeypatch):
     assert len(pending()) == 25 and Config().summary()["telemetry"]["dropped"] == 6
     retry_now()
     posthog["response"] = httpx.Response(200, json={"status": 1})
-    track("skill_invoked", skill="review")
+    track("skill_invoked", skill="fix")
     assert len(json.loads(posthog["requests"][-1].content)["batch"]) == 20
     assert len(pending()) == 5
     monkeypatch.setattr(usage, "MAX_BYTES", 1000)
@@ -295,7 +301,7 @@ def test_concurrent_writers_do_not_lose_events_or_hold_database_during_send(post
     with ThreadPoolExecutor(max_workers=8) as pool:
         first = pool.submit(track, "skill_invoked", skill="audit")
         assert entered.wait(2)
-        later = [pool.submit(track, "skill_invoked", skill="review") for _ in range(12)]
+        later = [pool.submit(track, "skill_invoked", skill="fix") for _ in range(12)]
         assert all(future.result()["status"] == "queued" for future in later)
         assert len(pending()) == 13
         release.set()
@@ -312,7 +318,7 @@ def test_tampered_queue_is_not_forwarded(posthog):
         db.execute("UPDATE events SET payload=?", (json.dumps(event),))
     retry_now()
     posthog["response"] = httpx.Response(200, json={"status": 1})
-    track("skill_invoked", skill="review")
+    track("skill_invoked", skill="fix")
     assert len(received(posthog)) == 2
     assert b"private customer content" not in posthog["requests"][-1].content
     assert Config().summary()["telemetry"]["dropped"] == 1
@@ -335,7 +341,13 @@ def test_unavailable_and_symlinked_storage_never_interrupts(tmp_path, posthog, m
 def test_lookup_emits_returns_once_in_one_request_and_tracks_cache(
     workspace, imported, posthog, monkeypatch
 ):
-    Config().update("user", values={"intelligence.endpoint": "https://guidance.example"})
+    Config().update(
+        "user",
+        values={
+            "intelligence.endpoint": "https://guidance.example",
+            "intelligence.mode": "full_access",
+        },
+    )
     monkeypatch.setenv("AGENTAGON_API_KEY", "agi_privateCustomerKey")
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json=RESPONSE))
     first = lookup(workspace, imported, "private project summary", transport=transport)
@@ -412,7 +424,7 @@ def test_cli_is_one_hook_and_rejects_free_text(posthog, tmp_path):
             "telemetry",
             "skill_invoked",
             "--data",
-            '{"skill":"eval","host":"claude-code"}',
+            '{"skill":"fix","host":"claude-code"}',
         ],
     )
     assert good.exit_code == 0 and json.loads(good.output)["status"] == "accepted"
@@ -420,7 +432,7 @@ def test_cli_is_one_hook_and_rejects_free_text(posthog, tmp_path):
         "null",
         "not json",
         '{"workspace":"/private"}',
-        '{"skill":"eval","text":"private"}',
+        '{"skill":"fix","text":"private"}',
     ):
         result = runner.invoke(main, ["telemetry", "skill_invoked", "--data", data])
         assert result.exit_code == 0
@@ -500,7 +512,7 @@ def test_changed_token_never_sends_old_queue_to_new_project(posthog, monkeypatch
     old_id = pending()[0]["uuid"]
     monkeypatch.setenv("AGENTAGON_POSTHOG_PROJECT_TOKEN", "phc_newTelemetryProject12345")
     posthog["response"] = httpx.Response(200, json={"status": 1})
-    assert track("skill_invoked", skill="review")["status"] == "accepted"
+    assert track("skill_invoked", skill="fix")["status"] == "accepted"
     last = json.loads(posthog["requests"][-1].content)
     assert last["api_key"] == "phc_newTelemetryProject12345"
     assert len(last["batch"]) == 1 and last["batch"][0]["uuid"] != old_id

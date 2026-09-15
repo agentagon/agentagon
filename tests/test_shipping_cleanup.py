@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from support.delivery import creates, pushes
 from support.experiments import git, passing_review, verify
 
 from agentagon.core.records import AuditError
@@ -86,7 +87,7 @@ def test_cleanup_cannot_change_frozen_checks(selected):
     assert store.load_run(workspace, run_id)["selected"]["candidate_id"] == selected["candidate_id"]
 
 
-def test_cleanup_uses_existing_budget_and_rejects_changed_delivery_base(selected):
+def test_cleanup_uses_existing_budget_and_rejects_changed_publication_base(selected, github):
     workspace, run_id = selected["workspace"], selected["run_id"]
     with store.locked(workspace, run_id):
         data = store.load_run(workspace, run_id)
@@ -107,5 +108,17 @@ def test_cleanup_uses_existing_budget_and_rejects_changed_delivery_base(selected
         f"refs/remotes/origin/{selected['base']}",
         selected["revision"],
     )
-    with pytest.raises(AuditError, match="base differs"):
-        delivery.ship(workspace, run_id)
+    # Offline packaging retains the evaluated base even when local tracking metadata moved.
+    prepared = delivery.ship(workspace, run_id)
+    assert prepared["base_revision"] == data["origin_revision"]
+    assert prepared["candidate_id"] == started["candidate_id"]
+    git(
+        workspace.root,
+        "push",
+        "-q",
+        str(selected["remote"]),
+        f"{selected['revision']}:refs/heads/{selected['base']}",
+    )
+    with pytest.raises(AuditError, match="remote base changed"):
+        delivery.ship(workspace, run_id, publish=True)
+    assert not pushes(github) and not creates(github)

@@ -174,6 +174,7 @@ async function loadEvaluations(version) {
   if (version !== requestVersion) return;
   byId("workspace-name").textContent = data.workspace.split("/").filter(Boolean).pop();
   byId("workspace-path").textContent = data.workspace;
+  const journeyCount = renderJourneyResults(data);
   byId("eval-count").textContent = `${data.evaluations.length} evaluation${data.evaluations.length === 1 ? "" : "s"} in this checkout`;
   const select = byId("eval-select");
   select.replaceChildren(...data.evaluations.map((evaluation) => {
@@ -184,8 +185,8 @@ async function loadEvaluations(version) {
   select.disabled = !data.evaluations.length;
   if (!data.evaluations.length) {
     select.append(element("option", "", "No evaluations yet"));
-    byId("eval-empty").hidden = false;
-    byId("announcement").textContent = "No evaluations yet.";
+    byId("eval-empty").hidden = journeyCount > 0;
+    byId("announcement").textContent = journeyCount ? `${journeyCount} saved benchmark drafts.` : "No evaluations yet.";
     return;
   }
   selectedEvaluation ||= data.evaluations[0].evaluation_id;
@@ -224,4 +225,47 @@ function initWorkflow() {
     window.history.replaceState(null, "", url);
     load();
   });
+}
+
+
+function renderJourneyResults(data) {
+  const patches = view === "fix";
+  const items = (patches ? data.reviewed_patches : data.benchmark_drafts) || [];
+  const section = byId("journey-results"), content = byId("journey-items");
+  section.hidden = !items.length;
+  content.replaceChildren();
+  byId("journey-heading").textContent = patches ? "Reviewed patches" : "Benchmark readiness";
+  const localLink = (label, url) => {
+    const link = element("a", "", label);
+    if (typeof url === "string" && url.startsWith("/api/") && !url.includes("\\")) link.href = url;
+    return link;
+  };
+  for (const item of items) {
+    const details = element("details", "scope-details");
+    details.append(element("summary", "", `${item.goal || (patches ? item.patch_id : item.benchmark_id)} · ${item.validation_label}`));
+    const body = element("div", "details-body");
+    body.append(element("p", "", `State: ${readable(item.state)}`));
+    if (patches) {
+      body.append(element("p", "", item.reason_no_comparison));
+      body.append(element("p", "", item.executable_checks_run ? `${item.check_count} executable checks · ${readable(item.check_state)}` : "No executable checks run"));
+      body.append(element("p", "", `Independent review: ${readable(item.review_verdict || "pending")}`));
+      if (item.branch) body.append(element("p", "", `Review branch: ${item.branch}`));
+      for (const delivery of item.deliveries || []) {
+        const row = element("p", "", `Delivery: ${readable(delivery.state)} · `);
+        for (const [name, url] of Object.entries(delivery.artifacts || {})) {
+          row.append(localLink(readable(name), url), document.createTextNode(" "));
+        }
+        body.append(row);
+      }
+      body.append(element("p", "muted small", `Resume ag:fix with patch ${item.patch_id}. Baseline improvement is unverified.`));
+    } else {
+      body.append(element("p", "", `${item.dataset_files} dataset files · ${item.entrypoint_files} entrypoint files`));
+      for (const missing of item.readiness?.missing || []) body.append(element("p", "", `${missing.action}${missing.path ? ` (${missing.path})` : ""}`));
+      body.append(element("p", "muted small", `Resume ag:audit with benchmark ${item.benchmark_id}, or use ag:fix to repair its evals.`));
+    }
+    if (item.report_url) body.append(localLink("Saved record", item.report_url));
+    details.append(body);
+    content.append(details);
+  }
+  return items.length;
 }

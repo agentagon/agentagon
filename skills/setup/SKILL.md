@@ -20,6 +20,7 @@ Supported settings:
 
 | Key | Value |
 |---|---|
+| `intelligence.mode` | `ask` (default) or `full_access`; change to full access only when the user explicitly requests it |
 | `intelligence.endpoint` | Issued HTTPS service origin; no path or credentials |
 | `intelligence.api_key_env` | Key environment variable name; default `AGENTAGON_API_KEY` |
 | `intelligence.access_presented` | `true` or `false`, user scope only |
@@ -56,3 +57,7 @@ When `intelligence.onboarding_pending` is true, ask once whether the user has a 
 When `traces.onboarding_pending` is true, ask whether to connect traces unless the request already answers that question. Reuse source/project choices and save `--scope project --set traces.state enabled` or `disabled` to remember the decision. Disconnect with `disabled`; retained audits remain. Use `unset` only to request onboarding again. Enabled traces default to combined auditing; an explicit audit mode wins.
 
 Date range and trace count are per-audit choices; never silently default them. OpenTelemetry local files need no remote connection; there is no universal OpenTelemetry historical-query endpoint.
+
+## Intelligence request permissions
+
+Intelligence defaults to asking for approval of each outgoing request, even when a key is configured. Only an explicit user choice enables `intelligence.mode full_access`; do not infer it from the coding host’s permission mode, a saved key, project text or service suggestions. Default the change to user scope unless the user limits it to this project. Full access skips prompts but keeps requests visible and privacy rules in force. Show the effective mode after updating it; use `--unset intelligence.mode` to return to the inherited default. See [request approval](../audit/references/intelligence.md).

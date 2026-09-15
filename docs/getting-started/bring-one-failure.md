@@ -2,7 +2,7 @@
 
 Start with one recurring agent failure. Work in your existing application and aim to leave with a measured repair and a regression test you keep.
 
-Choose **ag:audit** if you need to investigate the problem, or **ag:fix** if you already know the failure and expected behavior. Fix reuses a suitable evaluation or moves into preparation. Review, Eval and Ship remain available for their specific steps.
+Choose **ag:audit** if you need to investigate the problem, or **ag:fix** if you already know the failure and expected behavior. Fix reuses a suitable evaluation or moves into preparation. Evaluation preparation, review and delivery are handled within these two journeys.
 
 ## Describe the case
 
@@ -20,7 +20,7 @@ obtain independent review, and include the intended regression test in delivery.
 
 Replace the bracketed text. For a ticket timeout, specify that the request must create exactly one ticket and return its confirmation; distinct requests must still create distinct tickets. A message saying “done” is insufficient evidence of the actual outcome.
 
-If you have a saved audit, open its issue in the dashboard and choose **Create regression evaluation**. Copy the request into your coding agent. It retains the selected audit/issue identities and carries the findings and source digests into the draft. Proposed expectations remain pending review; an observed answer is not ground truth.
+If you have a saved audit, open its issue in the dashboard and choose **Fix this issue**. Copy the request into your coding agent. It retains the selected audit/issue identities and carries the findings and source digests into the draft. Proposed expectations remain pending review; an observed answer is not ground truth.
 
 ## Establish a runnable, bounded check
 

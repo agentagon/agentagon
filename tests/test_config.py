@@ -171,3 +171,29 @@ def test_config_symlink_is_not_followed(tmp_path):
     with pytest.raises(AuditError, match="symlink"):
         config.update("user", values={"intelligence.access_presented": True})
     assert target.read_text() == "private original"
+
+
+def test_intelligence_consent_defaults_and_precedence(workspace, tmp_path):
+    config = Config()
+    assert config.summary(workspace.root)["intelligence"]["mode"] == "ask"
+    # A pre-existing key configuration is not permission to send requests.
+    config.update("user", values={"intelligence.endpoint": "https://guidance.example"})
+    assert config.effective(workspace.root)["intelligence"]["mode"] == "ask"
+    config.update("user", values={"intelligence.mode": "full_access"})
+    config.update("project", workspace.root, {"intelligence.mode": "ask"})
+    assert config.effective(workspace.root)["intelligence"]["mode"] == "ask"
+    assert config.effective(tmp_path / "other")["intelligence"]["mode"] == "full_access"
+    assert (
+        config.effective(workspace.root, {"intelligence.mode": "full_access"})["intelligence"][
+            "mode"
+        ]
+        == "full_access"
+    )
+    config.update("project", workspace.root, unset=("intelligence.mode",))
+    assert config.summary(workspace.root)["intelligence"]["mode"] == "full_access"
+
+
+@pytest.mark.parametrize("mode", [True, "full access", "auto", "", 1])
+def test_intelligence_mode_requires_explicit_supported_value(mode):
+    with pytest.raises(AuditError):
+        Config().update("user", values={"intelligence.mode": mode})

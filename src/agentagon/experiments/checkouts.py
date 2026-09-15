@@ -128,13 +128,18 @@ def checked_file(root: Path, relative: str) -> Path:
 
 def copy_frozen(root: Path, destination: Path, entries: list[dict]) -> None:
     for entry in entries:
+        target = destination / entry["path"]
+        if target.is_symlink() or not target.resolve().is_relative_to(destination.resolve()):
+            raise AuditError("evaluation input destination escapes its checkout")
+        if entry.get("deleted"):
+            if target.exists() and not target.is_file():
+                raise AuditError("frozen evaluation deletion must name a regular file")
+            target.unlink(missing_ok=True)
+            continue
         source = root / entry["artifact"]
         data = source.read_bytes()
         if hashlib.sha256(data).hexdigest() != entry["digest"]:
             raise AuditError("frozen evaluation input changed")
-        target = destination / entry["path"]
-        if target.is_symlink() or not target.resolve().is_relative_to(destination.resolve()):
-            raise AuditError("evaluation input destination escapes its checkout")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         target.chmod(entry["mode"])

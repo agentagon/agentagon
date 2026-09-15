@@ -69,13 +69,13 @@ function changeLocation(change) {
 
 function evaluationHandoff(auditId, issue) {
   const panel = element("details", "evaluation-handoff");
-  panel.append(element("summary", "", "Create regression evaluation"));
+  panel.append(element("summary", "", "Fix this issue"));
   panel.append(element("p", "muted small", "Continue in your coding agent. Review the expected behavior above, then include ordinary successes and boundary cases before freezing a test."));
   const prompt = element("textarea", "handoff-prompt");
   prompt.readOnly = true;
   prompt.rows = 6;
-  prompt.setAttribute("aria-label", `Evaluation request for ${issue.title}`);
-  prompt.value = `Use ag:eval to prepare a regression evaluation for saved issue ${issue.issue_id} from audit ${auditId}.\nCarry this selection with eval start --audit ${auditId} --issue ${issue.issue_id}. Inspect its captured evidence and review the proposed expected behavior; do not treat observed outputs as ground truth. Include ordinary successes, relevant boundary cases and resettable tool state where needed. Reuse a suitable evaluation or prepare one with a chosen execution profile and explicit preparation budget. Keep missing expectations and evidence limits visible.`;
+  prompt.setAttribute("aria-label", `Fix request for ${issue.title}`);
+  prompt.value = `Use ag:fix to fix saved issue ${issue.issue_id} from audit ${auditId}.\nCarry this selection with eval start --audit ${auditId} --issue ${issue.issue_id}. Inspect its captured evidence and review the proposed expected behavior; do not treat observed outputs as ground truth. Include ordinary successes, relevant boundary cases and resettable tool state where needed. Reuse a suitable evaluation or prepare one with a chosen execution profile and explicit preparation budget. Keep missing expectations and evidence limits visible. Compare the repair against the same frozen benchmark when available, obtain independent review, and prepare local delivery with clear validation limits.`;
   const copy = element("button", "button", "Copy request");
   copy.type = "button";
   const feedback = element("p", "muted small");
@@ -162,7 +162,7 @@ function renderAudit(audit) {
     return metric;
   }));
   byId("pending").textContent = audit.pending_action
-    ? `Next: ${stageLabels[audit.pending_action].toLowerCase()}. Invoke ${isReview ? "ag:review" : "ag:audit"} in your coding agent to continue, then refresh this page.`
+    ? `Next: ${stageLabels[audit.pending_action].toLowerCase()}. Invoke ag:audit in your coding agent to continue, then refresh this page.`
     : audit.state === "complete_with_limits" ? "Review finished with coverage limits. See scope and limits below."
     : isReview ? "All selected changes have been reviewed and findings grouped."
     : "All selected evidence has been reviewed and findings grouped.";
@@ -486,7 +486,7 @@ function updateView() {
   byId("audit-history").hidden = view !== "audit";
   byId("eval-history").hidden = view !== "eval";
   byId("fix-history").hidden = !isFix;
-  for (const id of ["audit", "empty", "fix-run", "fix-empty", "evaluation", "eval-empty"]) byId(id).hidden = true;
+  for (const id of ["audit", "empty", "fix-run", "fix-empty", "evaluation", "eval-empty", "journey-results"]) byId(id).hidden = true;
 }
 
 async function load() {
@@ -507,6 +507,7 @@ async function load() {
     byId("workspace-name").textContent = data.workspace.split("/").filter(Boolean).pop();
     byId("workspace-path").textContent = data.workspace;
     const isFix = view === "fix";
+    const journeyCount = renderJourneyResults(data);
     const items = isFix ? data.runs : data.audits;
     const idKey = isFix ? "run_id" : "audit_id";
     byId(isFix ? "run-count" : "audit-count").textContent = `${items.length} ${isFix ? items.length === 1 ? "fix run" : "fix runs" : items.length === 1 ? "audit or review" : "audits and reviews"} in this workspace`;
@@ -520,8 +521,8 @@ async function load() {
     const requested = isFix ? selectedRun || data.selected_run_id : selected || data.selected_audit_id;
     if (!requested && !items.length) {
       select.append(element("option", "", isFix ? "No fix runs yet" : "No audits yet"));
-      byId(isFix ? "fix-empty" : "empty").hidden = false;
-      byId("announcement").textContent = isFix ? "No fix runs yet." : "No audits yet.";
+      byId(isFix ? "fix-empty" : "empty").hidden = journeyCount > 0;
+      byId("announcement").textContent = journeyCount ? `${journeyCount} saved ${isFix ? "patches" : "benchmark drafts"}.` : isFix ? "No fix runs yet." : "No audits yet.";
       return;
     }
     select.value = requested;
@@ -536,7 +537,7 @@ async function load() {
     else renderAudit(detail);
   } catch (error) {
     if (version !== requestVersion) return;
-    for (const id of ["audit", "empty", "fix-run", "fix-empty", "evaluation", "eval-empty"]) byId(id).hidden = true;
+    for (const id of ["audit", "empty", "fix-run", "fix-empty", "evaluation", "eval-empty", "journey-results"]) byId(id).hidden = true;
     byId("error").textContent = error.message || "Unable to reach the dashboard. Check that agentagon dashboard is still running.";
     byId("error").hidden = false;
   } finally {

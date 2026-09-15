@@ -8,6 +8,8 @@ from pathlib import Path
 import click
 
 from agentagon import __version__
+from agentagon.cli.benchmarks import register as register_benchmarks
+from agentagon.cli.patches import register as register_patches
 from agentagon.core.records import AuditError, encoded, load_json, resource_path
 from agentagon.dashboard import serve
 from agentagon.installation import SKILLS, install_plugins
@@ -348,6 +350,12 @@ def audit_report(path: Path, audit_id: str) -> dict:
 @click.option("--limit", default=5, type=click.IntRange(min=1))
 @click.option("--phase", type=click.Choice(["initial", "follow_up"]), default="initial")
 @click.option("--refresh", is_flag=True, help="Explicitly repeat a previously completed lookup.")
+@click.option(
+    "--approve", "approval_id", help="Approve this exact prepared Intelligence request ID."
+)
+@click.option(
+    "--decline", "decline_id", help="Decline a prepared Intelligence request and continue locally."
+)
 @click.pass_obj
 @output
 def audit_lookup(
@@ -358,9 +366,22 @@ def audit_lookup(
     limit: int,
     phase: str,
     refresh: bool,
+    approval_id: str | None,
+    decline_id: str | None,
 ) -> dict:
     """Retrieve guidance using abstract project context, specific asks, or both."""
-    return _lookup_files(path, audit_id, "audit", context_file, focus_file, limit, phase, refresh)
+    return _lookup_files(
+        path,
+        audit_id,
+        "audit",
+        context_file,
+        focus_file,
+        limit,
+        phase,
+        refresh,
+        approval_id,
+        decline_id,
+    )
 
 
 def _lookup_files(
@@ -372,7 +393,11 @@ def _lookup_files(
     limit: int,
     phase: str,
     refresh: bool,
+    approval_id: str | None,
+    decline_id: str | None,
 ) -> dict:
+    if approval_id is not None and decline_id is not None:
+        raise AuditError("choose either --approve or --decline")
     if context_file is None and focus_file is None:
         option = "--goal-file" if workflow == "eval" else "--focus-file"
         raise AuditError(f"supply --context-file, {option}, or both")
@@ -395,6 +420,8 @@ def _lookup_files(
         limit=limit,
         phase=phase,
         refresh=refresh,
+        approval_id=approval_id or decline_id,
+        decline=decline_id is not None,
     )
 
 
@@ -464,6 +491,12 @@ def eval_group() -> None:
 @click.option("--limit", default=5, type=click.IntRange(min=1))
 @click.option("--phase", type=click.Choice(["initial", "follow_up"]), default="initial")
 @click.option("--refresh", is_flag=True, help="Explicitly repeat a previously completed lookup.")
+@click.option(
+    "--approve", "approval_id", help="Approve this exact prepared Intelligence request ID."
+)
+@click.option(
+    "--decline", "decline_id", help="Decline a prepared Intelligence request and continue locally."
+)
 @click.pass_obj
 @output
 def eval_lookup(
@@ -474,10 +507,21 @@ def eval_lookup(
     limit: int,
     phase: str,
     refresh: bool,
+    approval_id: str | None,
+    decline_id: str | None,
 ) -> dict:
     """Retrieve optional guidance for preparing an evaluation."""
     return _lookup_files(
-        path, evaluation_id, "eval", context_file, goal_file, limit, phase, refresh
+        path,
+        evaluation_id,
+        "eval",
+        context_file,
+        goal_file,
+        limit,
+        phase,
+        refresh,
+        approval_id,
+        decline_id,
     )
 
 
@@ -567,6 +611,12 @@ def fix_group() -> None:
 @click.option("--limit", default=5, type=click.IntRange(min=1))
 @click.option("--phase", type=click.Choice(["initial", "follow_up"]), default="initial")
 @click.option("--refresh", is_flag=True, help="Explicitly repeat a previously completed lookup.")
+@click.option(
+    "--approve", "approval_id", help="Approve this exact prepared Intelligence request ID."
+)
+@click.option(
+    "--decline", "decline_id", help="Decline a prepared Intelligence request and continue locally."
+)
 @click.pass_obj
 @output
 def fix_lookup(
@@ -577,9 +627,22 @@ def fix_lookup(
     limit: int,
     phase: str,
     refresh: bool,
+    approval_id: str | None,
+    decline_id: str | None,
 ) -> dict:
     """Retrieve optional guidance for a measured fix run."""
-    return _lookup_files(path, run_id, "fix", context_file, focus_file, limit, phase, refresh)
+    return _lookup_files(
+        path,
+        run_id,
+        "fix",
+        context_file,
+        focus_file,
+        limit,
+        phase,
+        refresh,
+        approval_id,
+        decline_id,
+    )
 
 
 @fix_group.command("start")
@@ -612,7 +675,7 @@ def fix_start(
             "state": "needs_evaluation",
             "goal": goal,
             "issue_ids": list(issue_ids),
-            "next_action": "Use ag:eval to inspect existing benchmarks and declare a preparation budget, then eval start/check/freeze.",
+            "next_action": "Continue within ag:fix: inspect existing benchmarks and authorized preparation limits, then use eval start/check/freeze; if measurement is unavailable, use fix patch with explicit limitations.",
         }
     specification = (
         preparation.fix_spec(workspace, evaluation_id) if evaluation_id else load_json(spec_path)
@@ -862,3 +925,9 @@ def fix_ship(
     from agentagon.experiments.delivery import ship
 
     return ship(Workspace(path), run_id, candidate_id, remote=remote, base=base, publish=publish)
+
+
+# Internal stages stay available to the two host-led journeys.
+
+register_benchmarks(main, output)
+register_patches(fix_group, output)

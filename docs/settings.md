@@ -53,6 +53,7 @@ Removing an override exposes the next applicable value. Re-read `agentagon setup
 | `traces.public_key_env` | Environment-variable name for a Langfuse public key. |
 | `intelligence.endpoint` | Issued Intelligence service origin, such as `https://brain.agentagon.ai`; see [Intelligence](intelligence.md). |
 | `intelligence.api_key_env` | Environment-variable name; defaults to `AGENTAGON_API_KEY`. |
+| `intelligence.mode` | `ask` by default, or explicit `full_access`; user defaults and project overrides. |
 | `intelligence.access_presented` | `true` or `false`; user scope. Remembers whether optional access was discussed. |
 | `telemetry.enabled` | `true` or `false`; user scope. Projects cannot override it. |
 
@@ -60,7 +61,7 @@ Secrets belong in environment variables or a credential store, not configuration
 
 ## Configure execution before evaluations or fixes
 
-An **execution profile** is a named configuration for the runner, environment references, setup commands, and limits. Choose one through `ag:setup` before starting your first evaluation or fix.
+An **execution profile** is a named configuration for the runner, environment references, setup commands, and limits. Measured evaluations and fixes use a saved profile. A [reviewed unmeasured patch](reference/patches.md) instead uses its explicit local check plan and limits.
 
 For a small local experiment, you could request:
 
@@ -91,3 +92,13 @@ Replace `PROFILE_JSON` with the file path. Profile input cannot be combined with
 An active run retains its frozen execution profile. Editing the saved profile changes future runs. Use [run controls](reference/fix.md#steer-a-run-without-losing-queued-work) to change supported active-run behavior, such as future search policy or explicit continuation limits.
 
 Trace dates and counts are per-audit choices; settings never silently supply a new time window. Saving provider settings does not authorize data retrieval or instrumentation.
+
+## Intelligence permissions
+
+Intelligence defaults to `ask`: each outgoing request shows its exact redacted payload and destination, then waits for approval. To explicitly allow calls without individual prompts for this project:
+
+```sh
+agentagon setup --scope project --set intelligence.mode full_access
+```
+
+Use `ask` to require prompts again. User-scoped values are personal defaults; project overrides take precedence. Full access belongs to Agentagon and does not inherit the coding host’s permissions. Calls stay visible and retain existing privacy restrictions. See [Intelligence](intelligence.md) for consent, cached results and retries.

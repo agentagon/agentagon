@@ -1,6 +1,7 @@
 """Checkout-local viewer with explicitly enabled, same-origin fix controls."""
 
 import json
+import re
 import secrets
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -181,6 +182,152 @@ def _run_detail(workspace: Workspace, run_id: str) -> dict:
     return result
 
 
+def _benchmark_drafts(workspace: Workspace) -> list[dict]:
+    if not (workspace.state / "benchmarks").exists():
+        return []
+    from agentagon.experiments import benchmarks
+
+    result = []
+    for draft in sorted(
+        benchmarks.list_drafts(workspace),
+        key=lambda item: (item["created_at"], item["benchmark_id"]),
+        reverse=True,
+    ):
+        snapshot = draft["snapshot"]
+        assessment = snapshot["assessment"]
+        result.append(
+            {
+                **{
+                    key: draft[key]
+                    for key in ("benchmark_id", "created_at", "state", "measurement_status")
+                },
+                "audit_id": snapshot.get("audit_id"),
+                "goal": assessment["goal"],
+                "readiness": {
+                    "state": draft["readiness"]["state"],
+                    "missing": [
+                        {key: item[key] for key in ("code", "action", "path") if key in item}
+                        for item in draft["readiness"]["missing"]
+                    ],
+                },
+                "validation_label": {
+                    "baseline_recorded": "Frozen benchmark; baseline recorded",
+                    "historical_baseline": "Historical baseline; current inputs need preparation",
+                }.get(draft["measurement_status"], "Draft; not measured"),
+                "assessment_counts": {
+                    status: sum(
+                        item["status"] == status for item in assessment["assessments"].values()
+                    )
+                    for status in ("supported", "concern", "unknown")
+                },
+                "dataset_files": len(assessment["dataset_paths"]),
+                "entrypoint_files": len(assessment["entrypoint_paths"]),
+                "evaluation_ids": [item["evaluation_id"] for item in draft.get("evaluations", [])],
+                "report_url": f"/api/benchmarks/{draft['benchmark_id']}",
+            }
+        )
+    return result
+
+
+DELIVERY_FILES = {
+    "summary": "summary.json",
+    "pr_body": "pull-request.md",
+    "diff": "diff.patch",
+    "diffstat": "diffstat.txt",
+}
+
+
+def _patch_artifact_path(workspace: Workspace, patch: dict, delivery_id: str, name: str):
+    from agentagon.experiments import patches
+
+    if not re.fullmatch(r"delivery_[0-9a-f]{24}", delivery_id) or name not in DELIVERY_FILES:
+        return None
+    record = patch.get("deliveries", {}).get(delivery_id, {})
+    expected = (
+        patches.directory(workspace, patch["patch_id"])
+        / "deliveries"
+        / delivery_id
+        / DELIVERY_FILES[name]
+    )
+    if record.get("artifacts", {}).get(name) != str(expected.relative_to(workspace.root)):
+        return None
+    # Links may name only generated files in this owner's delivery directory.
+    # A modified receipt cannot turn the endpoint into a private-state file server.
+    if any(
+        part.is_symlink()
+        for part in (expected, *expected.parents)
+        if part.is_relative_to(workspace.state)
+    ):
+        return None
+    return expected if workspace.checked(expected).is_file() else None
+
+
+def _patch_deliveries(workspace: Workspace, patch: dict) -> list[dict]:
+    result = []
+    for delivery_id, record in patch.get("deliveries", {}).items():
+        url = record.get("pr", {}).get("url")
+        parsed = urlsplit(url) if isinstance(url, str) else None
+        result.append(
+            {
+                "delivery_id": delivery_id,
+                "state": record.get("state"),
+                "pr_url": url
+                if parsed
+                and parsed.scheme == "https"
+                and parsed.netloc
+                and not parsed.username
+                and not parsed.password
+                else None,
+                "artifacts": {
+                    name: f"/api/patches/{patch['patch_id']}/deliveries/{delivery_id}/artifacts/{name}"
+                    for name in DELIVERY_FILES
+                    if _patch_artifact_path(workspace, patch, delivery_id, name) is not None
+                },
+            }
+        )
+    return result
+
+
+def _reviewed_patches(workspace: Workspace) -> list[dict]:
+    from agentagon.experiments import patches
+
+    result = []
+    for patch in patches.list_patches(workspace):
+        current = patch["checks"][-1] if patch["checks"] else {}
+        check_count = len(patch["plan"]["checks"])
+        result.append(
+            {
+                **{
+                    key: patch.get(key)
+                    for key in (
+                        "patch_id",
+                        "goal",
+                        "state",
+                        "created_at",
+                        "updated_at",
+                        "next_action",
+                        "reason_no_comparison",
+                        "branch",
+                    )
+                },
+                "check_state": current.get("state") if check_count else "not_run",
+                "check_count": check_count,
+                "executable_checks_run": bool(
+                    check_count and current.get("state") in {"passed", "failed"}
+                ),
+                "review_verdict": patch.get("review", {}).get("verdict")
+                or (patch["reviews"][-1].get("verdict") if patch["reviews"] else None),
+                "measurement_status": "not_measured",
+                "validation_label": "Reviewed; unmeasured"
+                if patch["state"] == "reviewed_unmeasured"
+                else "Unmeasured patch",
+                "deliveries": _patch_deliveries(workspace, patch),
+                "report_url": f"/api/patches/{patch['patch_id']}",
+            }
+        )
+    return result
+
+
 def create_server(
     workspace: Workspace,
     audit_id: str | None = None,
@@ -269,6 +416,10 @@ def create_server(
                     )
                 elif path == "/api/session":
                     self._bootstrap()
+                elif path == "/api/benchmarks" or path.startswith("/api/benchmarks/"):
+                    self._serve_benchmarks(path)
+                elif path == "/api/patches" or path.startswith("/api/patches/"):
+                    self._serve_patches(path)
                 elif path == "/api/evaluations" or path.startswith("/api/evaluations/"):
                     self._serve_evaluations(path)
                 elif path == "/api/audits" or path.startswith("/api/audits/"):
@@ -282,13 +433,58 @@ def create_server(
 
         do_HEAD = do_GET
 
+        def _serve_benchmarks(self, path: str) -> None:
+            drafts = _benchmark_drafts(workspace)
+            if path == "/api/benchmarks":
+                self._json(200, {"workspace": str(workspace.root), "benchmark_drafts": drafts})
+                return
+            requested_id = path.removeprefix("/api/benchmarks/")
+            selected = next(
+                (draft for draft in drafts if draft["benchmark_id"] == requested_id), None
+            )
+            self._json(
+                200 if selected else 404,
+                selected or {"error": "Benchmark not found in this checkout."},
+            )
+
+        def _serve_patches(self, path: str) -> None:
+            patches = _reviewed_patches(workspace)
+            if path == "/api/patches":
+                self._json(200, {"workspace": str(workspace.root), "reviewed_patches": patches})
+                return
+            parts = path.split("/")
+            selected = next((patch for patch in patches if patch["patch_id"] == parts[3]), None)
+            if selected and len(parts) == 4:
+                self._json(200, selected)
+                return
+            if (
+                selected
+                and len(parts) == 8
+                and parts[4] == "deliveries"
+                and parts[6] == "artifacts"
+            ):
+                from agentagon.experiments import patches as patch_store
+
+                stored = patch_store.load(workspace, selected["patch_id"])
+                artifact = _patch_artifact_path(workspace, stored, parts[5], parts[7])
+                if artifact is not None:
+                    self._respond(
+                        200, artifact.read_bytes(), "application/octet-stream", attachment=True
+                    )
+                    return
+            self._json(404, {"error": "Patch or delivery artifact not found in this checkout."})
+
         def _serve_evaluations(self, path: str) -> None:
             from agentagon.experiments.inspection import evaluations
 
             if path == "/api/evaluations":
                 self._json(
                     200,
-                    {"workspace": str(workspace.root), "evaluations": evaluations(workspace)},
+                    {
+                        "workspace": str(workspace.root),
+                        "evaluations": evaluations(workspace),
+                        "benchmark_drafts": _benchmark_drafts(workspace),
+                    },
                 )
                 return
             requested_id = path.removeprefix("/api/evaluations/")
@@ -313,6 +509,7 @@ def create_server(
                     {
                         "workspace": str(workspace.root),
                         "audits": [_summary(audit) for audit in audits],
+                        "benchmark_drafts": _benchmark_drafts(workspace),
                         "selected_audit_id": audit_id
                         or (audits[0]["audit_id"] if audits else None),
                         "selected_view": "fix" if run_id is not None else "audit",
@@ -333,6 +530,7 @@ def create_server(
                     {
                         "workspace": str(workspace.root),
                         "runs": [_run_summary(run) for run in runs],
+                        "reviewed_patches": _reviewed_patches(workspace),
                         "selected_run_id": run_id or (runs[0]["run_id"] if runs else None),
                         "selected_view": "fix" if run_id is not None else "audit",
                     },

@@ -30,7 +30,7 @@
       <h1 id="workspace-name">Audit dashboard</h1>
       <p id="workspace-path" class="workspace-path"></p>
       <div class="view-switcher" role="group" aria-label="Dashboard view">
-        <button id="view-audit" class="button" type="button" aria-pressed="true">Audits &amp; reviews</button>
+        <button id="view-audit" class="button" type="button" aria-pressed="true">Audits</button>
         <button id="view-fix" class="button" type="button" aria-pressed="false">Fix runs</button>
         <button id="view-eval" class="button" type="button" aria-pressed="false">Evaluations</button>
       </div>
@@ -45,16 +45,17 @@
         <p id="run-count" class="muted small"></p>
       </div>
       <div id="eval-history" hidden><label for="eval-select">Evaluation history</label><select id="eval-select" disabled><option>Loading evaluations…</option></select><p id="eval-count" class="muted small"></p></div>
-      <details class="sidebar-note"><summary>Commands for your coding agent</summary><p><code>ag:review</code> Inspect changes<br><code>ag:eval</code> Prepare a benchmark<br><code>ag:fix</code> Improve your agents</p></details>
+      <details class="sidebar-note"><summary>Commands for your coding agent</summary><p><code>ag:audit</code> Inspect agents, changes and evals<br><code>ag:fix</code> Improve and prepare delivery</p></details>
       <div class="workspace-landscape" aria-hidden="true"></div>
     </aside>
     <main id="main" tabindex="-1">
       <p id="announcement" class="sr-only" aria-live="polite"></p>
       <div id="error" class="error" role="alert" hidden></div>
+      <section id="journey-results" class="workflow-section" aria-labelledby="journey-heading" hidden><h2 id="journey-heading"></h2><div id="journey-items"></div></section>
       <div id="loading" class="empty"><p class="eyebrow">Audit workspace</p><h2>Loading local audits…</h2></div>
-      <div id="empty" class="empty" hidden><p class="eyebrow">Your first audit</p><h2>Find failures.<br><em>Test improvements.</em></h2><p>Start with your existing agent and one concern. Audit its code and available traces, or bring a known failure straight into a measured fix.</p><div class="start-commands"><div><code>ag:audit</code><span>Audit your agent</span></div><div><code>ag:fix</code><span>Improve your agent</span></div></div><p class="muted small">Use ag:review for local changes or ag:eval for benchmark-only work. Run the workflow in your coding agent, then select Refresh.</p></div>
-      <div id="fix-empty" class="empty" hidden><p class="eyebrow">Fix runs</p><h2>No fix runs yet.</h2><p>Invoke ag:fix in your coding agent to investigate a measured improvement. Candidate comparisons and reviewable branches will appear here.</p><code class="command">ag:fix</code></div>
-      <div id="eval-empty" class="empty" hidden><p class="eyebrow">Evaluation preparation</p><h2>Start with <em>useful checks.</em></h2><p>Invoke ag:eval with a goal or saved findings. Baseline and deliberately incorrect cases will appear here.</p><code class="command">ag:eval</code></div>
+      <div id="empty" class="empty" hidden><p class="eyebrow">Your first audit</p><h2>Find failures.<br><em>Test improvements.</em></h2><p>Start with your existing agent and one concern. Audit its code and available traces, or bring a known failure straight into a measured fix.</p><div class="start-commands"><div><code>ag:audit</code><span>Audit your agent</span></div><div><code>ag:fix</code><span>Improve your agent</span></div></div><p class="muted small">Audit can inspect local changes or existing evals. Fix creates or repairs evals and prepares delivery. Run the workflow in your coding agent, then select Refresh.</p></div>
+      <div id="fix-empty" class="empty" hidden><p class="eyebrow">Fix runs</p><h2>No fix runs yet.</h2><p>Invoke ag:fix with a problem, trace or eval request. Measured comparisons and reviewed patches will appear here.</p><code class="command">ag:fix</code></div>
+      <div id="eval-empty" class="empty" hidden><p class="eyebrow">Evaluation preparation</p><h2>Start with <em>useful checks.</em></h2><p>Use ag:audit to assess existing evals, or ag:fix to create or improve them. Baseline and deliberately incorrect cases will appear here.</p><code class="command">ag:audit · ag:fix</code></div>
       <article id="evaluation" hidden><div class="audit-top"><p id="eval-date" class="eyebrow"></p><span id="eval-state" class="status"></span></div><h2>Evaluation preparation</h2><p id="eval-goal" class="goal"></p><div id="eval-content"></div></article>
       <article id="audit" hidden>
         <div class="audit-top"><p id="audit-date" class="eyebrow"></p><span id="audit-state" class="status"></span></div>

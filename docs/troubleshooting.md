@@ -45,7 +45,7 @@ Ask the coding agent to resume the audit by its ID with the same goal and captur
 
 ## A review says there are no changes
 
-`ag:review` inspects the net local difference from `HEAD`. If that diff is empty, the workflow stops. Use `ag:audit` to inspect current application code.
+`ag:audit` inspects the net local difference from `HEAD`. If that diff is empty, the workflow stops. Use `ag:audit` to inspect current application code.
 
 For a scoped review, check that your selected paths contain eligible changes. Excluded-only files do not establish a clean review. Resolve merge conflicts before capturing a changes review.
 

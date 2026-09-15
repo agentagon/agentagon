@@ -159,6 +159,15 @@ def _freeze(workspace: Workspace, spec: dict) -> list[dict]:
                     "mode": source.stat().st_mode & 0o777,
                 }
             )
+    entries.extend(
+        {
+            "kind": entry.get("kind", "overlays"),
+            "path": entry["path"],
+            "deleted": True,
+            "deliver": entry.get("deliver", False),
+        }
+        for entry in spec.get("deletions", [])
+    )
     return entries
 
 

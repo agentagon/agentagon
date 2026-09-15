@@ -11,7 +11,7 @@ from pathlib import Path
 from agentagon.core.records import AuditError, resource_path
 
 HOSTS = {"codex": "codex", "claude-code": "claude"}
-SKILLS = ("audit", "review", "setup", "dashboard", "fix", "ship", "eval")
+SKILLS = ("audit", "fix", "setup", "dashboard")
 MARKETPLACE = "agentagon-local"
 PLUGIN_ID = f"ag@{MARKETPLACE}"
 MARKER = ".agentagon-managed.json"
@@ -89,8 +89,8 @@ def install_plugins(hosts: list[str] | None = None, *, home: Path | None = None)
         "hosts": results,
         "skills": [f"ag:{name}" for name in SKILLS],
         "deferred": [],
-        "next": "Start a new coding-agent session. Use ag:review for local changes or "
-        "ag:audit for a full codebase audit, with or without Git or local changes. In Claude Code prefix with /; "
+        "next": "Start a new coding-agent session. Use ag:audit for local changes or "
+        "a full codebase audit, or ag:fix to improve code or evaluations and prepare delivery. In Claude Code prefix with /; "
         "in Codex use the skill picker.",
     }
 
@@ -178,7 +178,8 @@ def _plugin_entry(host: str, listing) -> dict | None:
 def _sync_bundle(root: Path) -> str:
     """Update only files recorded as ours; preserve unrelated host files and source additions."""
     payload = {}
-    for name in SKILLS:
+    # Evaluation helpers and contracts are internal resources, without an exposed skill.
+    for name in (*SKILLS, "eval"):
         source = resource_path(f"skills/{name}")
         for path in sorted(source.rglob("*")):
             relative = path.relative_to(source)

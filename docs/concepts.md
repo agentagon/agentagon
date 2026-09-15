@@ -4,7 +4,7 @@ Agentagon separates a suggestion from the evidence needed to trust it. Your codi
 
 ## The coding host and the CLI
 
-The **coding host** is Codex or Claude Code. Agentagon’s seven skills guide that host through audits, reviews, evaluation preparation, measured fixes, and delivery. See [where work runs](execution.md) for the distinction between model reasoning and benchmark execution.
+The **coding host** is Codex or Claude Code. Agentagon’s Audit and Fix journeys, with Setup and Dashboard utilities, guide that host through audits, reviews, evaluation preparation, measured fixes, and delivery. See [where work runs](execution.md) for the distinction between model reasoning and benchmark execution.
 
 The **CLI** is the `agentagon` command. It stores local evidence, validates submissions, manages isolated candidate checkouts, runs evaluations, and produces reports. Running CLI commands by themselves does not supply an independent reviewer or model judgment.
 
@@ -14,11 +14,10 @@ The **dashboard** is a browser view of one application checkout’s saved work. 
 
 | Your situation | Start with | Result |
 |---|---|---|
-| You want to understand the current application | `ag:audit` | Findings from selected code, traces, or both. |
-| You changed a prompt, tool handler, or application code | `ag:review` | Findings scoped to the captured local changes. |
-| You know the desired behavior but need a benchmark | `ag:eval` | A checked and independently reviewed evaluation package. |
-| You have a benchmark or explicit measurement specification | `ag:fix` | Measured, reviewed candidates and retained alternatives. |
-| You have chosen a verified candidate | `ag:ship` | A delivery package and, when authorized, a draft PR. |
+| Investigate agents, local changes, traces, or existing evals | `ag:audit` | Scoped findings, coverage assessment and benchmark readiness. |
+| Fix a known problem, improve evals, or deliver an improvement | `ag:fix` | Changes, measured evidence when available, independent review and delivery. |
+
+Setup and Dashboard remain utilities. Evaluation, comparison and delivery are stages within these journeys.
 
 ## Evidence, findings, and issues
 
@@ -33,6 +32,8 @@ A **baseline** is a measurement of the starting application. A **candidate** is 
 A **frozen evaluation** fixes the checks, input data, objective definitions, and other comparison inputs before measuring fixes. A candidate cannot improve its score by editing the protected benchmark. Changing the evaluator requires a new comparison.
 
 The fix workflow measures a fresh baseline even when you prepared the benchmark earlier. Preparation results are not reused as fix-run measurements.
+
+A **benchmark draft** pins existing eval inputs and records assessment and readiness. It is not a validated frozen evaluation. A **reviewed unmeasured patch** has independent review and any available executable checks, but has no trusted baseline comparison. Neither enters the verified candidate frontier.
 
 ## What “verified” means
 

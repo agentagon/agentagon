@@ -502,6 +502,32 @@
               "maximum": 1024
             }
           }
+        },
+        "deletions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/$defs/executionFile"
+              },
+              "deliver": {
+                "type": "boolean",
+                "default": false
+              },
+              "kind": {
+                "enum": [
+                  "overlays",
+                  "inputs"
+                ],
+                "default": "overlays"
+              }
+            }
+          }
         }
       },
       "anyOf": [

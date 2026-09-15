@@ -1,8 +1,8 @@
-# Prepare an evaluation
+# Create or improve evaluations within Fix
 
-Use **ag:eval** to turn a goal, audit finding, or review recommendation into a reusable benchmark. The coding agent checks existing tests, defines expected behavior, validates that the benchmark catches mistakes, and obtains an independent review before freezing it.
+Use **ag:fix** to create or repair an eval dataset and turn a goal, audit finding, or coverage gap into a reusable benchmark. Use **ag:audit** to assess existing evals and [prepare a benchmark draft](benchmarks.md) without changing their contents. The coding agent checks existing tests, defines expected behavior, validates that the benchmark catches mistakes, and obtains an independent review before freezing it.
 
-You receive a frozen evaluation package, a benchmark-only review branch, and a specification ready for a measured fix.
+When validation succeeds, you receive a frozen evaluation package and benchmark-only review branch, then Fix prepares delivery. If application changes are also requested, it continues against that frozen benchmark.
 
 ## Before you begin
 
@@ -16,7 +16,7 @@ Keep private inputs and workflow files in ignored `.agentagon/` storage. Do not 
 
 ## 1. Describe what should be tested
 
-For a saved issue, open it in the dashboard and choose **Create regression evaluation**. Copy the request into your coding agent. It carries the audit and issue IDs into preparation, which retains the selected findings, observed behavior, proposed expectations and source digests. Opening or copying the request does not start execution.
+For a saved issue, open it in the dashboard and choose **Fix this issue**. Copy the request into your coding agent. It carries the audit and issue IDs into preparation, which retains the selected findings, observed behavior, proposed expectations and source digests. Opening or copying the request does not start execution.
 
 Review the proposed expectations before using them as labels. Include ordinary successful behavior and boundary cases; establish permitted inputs, tool responses and resettable state before treating a trace as replayable. Source alignment and missing evidence remain limits of the case.
 
@@ -24,7 +24,7 @@ Open the application checkout in your coding host. For a tool-routing applicatio
 
 === "Codex"
 
-    Select **ag:eval**, then send:
+    Select **ag:fix**, then send:
 
     ```text
     Prepare an evaluation for the audit's tool-routing finding.
@@ -39,7 +39,7 @@ Open the application checkout in your coding host. For a tool-routing applicatio
 === "Claude Code"
 
     ```text
-    /ag:eval Prepare an evaluation for the audit's tool-routing finding.
+    /ag:fix Prepare an evaluation for the audit's tool-routing finding.
     Expected behavior: known tool names select the matching tool; unknown or
     empty names return an explicit validation error and invoke no tool.
     Use existing tests and synthetic cases. Use the saved local profile.
@@ -52,7 +52,7 @@ Adapt the behavior and limits to your application. A goal such as “improve ans
 
 ## Optional Intelligence guidance
 
-When [Intelligence](intelligence.md) is configured, your coding agent handles the lookup and prepares the privacy-safe context. Its suggestions help identify benchmark risks and coverage gaps. You do not need to run a separate command; evaluation preparation also works without it.
+When [Intelligence](intelligence.md) is configured, your coding agent handles the lookup and prepares the privacy-safe context. Each outgoing request is shown and asks for approval unless Agentagon Intelligence is explicitly in full access mode. Suggestions help identify benchmark risks and coverage gaps. You do not need to run a separate command; evaluation preparation also works without it.
 
 ## 2. Inspect the evaluation plan
 
@@ -88,11 +88,11 @@ The frozen package binds source, benchmark files, input data, seeds, metrics, co
 
 Application source remains unchanged. The benchmark-only branch excludes private inputs. Instrumentation stays out of fix delivery by default; explicitly declared `deliver_paths` include intended regression tests in the fix baseline.
 
-Freezing is local. It does not publish the branch or open a PR.
+Freezing is local. Fix next [prepares delivery](delivery.md) of an eval-only result, or continues to application changes if requested. Publication requires authorization.
 
-## 5. Use it for a measured fix
+## 5. Continue to the requested result
 
-Choose **ag:fix** with:
+If application changes are requested, Fix continues automatically within the authorized scope. To resume explicitly:
 
 ```text
 Use evaluation EVALUATION_ID and profile local to address this finding.

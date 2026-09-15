@@ -1,67 +1,37 @@
-# Select and deliver a fix
+# Prepare delivery within Fix
 
-Once a fix run has verified candidates, inspect the tradeoffs and choose the one you want to deliver. Agentagon prepares that exact candidate as a reviewable branch and delivery package.
+**ag:fix** carries its result through delivery. It prepares a local branch/patch, diffstat, safe evidence summary and PR description. Local preparation requires no Git remote.
 
-**You need:** a completed [measured comparison](fix.md), a selectable verified candidate, and a clear choice.
+## Deliver the reviewed result
 
-## 1. Compare the verified alternatives
+| Result | Required evidence | Direct command |
+|---|---|---|
+| Measured application fix | Selected candidate on the current verified frontier | `agentagon fix deliver --run RUN_ID` |
+| Evaluation change | Exact frozen package and independently reviewed benchmark branch | `agentagon fix deliver --evaluation EVALUATION_ID` |
+| Unmeasured patch | Sealed source, available check evidence and passing independent review | `agentagon fix deliver --patch PATCH_ID` |
 
-The fix and ship skills automatically open the [dashboard](dashboard.md) for your run; use **ag:dashboard** to reopen it. Read the diff, actual measurements, variation, checks, constraints, and independent review. Failed or incomplete candidates are evidence of attempts, not selectable verified results.
+For measured results, inspect baseline comparisons, variation, constraints and review. Choose among meaningful tradeoffs, or let the host follow an existing unambiguous selection instruction. The direct selection command remains `agentagon fix select RUN_ID CANDIDATE_ID`.
 
-If one option is faster and another is more accurate, decide which fits your requirements. Search preference does not make that final decision for you.
+Evaluation evidence describes the benchmark's coverage and sensitivity. An unmeasured patch is labeled **Reviewed patch — baseline comparison unavailable**. Neither is presented as measured application improvement. No-check plans explicitly report that no executable checks ran.
 
-## 2. Select a candidate
+The existing `agentagon fix ship RUN_ID` command remains available for measured results. You do not need a separate Ship skill.
 
-Tell the coding agent which candidate you choose, or run:
+## Inspect cleanup and exported content
 
-```sh
-agentagon fix select RUN_ID CANDIDATE_ID
-```
+Useful cleanup is a new measured candidate under the same frozen benchmark and remaining budget, followed by fresh independent review. Automatic replacement requires no worse results on every frozen objective; a changed tradeoff needs your choice. Failed cleanup preserves the original selected candidate and its evidence.
 
-Selection creates a reviewable branch from the verified source snapshot. It preserves the origin checkout and retained alternatives. It does not apply the change to your current branch, publish, merge, deploy, or resolve an issue.
+Inspect the exact diff and generated PR body. Private inputs, credentials and execution material are excluded from summaries; protected eval artifacts must not be added to delivery just to make it self-contained.
 
-## 3. Prepare delivery
+## Publish when requested
 
-Choose **ag:ship** in Codex, or use `/ag:ship` in Claude Code:
-
-```text
-Prepare local delivery for selected run RUN_ID. Inspect the diff for
-useful cleanup, reverify any cleanup as a separate candidate, and produce
-the patch, measurement summary, and draft PR body. Stop before publication.
-```
-
-The resulting package includes the selected patch, diffstat, measurement summary, and draft PR body. Inspect the files returned by the workflow.
-
-Cleanup is a new candidate under the same frozen evaluation and remaining budget. It needs new execution and independent review. Automatic replacement requires a verified result no worse on every frozen objective. A failed or regressed cleanup preserves the original selection; a changed tradeoff needs your decision.
-
-If there is no useful cleanup, the selected candidate can be delivered as it is.
-
-For direct local preparation:
+For a GitHub draft PR, ask Fix to publish the prepared result. Once the destination is established and publication authorized, use the same command with `--publish`, for example:
 
 ```sh
-agentagon fix ship RUN_ID
+agentagon fix deliver --run RUN_ID --remote origin --base main --publish
 ```
 
-This command does not publish. Repeating it prepares or reconciles local delivery rather than creating a PR.
+Use `--evaluation` or `--patch` for those result types. Publication validates the remote and exact reviewed source before pushing and creating a draft PR. Existing authorization applies; a local package alone does not authorize publication.
 
-## 4. Publish a draft PR, when ready
+Repeat the same command after interruption so saved receipts can reconcile a prior push or PR. Changed source or destination base requires fresh applicable validation and review. Conflicting remote branches are not overwritten.
 
-Ask your coding agent to publish the selected fix when you are ready.
-
-When you authorize publication, the workflow can use:
-
-```sh
-agentagon fix ship RUN_ID --publish
-```
-
-It pushes the selected branch and creates a **draft pull request**. The summary omits private execution material. Review the diff and measurements in the returned PR before requesting review.
-
-If delivery was interrupted, retry the same run so recorded receipts can reconcile prior success. If source or base changed, obtain fresh matching verification instead of bypassing the check. An unrelated existing remote branch is not overwritten to force publication.
-
-## 5. Apply and verify through your normal process
-
-Agentagon does not merge or deploy the PR. Use your team’s review and deployment process.
-
-Selection and publication do not automatically close the original audit issue. After applying a fix, verified resolution also requires matching application source and evidence supporting that specific issue. See [issue states](reports.md#follow-persistent-issues).
-
-**Related:** [Detailed cleanup and delivery behavior](reference/fix.md#dashboard-controls-and-delivery) · [Troubleshooting](troubleshooting.md)
+Merging, deployment and issue resolution follow your normal process and remain separate actions. Verified resolution needs matching applied source and evidence for the specific issue; see [issue states](reports.md#follow-persistent-issues).

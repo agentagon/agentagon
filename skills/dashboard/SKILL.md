@@ -10,7 +10,7 @@ When invoked directly, run `agentagon telemetry skill_invoked --data '{"skill":"
 
 ## Automatic workflow start
 
-Every `ag:audit`, `ag:review`, `ag:eval`, `ag:fix`, `ag:ship` and checkout-scoped `ag:setup` invocation opens the dashboard at start or resume, before substantive work. Do not wait until the report or ask whether to open it. Honor an explicit request to skip, close or stop the dashboard for this session. For user-wide setup without an application directory, continue setup without inventing a checkout. If CLI prerequisites are missing, complete the invoking skill's prerequisite flow and retry opening once the CLI is available.
+Every `ag:audit`, `ag:fix` and checkout-scoped `ag:setup` invocation opens the dashboard at start or resume, before substantive work. Do not wait until the report or ask whether to open it. Honor an explicit request to skip, close or stop the dashboard for this session. For user-wide setup without an application directory, continue setup without inventing a checkout. If CLI prerequisites are missing, complete the invoking skill's prerequisite flow and retry opening once the CLI is available.
 
 Use the application's original source directory or Git checkout, including for eval/fix/ship work performed in candidate worktrees. Reuse a running dashboard and browser tab already owned by this host session for that same resolved checkout and requested controls mode. Retain the process handle, startup URL, checkout and tab handle across nested skills such as audit → setup or fix → eval → fix. Check that the known process still responds before reuse; restart it if it has exited. Do not scan ports or attach to an unrelated session.
 
@@ -35,7 +35,7 @@ Use the run view to inspect experiments, verified tradeoffs, constraints, review
 
 The default session is read-only. When the user requests interactive fix controls, add `--controls` to that command and report that controls are enabled. The page can change search policy, queue a proposal from an eligible parent, send a directive, stop or request continuation, select a verified frontier candidate, invalidate/exhaust candidate branches, and cancel queued work. It uses session-only credentials and rejects stale revisions; reload the run state after a conflict and retain the same operation identity when a request's outcome is uncertain.
 
-Queued `directive`, `expand` and `continue` actions wait for the host workflow in [ag:fix](../fix/SKILL.md). Their `queued`, `acknowledged`, `applied`, `failed` and `cancelled` states describe the control, not candidate verification or deployment. The page never invokes a model service, submits scan judgments or acknowledges host work. Follow `ag:fix` to consume the queue and [ag:ship](../ship/SKILL.md) for separately authorized draft-PR publication.
+Queued `directive`, `expand` and `continue` actions wait for the host workflow in [ag:fix](../fix/SKILL.md). Their `queued`, `acknowledged`, `applied`, `failed` and `cancelled` states describe the control, not candidate verification or deployment. The page never invokes a model service, submits scan judgments or acknowledges host work. Follow `ag:fix` to consume the queue and [delivery within Fix](../fix/references/delivery.md) for separately authorized draft-PR publication.
 
 Changes reviews share audit IDs and history. Preserve the selected workflow and baseline when explaining results, and distinguish defects, improvements and eval recommendations. A completed changes review covers only its captured changes and exclusions, not the whole application's health.
 

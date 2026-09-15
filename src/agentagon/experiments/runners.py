@@ -241,7 +241,7 @@ def _local_status(job, token):
     return worker.status(job, token)
 
 
-def _validate(request):
+def _validate(request, *, checks_only=False):
     if "evidence_limits" in request:
         from agentagon.experiments.evidence import validate_limits
 
@@ -258,7 +258,11 @@ def _validate(request):
     ):
         raise AuditError("runner timeout must be positive")
     commands = request.get("commands", [])
-    if not commands or sum(command.get("role") == "benchmark" for command in commands) != 1:
+    if checks_only and any(command.get("role") != "check" for command in commands):
+        raise AuditError("patch execution accepts only check commands, without a benchmark")
+    if not checks_only and (
+        not commands or sum(command.get("role") == "benchmark" for command in commands) != 1
+    ):
         raise AuditError("runner requires exactly one benchmark command")
     ids = set()
     benchmark_seen = False
@@ -309,9 +313,11 @@ def _cancel_before_dispatch(attempt_dir, request, settings, descriptor=None):
     return result
 
 
-def execute(profile: dict, source: Path, attempt_dir: Path, request: dict) -> dict:
+def execute(
+    profile: dict, source: Path, attempt_dir: Path, request: dict, *, checks_only: bool = False
+) -> dict:
     """Execute once; subsequent calls collect the same durable attempt without relaunching."""
-    _validate(request)
+    _validate(request, checks_only=checks_only)
     source, attempt_dir = Path(source).resolve(), Path(attempt_dir).resolve()
     attempt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     settings = dict(profile.get("runner", {"kind": "local"}))

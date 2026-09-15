@@ -8,7 +8,7 @@ For the public documentation site, see [build, preview and hosting instructions]
 
 ## Packaging checks
 
-The wheel bundles plugin manifests, all seven skills and their references, contracts, the signal catalog, event helpers and dashboard assets. Packaging inputs are declared in [pyproject.toml](../../pyproject.toml) and [MANIFEST.in](../../MANIFEST.in).
+The wheel bundles plugin manifests, the four exposed skills and their references, contracts, the signal catalog, event helpers and dashboard assets. Packaging inputs are declared in [pyproject.toml](../../pyproject.toml) and [MANIFEST.in](../../MANIFEST.in).
 
 After running `python -m build` from the repository root, check the wheel in a fresh environment outside the checkout, as CI does:
 
