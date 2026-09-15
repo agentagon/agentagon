@@ -14,7 +14,7 @@ from pathlib import Path
 
 from agentagon.core.records import AuditError, digest, identifier, load_json, now, validate_record
 from agentagon.experiments import checkouts, evaluation, runners
-from agentagon.experiments.evidence import DEFAULT_LIMITS
+from agentagon.experiments.evidence import DEFAULT_LIMITS, read_result, retain_result
 from agentagon.experiments.spec import NAME, finite, object_keys, path, text, validate_spec
 from agentagon.storage.config import Config
 from agentagon.storage.workspace import Workspace
@@ -644,7 +644,7 @@ def check(workspace: Workspace, evaluation_id: str, plan: dict) -> dict:
                 result = runners.execute(
                     data["profile"], source, root / "attempts" / attempt_id, trial["request"]
                 )
-                trial["artifact"] = workspace.artifact(result)
+                trial["artifact"] = retain_result(workspace, root / "attempts" / attempt_id, result)
                 if not result.get("finalized"):
                     trial["state"] = data["state"] = "interrupted"
                     _save(workspace, data)
@@ -732,7 +732,7 @@ def freeze(workspace: Workspace, evaluation_id: str, review: dict) -> dict:
         observed_trials = []
         cases = [*record["plan"]["negative_cases"], *record["plan"].get("metric_cases", [])]
         for trial in record["trials"]:
-            result = workspace.read_artifact(trial["artifact"])
+            result = read_result(workspace, trial["artifact"])
             case = next((c for c in cases if c["id"] == trial["case_id"]), None)
             observed_trials.append(
                 {**trial, "outcome": _outcome(record["plan"]["spec"], trial, result, case)}

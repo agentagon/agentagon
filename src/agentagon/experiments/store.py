@@ -61,12 +61,25 @@ def locked(workspace: Workspace, run_id: str):
 
 
 def save_run(workspace: Workspace, data: dict) -> None:
-    from agentagon.reporting import build_fix_report, render_fix_markdown
-
     data["revision"] = data.get("revision", 0) + 1
     data["updated_at"] = now()
     directory = run_dir(workspace, data["run_id"])
     workspace.write(directory / "state.json", data)
-    report = build_fix_report(workspace, data)
-    workspace.write(directory / "report.json", report)
-    workspace.write_bytes(directory / "report.md", render_fix_markdown(report).encode())
+
+
+def export_report(workspace: Workspace, run_id: str) -> dict:
+    """Generate replaceable report snapshots only when explicitly requested."""
+    from agentagon.reporting import build_fix_report, render_fix_markdown
+
+    with locked(workspace, run_id):
+        data = load_run(workspace, run_id)
+        report = build_fix_report(workspace, data)
+        directory = run_dir(workspace, run_id)
+        workspace.write(directory / "report.json", report)
+        workspace.write_bytes(directory / "report.md", render_fix_markdown(report).encode())
+    return {
+        "run_id": run_id,
+        "revision": data["revision"],
+        "markdown": str(directory / "report.md"),
+        "json": str(directory / "report.json"),
+    }

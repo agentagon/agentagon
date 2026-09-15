@@ -1,20 +1,21 @@
 """Read-only, bounded projections of candidate and evaluation evidence."""
 
-import base64
 import copy
-import hashlib
 import json
 import subprocess
 
 from agentagon.core.records import AuditError
 from agentagon.experiments import engine, learning, preparation
+from agentagon.experiments import evidence as task_evidence
 from agentagon.experiments.store import load_run, run_dir
 
 DIFF_LIMIT = 262144
 
 
 def _trial(workspace, data: dict, candidate: dict, trial: dict) -> dict:
-    result = workspace.read_artifact(trial["artifact"]) if trial.get("artifact") else {}
+    result = (
+        task_evidence.read_result(workspace, trial["artifact"]) if trial.get("artifact") else {}
+    )
     evidence = result.get("evidence")
     if not evidence:
         progress = (
@@ -39,7 +40,7 @@ def _trial(workspace, data: dict, candidate: dict, trial: dict) -> dict:
         evidence = {
             **evidence,
             "artifacts": [
-                {k: v for k, v in entry.items() if k != "content_base64"}
+                {k: v for k, v in entry.items() if k not in {"content_base64", "content_path"}}
                 for entry in evidence["artifacts"]
             ],
         }
@@ -163,18 +164,11 @@ def artifact(workspace, run_id: str, candidate_id: str, trial_id: str, index: in
     if not trial or not trial.get("artifact") or type(index) is not int or index < 0:
         raise AuditError("artifact is not retained by this candidate trial")
     _trial(workspace, data, value, trial)
-    result = workspace.read_artifact(trial["artifact"])
+    result = task_evidence.read_result(workspace, trial["artifact"])
     entries = (result.get("evidence") or {}).get("artifacts", [])
     if index >= len(entries):
         raise AuditError("artifact is not retained by this candidate trial")
-    entry = entries[index]
-    try:
-        content = base64.b64decode(entry["content_base64"], validate=True)
-    except (ValueError, KeyError) as exc:
-        raise AuditError("artifact content is invalid") from exc
-    if len(content) != entry["bytes"] or hashlib.sha256(content).hexdigest() != entry["sha256"]:
-        raise AuditError("artifact checksum changed")
-    return content
+    return task_evidence.artifact_bytes(workspace, entries[index])
 
 
 def evaluation_summary(data: dict) -> dict:

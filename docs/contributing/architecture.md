@@ -81,12 +81,12 @@ Paths below are relative to the application's `.agentagon/` directory. In a Git 
 | `audits/AUDIT_ID/` | Audit state, prepared packets and response templates |
 | `reports/AUDIT_ID/` | Generated audit Markdown and JSON |
 | `evaluations/EVALUATION_ID/` | Benchmark preparation state and work |
-| `runs/RUN_ID/` | Frozen experiment state, candidate worktrees, attempts and fix reports |
+| `runs/RUN_ID/` | Frozen experiment state, active candidate worktrees, attempts and explicitly exported fix reports |
 | `cases/events/` | Issue status events |
 
 These files are workflow state, not configuration inputs to edit manually. Use CLI operations; only prepared host responses/templates are intended for authoring. Settings live in the separate user-local file described in [configuration](../audit.md#first-audit-and-setup).
 
-[Workspace writes](../../src/agentagon/storage/workspace.py) use atomic replacement and an exclusive audit writer lock. [Experiment storage](../../src/agentagon/experiments/store.py) uses per-run file locks, verifies frozen specification/profile digests and generates reports when state is saved. See [issue history](../../skills/audit/references/history.md) before changing status semantics.
+[Workspace writes](../../src/agentagon/storage/workspace.py) use atomic replacement and an exclusive audit writer lock. [Experiment storage](../../src/agentagon/experiments/store.py) uses per-run file locks, verifies frozen specification/profile digests and exports reports on request. [Task evidence](../task-evidence.md) explains shared result storage; the [fix reference](../reference/fix.md) describes finished worktree cleanup. See [issue history](../../skills/audit/references/history.md) before changing status semantics.
 
 ## Decisions to preserve
 

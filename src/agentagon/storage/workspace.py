@@ -1,5 +1,6 @@
 """Immutable evidence and atomic audit records in a local source directory."""
 
+import errno
 import hashlib
 import json
 import os
@@ -150,11 +151,39 @@ class Workspace:
         return str(path.relative_to(self.root))
 
     def read_artifact(self, relative: str) -> Any:
+        return json.loads(self.read_blob(relative))
+
+    def read_blob(self, relative: str) -> bytes:
         path = self.checked(self.root / relative)
         data = path.read_bytes()
         if hashlib.sha256(data).hexdigest() != path.stem:
             raise AuditError("evidence checksum changed")
-        return json.loads(data)
+        return data
+
+    def link_artifact(self, relative: str, destination: Path) -> None:
+        """Atomically share retained bytes with a replace-only execution cache."""
+        source = self.checked(self.root / relative)
+        content = self.read_blob(relative)
+        self.checked(destination)
+        if destination.exists() and source.samefile(destination):
+            return
+        fd, name = tempfile.mkstemp(prefix=".pending-", dir=destination.parent)
+        os.close(fd)
+        temporary = Path(name)
+        temporary.unlink()
+        try:
+            try:
+                os.link(source, temporary)
+            except OSError as exc:
+                if exc.errno not in {errno.EXDEV, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EPERM}:
+                    raise
+                # Some mounted filesystems cannot share inodes. Preserve durable
+                # recovery there; binary artifacts are still stored separately.
+                self.write_bytes(destination, content)
+                return
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def audit_path(self, audit_id: str) -> Path:
         if not SAFE_ID.fullmatch(audit_id) or not audit_id.startswith("audit_"):
