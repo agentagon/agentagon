@@ -1,12 +1,12 @@
 # Agentagon
 
-**Find failures. Test fixes. Ship with evidence.**
+**Improve your AI agents.**
 
-Agentagon helps you audit, evaluate, and improve any AI agent using its code and execution traces. Find failures, test candidate fixes, and compare results against a recorded baseline.
+Inspect and improve AI agents with measured fixes and custom scores. Agree on behaviors and scoring, prepare reusable evals to establish a baseline, and compare verified improvements before preparing a draft PR.
 
 The Python CLI captures evidence, runs checks and saves reports. The `ag` plugin guides your coding assistant through the reasoning, reviews and candidate edits. Supported coding hosts and setup commands are listed below.
 
-Start with **[Audit your agent](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/first-audit.md)** to investigate a concern, or **[Improve your agent](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/bring-one-failure.md)** to bring one known failure through evaluation and repair. Evaluation preparation, review and delivery happen within these journeys. [Install the plugin](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/install.md) if needed.
+[Inspect agent behavior](https://github.com/agentagon/agentagon/blob/main/docs/audit.md), [define scores and evals](https://github.com/agentagon/agentagon/blob/main/docs/init.md), or [compare measured fixes](https://github.com/agentagon/agentagon/blob/main/docs/fix.md). [Install the plugin](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/install.md) if needed.
 
 ## Prerequisites
 
@@ -53,34 +53,29 @@ Optional Agentagon Intelligence is available through live `/v1/audit`, `/v1/eval
 
 After installation, open **your AI agent’s code directory** in a new Codex or Claude Code session.
 
-In **Codex**, select **ag:audit** from the skill picker, then paste:
+In **Codex**, select **ag:init** from the skill picker, then paste:
 
 ```text
-Complete a code-only audit of this AI agent.
-Show the top findings and next steps.
-Skip traces and optional Intelligence.
+Inspect this agent and its existing evals. Propose behaviors, scoring and
+an execution budget, then establish a baseline using the settings I approve.
 ```
 
-In **Claude Code**, paste:
+In **Claude Code**, prefix the same request with `/ag:init`.
 
-```text
-/ag:audit Complete a code-only audit of this AI agent.
-Show the top findings and next steps.
-Skip traces and optional Intelligence.
-```
-
-Agentagon audits your code and saves a report with findings and recommended next steps. The [dashboard](https://github.com/agentagon/agentagon/blob/main/docs/dashboard.md) opens automatically; use **ag:dashboard** to reopen it. See the [quickstart guide](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/first-audit.md) for details.
+Agentagon reuses suitable evals and confirms missing eval creation before proceeding. It saves the agreed definitions and evidence, prepares reviewed eval source, and measures a baseline when execution is ready. Then use [Fix](https://github.com/agentagon/agentagon/blob/main/docs/fix.md) to compare improvements against that baseline. See the [quickstart guide](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/first-audit.md).
 
 Optional examples: [check your installation offline](https://github.com/agentagon/agentagon/blob/main/examples/local-audit/README.md), or [compare fixes in the ticket-retry demonstration](https://github.com/agentagon/agentagon/blob/main/examples/ticket-retry/README.md).
 
 ## Workflows
 
-| Goal | Journey and result |
+| Goal | Skill and result |
 |---|---|
-| Understand all agents, one agent, local changes, or existing evals | [ag:audit](https://github.com/agentagon/agentagon/blob/main/docs/audit.md): findings, coverage gaps and benchmark readiness; optionally include traces. |
-| Fix a problem, trace failure, finding, or eval dataset | [ag:fix](https://github.com/agentagon/agentagon/blob/main/docs/fix.md): changes, baseline comparison when available, independent review and local or PR delivery. |
+| Inspect agent behavior and find failures | [ag:audit](https://github.com/agentagon/agentagon/blob/main/docs/audit.md): evidence-backed findings from code and execution traces. |
+| Improve a saved goal or named issue | [ag:fix](https://github.com/agentagon/agentagon/blob/main/docs/fix.md): bounded Omni optimization, verified comparisons and draft PR or local delivery. |
+| Define behaviors, custom scores and evals | [ag:init](https://github.com/agentagon/agentagon/blob/main/docs/init.md): agreed behaviors, scoring and limits, reusable evals and a scored baseline. |
+| Inspect history, rerun a baseline or manage settings | [ag:dashboard](https://github.com/agentagon/agentagon/blob/main/docs/dashboard.md): checkout-scoped baselines, results and opt-in controls. |
 
-`ag:setup` manages preferences; `ag:dashboard` reopens saved work. Audit can finish on dirty or non-Git directories. Isolated fixes and executable evaluation preparation require clean committed inputs and authorized execution limits. A reviewed patch without a runnable baseline is clearly labeled unmeasured.
+[ag:eval](https://github.com/agentagon/agentagon/blob/main/docs/eval.md) is independently available for focused evaluation work. Setup, review and delivery support these workflows. Discovery accepts dirty or non-Git directories; measurement requires clean committed inputs and authorized limits. Without a runnable baseline, Fix reports the blocker; an unmeasured application patch requires an explicit request.
 
 Intelligence is optional and asks for approval of each outgoing request by default. Set its explicit **full access** mode through Setup to skip prompts while keeping calls visible. See [Intelligence permissions](https://github.com/agentagon/agentagon/blob/main/docs/intelligence.md).
 

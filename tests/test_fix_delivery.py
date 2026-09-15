@@ -28,6 +28,70 @@ def evaluation_change(workspace, specification):
     return preparation.freeze(workspace, started["evaluation_id"], review_for(checked))
 
 
+def test_stacked_delivery_requires_exact_measured_eval_parent(selected, specification):
+    work = selected["workspace"]
+    frozen = evaluation_change(work, specification)
+    # A branch label cannot turn a sibling application candidate into an eval child.
+    with pytest.raises(AuditError, match="exact eval parent"):
+        ship(
+            selected,
+            eval_parent_id=frozen["evaluation_id"],
+            base=frozen["package"]["review_branch"],
+        )
+
+
+def test_delivery_preserves_user_choice_of_another_verified_scored_alternative(
+    application, specification
+):
+    from support.experiments import baseline
+
+    specification["scoring"] = {
+        "version": 1,
+        "mode": "primary",
+        "primary": "latency",
+        "metrics": {
+            "latency": {
+                "direction": "min",
+                "unit": "ms",
+                "aggregation": "mean",
+                "missing": "unknown",
+            }
+        },
+        "behaviors": [],
+        "source_paths": ["benchmark.py"],
+    }
+    specification["repetitions"] = 1
+    run = baseline(application, specification)
+    first, _ = propose(application, run["run_id"], latency=80)
+    verify(application, run["run_id"], first["candidate_id"])
+    better, _ = propose(application, run["run_id"], latency=60, quality=0.9)
+    verify(application, run["run_id"], better["candidate_id"])
+    engine.select(application, run["run_id"], first["candidate_id"])
+    result = delivery.ship(application, run["run_id"])
+    assert result["candidate_id"] == first["candidate_id"] and result["state"] == "prepared"
+
+
+def test_stacked_delivery_packages_only_app_child_and_explains_merge_order(
+    application, specification
+):
+    from support.experiments import baseline
+
+    frozen = evaluation_change(application, specification)
+    git(application.root, "checkout", "--detach", frozen["package"]["review_revision"])
+    origin = baseline(application, specification)
+    created, _ = propose(application, origin["run_id"])
+    verify(application, origin["run_id"], created["candidate_id"])
+    engine.select(application, origin["run_id"], created["candidate_id"])
+    result = delivery.ship(application, origin["run_id"], eval_parent_id=frozen["evaluation_id"])
+    assert result["eval_parent"]["source_revision"] == frozen["package"]["review_revision"]
+    assert "Merge the evaluation PR first" in Path(result["artifacts"]["pr_body"]).read_text()
+    assert "checks.py" not in Path(result["artifacts"]["diff"]).read_text()
+    with pytest.raises(AuditError, match="base must be"):
+        delivery.ship(
+            application, origin["run_id"], eval_parent_id=frozen["evaluation_id"], base="main"
+        )
+
+
 def test_frozen_evaluation_delivery_is_local_and_bound_to_reviewed_files(
     application, specification
 ):

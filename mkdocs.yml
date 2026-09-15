@@ -1,6 +1,6 @@
 site_name: Agentagon Docs
 site_url: https://agentagon.ai/docs/
-site_description: Review agent applications, understand the evidence, and measure improvements before shipping.
+site_description: Inspect and improve AI agents with measured fixes and custom scores.
 repo_url: https://github.com/agentagon/agentagon
 repo_name: agentagon/agentagon
 edit_uri: edit/main/docs/
@@ -78,18 +78,21 @@ nav:
       - Install: getting-started/install.md
       - Quick start: getting-started/first-audit.md
       - Bring one failure: getting-started/bring-one-failure.md
-  - Audit:
+  - Goals and evals:
+      - Define behaviors and scores: init.md
+      - Baselines and reruns: baselines.md
+  - Fix:
+      - Improve agents and evals: fix.md
+      - Prepare delivery: delivery.md
+  - Results:
+      - Results and controls: dashboard.md
+      - Settings and providers: settings.md
+  - Deep dives:
       - Audit agents and evals: audit.md
+      - Create or improve evaluations: eval.md
       - Local changes: review.md
       - Existing evals and benchmarks: benchmarks.md
       - Reports and issues: reports.md
-  - Fix:
-      - Fix agents and evals: fix.md
-      - Create or improve evaluations: eval.md
-      - Prepare delivery: delivery.md
-  - Utilities:
-      - Dashboard: dashboard.md
-      - Setup: settings.md
   - Concepts:
       - How it works: concepts.md
       - Where work runs: execution.md

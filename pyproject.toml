@@ -5,12 +5,18 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentagon"
 version = "0.1.2"
-description = "Evidence-backed audits, evaluations, and measured improvements for any AI agent"
+description = "Inspect and improve AI agents with measured fixes and custom scores."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.txt"]
-dependencies = ["click>=8.1,<9", "jsonschema>=4.21,<5", "httpx>=0.28,<1"]
+dependencies = [
+    "click>=8.1,<9",
+    "jsonschema>=4.21,<5",
+    "referencing>=0.28.4,<1",
+    "httpx>=0.28,<1",
+    "gepa @ https://codeload.github.com/gepa-ai/gepa/tar.gz/0632cdb5dcc052e690eab439e1b4a7e3e9cfe407#sha256=1ea34ad34724b65a67cf6531bae6d403726eec3cf7dca7be62c1162c80641e1b",
+]
 
 [project.urls]
 Homepage = "https://agentagon.ai"
@@ -39,6 +45,8 @@ agentagon = ["dashboard_assets/*"]
 "share/agentagon/hooks" = ["hooks/*.json"]
 "share/agentagon/.codex-plugin" = [".codex-plugin/plugin.json"]
 "share/agentagon/.claude-plugin" = [".claude-plugin/plugin.json"]
+"share/agentagon/skills/init" = ["skills/init/SKILL.md"]
+"share/agentagon/skills/eval" = ["skills/eval/SKILL.md"]
 "share/agentagon/skills/audit" = ["skills/audit/SKILL.md"]
 "share/agentagon/skills/audit/references" = ["skills/audit/references/*.md"]
 "share/agentagon/skills/setup" = ["skills/setup/SKILL.md"]

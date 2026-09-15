@@ -3,6 +3,7 @@
 import json
 import re
 import secrets
+import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
@@ -19,6 +20,7 @@ ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
+    "/journeys.js": ("journeys.js", "text/javascript; charset=utf-8"),
     "/app.css": ("app.css", "text/css; charset=utf-8"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
     "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
@@ -416,6 +418,12 @@ def create_server(
                     )
                 elif path == "/api/session":
                     self._bootstrap()
+                elif path == "/api/settings":
+                    from agentagon.dashboard_controls import settings_projection
+
+                    self._json(200, settings_projection(workspace))
+                elif path == "/api/baselines" or path.startswith("/api/baselines/"):
+                    self._serve_baselines(path)
                 elif path == "/api/benchmarks" or path.startswith("/api/benchmarks/"):
                     self._serve_benchmarks(path)
                 elif path == "/api/patches" or path.startswith("/api/patches/"):
@@ -432,6 +440,39 @@ def create_server(
                 self._json(500, {"error": "Unable to read local state. Check agentagon status."})
 
         do_HEAD = do_GET
+
+        def _serve_baselines(self, path: str) -> None:
+            from agentagon.experiments import baselines
+            from agentagon.reporting import build_journey_report, render_journey_markdown
+
+            records = baselines.list_baselines(workspace)
+            if path == "/api/baselines":
+                self._json(
+                    200,
+                    {
+                        "workspace": str(workspace.root),
+                        "baselines": [baselines.public_projection(record) for record in records],
+                    },
+                )
+                return
+            parts = path.split("/")
+            selected = next(
+                (record for record in records if record["baseline_id"] == parts[3]), None
+            )
+            if selected and len(parts) == 4:
+                self._json(200, baselines.public_projection(selected))
+            elif selected and len(parts) == 5 and parts[4] in {"report.json", "report.md"}:
+                report = build_journey_report(workspace, baseline_id=selected["baseline_id"])
+                if parts[4] == "report.json":
+                    self._json(200, report)
+                else:
+                    self._respond(
+                        200,
+                        render_journey_markdown(report).encode(),
+                        "text/markdown; charset=utf-8",
+                    )
+            else:
+                self._json(404, {"error": "Baseline not found in this checkout."})
 
         def _serve_benchmarks(self, path: str) -> None:
             drafts = _benchmark_drafts(workspace)
@@ -545,6 +586,18 @@ def create_server(
                 return
             if len(parts) == 4:
                 self._json(200, _run_detail(workspace, requested_id))
+            elif len(parts) == 5 and parts[4] in {"report.json", "report.md"}:
+                from agentagon.reporting import build_journey_report, render_journey_markdown
+
+                report = build_journey_report(workspace, run_id=requested_id)
+                if parts[4] == "report.json":
+                    self._json(200, report)
+                else:
+                    self._respond(
+                        200,
+                        render_journey_markdown(report).encode(),
+                        "text/markdown; charset=utf-8",
+                    )
             elif len(parts) == 6 and parts[4] == "candidates":
                 self._json(200, inspection.candidate(workspace, requested_id, parts[5]))
             elif (
@@ -579,7 +632,12 @@ def create_server(
                 self._json(403, {"error": "Invalid dashboard session or origin. Reload this page."})
                 return
             parts = urlsplit(self.path).path.split("/")
-            if len(parts) != 5 or parts[1:3] != ["api", "runs"] or parts[4] != "control":
+            run_control = (
+                len(parts) == 5 and parts[1:3] == ["api", "runs"] and parts[4] == "control"
+            )
+            baseline_control = parts == ["", "api", "baselines", "rerun"]
+            settings_control = parts == ["", "api", "settings"]
+            if not (run_control or baseline_control or settings_control):
                 self._json(404, {"error": "Control endpoint not found."})
                 return
             if self.headers.get_all("Content-Type", []) != ["application/json"]:
@@ -607,6 +665,60 @@ def create_server(
             try:
                 self.connection.settimeout(CONTROL_READ_TIMEOUT_SECONDS)
                 payload = json.loads(self.rfile.read(size))
+                if settings_control:
+                    from agentagon.dashboard_controls import update_settings
+
+                    self._json(200, update_settings(workspace, payload))
+                    return
+                if baseline_control:
+                    from agentagon.experiments import baselines
+
+                    if (
+                        not isinstance(payload, dict)
+                        or set(payload)
+                        - {
+                            "baseline_id",
+                            "evaluation_id",
+                            "intent_id",
+                            "profile_name",
+                            "operation_id",
+                        }
+                        or not payload.get("operation_id")
+                        or bool(payload.get("evaluation_id")) == bool(payload.get("baseline_id"))
+                        or (
+                            payload.get("baseline_id")
+                            and ("intent_id" in payload or "profile_name" in payload)
+                        )
+                    ):
+                        raise AuditError(
+                            "baseline rerun requires exactly one saved baseline or evaluation and an operation_id"
+                        )
+                    if payload.get("baseline_id"):
+                        record = baselines.rerun(
+                            workspace, payload["baseline_id"], request_id=payload["operation_id"]
+                        )
+                    else:
+                        record = baselines.start(
+                            workspace,
+                            payload["evaluation_id"],
+                            intent_id=payload.get("intent_id"),
+                            profile_name=payload.get("profile_name"),
+                            request_id=payload["operation_id"],
+                        )
+
+                    # The durable measurement exists before responding. Execution uses
+                    # the same bounded operation as the CLI, independent of the browser.
+                    def advance():
+                        try:
+                            baselines.advance(workspace, record["baseline_id"])
+                        except (AuditError, OSError):
+                            # The saved job remains resumable through the CLI. Avoid
+                            # exposing command output or private provider diagnostics.
+                            pass
+
+                    threading.Thread(target=advance, daemon=True).start()
+                    self._json(202, baselines.public_projection(record))
+                    return
                 allowed = {
                     "policy",
                     "directive",

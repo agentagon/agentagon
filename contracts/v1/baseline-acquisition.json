@@ -1,0 +1,97 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "baseline_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evaluator_digest": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "end"
+      ],
+      "properties": {
+        "start": {
+          "type": "string",
+          "minLength": 1
+        },
+        "end": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "state": {
+      "enum": [
+        "complete",
+        "partial",
+        "empty",
+        "failed"
+      ]
+    },
+    "completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ]
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "alignment": {
+      "enum": [
+        "matched",
+        "mismatched",
+        "unknown"
+      ]
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "deployment_revision": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "acquisition_artifact": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "baseline_id",
+    "evaluator_digest",
+    "provider",
+    "project",
+    "window",
+    "state",
+    "completeness",
+    "count",
+    "alignment",
+    "artifacts",
+    "deployment_revision"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

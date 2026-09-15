@@ -1,6 +1,6 @@
 # Dashboard lifecycle
 
-Audit and Fix open the dashboard at start or resume, before substantive work. Standalone Dashboard requests use the same flow. Honor an explicit request to skip, close or stop the dashboard for the current session. Setup alone does not open one; when nested inside Audit or Fix, preserve that journey's existing dashboard and selection.
+Init, Audit, Eval and Fix open the dashboard at start or resume, before substantive work. Standalone Dashboard requests use the same flow. Honor an explicit request to skip, close or stop the dashboard for the current session. Setup alone does not open one; when nested inside a journey, preserve that journey's existing dashboard and selection.
 
 Use the application's original source directory or Git checkout, including when evaluation or fix work happens in isolated candidate worktrees. Reuse a running server and browser tab already owned by this host session for the same resolved checkout and controls mode. Retain the process handle, startup URL, checkout and tab handle across internal stages. Confirm that a known process still responds before reuse; restart it if it exited. Do not scan ports or attach to an unrelated session.
 

@@ -8,7 +8,7 @@ A frozen package is immutable. Ask your coding agent to create a new draft from 
 
 === "Codex"
 
-    Select **ag:fix**, then send:
+    Select **ag:eval**, then send:
 
     ```text
     Create a new evaluation draft from EVALUATION_ID. Add coverage for
@@ -21,14 +21,14 @@ A frozen package is immutable. Ask your coding agent to create a new draft from 
 === "Claude Code"
 
     ```text
-    /ag:fix Create a new evaluation draft from EVALUATION_ID. Add coverage
+    /ag:eval Create a new evaluation draft from EVALUATION_ID. Add coverage
     for tool timeouts and empty search results, using the configured local
     profile. Agree the preparation limits with me, validate the revised
     benchmark, and obtain an independent review before freezing it.
     Preserve the original evaluation and its results.
     ```
 
-To reuse the benchmark with different application source, ask the agent to validate it against that source in a new draft. Preserve the original package for the comparisons that used it.
+To measure compatible later application source, use a [baseline rerun](../baselines.md) with the same evaluator. Changing cases, behavior definitions, scoring or judge configuration requires a new draft. Preserve the original package and its comparisons.
 
 ??? details "Create a draft from the CLI"
 
@@ -43,7 +43,7 @@ To reuse the benchmark with different application source, ask the agent to valid
 The coding host normally prepares these files and runs these operations. For direct use, replace uppercase placeholders with actual IDs and files:
 
 ```sh
-agentagon eval start --goal 'Check tool routing' --profile local --budget-file BUDGET_JSON --author AUTHOR
+agentagon eval start --intent INTENT_ID --goal 'Check tool routing' --profile local --budget-file BUDGET_JSON --author AUTHOR
 agentagon eval start --audit AUDIT_ID --issue ISSUE_ID --profile local --budget-file BUDGET_JSON --author AUTHOR
 agentagon eval lookup EVALUATION_ID --context-file CONTEXT_FILE --goal-file GOAL_FILE --phase initial --limit 5
 agentagon eval check EVALUATION_ID --plan-file PLAN_JSON

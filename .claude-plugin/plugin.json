@@ -1,7 +1,7 @@
 {
   "name": "ag",
   "version": "0.1.2",
-  "description": "Audit agents and evals; fix issues, compare evidence, and prepare delivery.",
+  "description": "Inspect and improve AI agents with measured fixes and custom scores.",
   "author": {
     "name": "Agentagon"
   },

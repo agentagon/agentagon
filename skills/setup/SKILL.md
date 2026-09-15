@@ -7,7 +7,7 @@ description: Configure Agentagon settings, Intelligence and trace access, or exe
 
 At workflow start, run `agentagon telemetry skill_invoked --data '{"skill":"setup"}'` once per invocation. Add `"host":"codex"` or `"host":"claude-code"` when known. Honor opt-out and continue if the hook is unavailable. See [telemetry](../audit/references/telemetry.md).
 
-Inspect `agentagon --workspace CODEBASE setup` before asking for missing choices. It reports the config path, effective settings, credential-presence flags and pending onboarding. User-wide setup works without an application checkout; do not invent one or open a dashboard for settings alone. If Setup is nested inside Audit or Fix, preserve that journey's existing dashboard and selection.
+Inspect `agentagon --workspace CODEBASE setup` before asking for missing choices. It reports the config path, effective settings, credential-presence flags and pending onboarding. User-wide setup works without an application checkout; do not invent one or open a dashboard for settings alone. If Setup is nested inside Init, Audit, Eval or Fix, preserve that journey's existing dashboard and selection.
 
 One config file holds user defaults and project overrides. Precedence is explicit invocation, project setting, user default, then built-in default. Each resolved checkout, including a Git worktree, has a separate project entry.
 

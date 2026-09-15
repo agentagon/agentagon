@@ -18,7 +18,7 @@ const findingCategory = (finding) => finding.kind === "evaluation_coverage" ? "E
 const params = new URLSearchParams(window.location.search);
 let selected = params.get("audit");
 let selectedRun = params.get("run");
-let view = params.get("evaluation") ? "eval" : selectedRun ? "fix" : selected ? "audit" : ["audit", "fix", "eval"].includes(params.get("view")) ? params.get("view") : null;
+let view = params.get("evaluation") ? "eval" : selectedRun ? "fix" : selected ? "audit" : ["audit", "fix", "eval", "baselines", "settings"].includes(params.get("view")) ? params.get("view") : null;
 let requestVersion = 0;
 
 async function getJSON(path) {
@@ -418,6 +418,15 @@ function renderRun(run) {
   result.replaceChildren(element("p", "", run.selected_branch ? "Reviewable branch" : "No branch has been selected for review."));
   if (run.selected_branch) result.append(element("code", "selected-branch", run.selected_branch));
   result.append(element("p", "muted small", `Frontier: ${run.frontier.length ? run.frontier.join(", ") : "none yet"}`));
+  if (run.comparisons?.baseline_score !== null && run.comparisons?.baseline_score !== undefined) {
+    result.append(element("h3", "", "Verified winner and alternatives"));
+    result.append(element("p", "", `Baseline score: ${run.comparisons.baseline_score}`));
+    for (const [index, alternative] of (run.comparisons.alternatives || []).entries()) {
+      result.append(element("p", "", `${index === 0 ? "Winner" : `Alternative ${index}`}: ${alternative.id} · Score ${scoreSummary(alternative.score)} · ${alternative.hypothesis || "Verified change"}`));
+    }
+    if (!run.comparisons.alternatives.length) result.append(element("p", "", run.comparisons.result === "final_verification_pending" ? "Final verification pending. No winner has been established." : "Baseline retained: no verified improvement."));
+  }
+  result.append(reportLinks("runs", run.run_id));
   if (run.search_policy) {
     const policy = run.search_policy;
     const labels = {pareto: "Pareto frontier", argmax: "Best objective value", top_k: "Top K candidates", epsilon_greedy: "Epsilon greedy", softmax: "Softmax sampling", pareto_per_task: "Per-task winners"};
@@ -483,6 +492,10 @@ function updateView() {
   byId("view-audit").setAttribute("aria-pressed", String(view === "audit"));
   byId("view-eval").setAttribute("aria-pressed", String(view === "eval"));
   byId("view-fix").setAttribute("aria-pressed", String(isFix));
+  for (const name of ["baselines", "settings"]) {
+    byId(`view-${name}`).setAttribute("aria-pressed", String(view === name));
+    byId(name).hidden = true;
+  }
   byId("audit-history").hidden = view !== "audit";
   byId("eval-history").hidden = view !== "eval";
   byId("fix-history").hidden = !isFix;
@@ -496,6 +509,7 @@ async function load() {
   byId("announcement").textContent = "";
   updateView();
   try {
+    if (["baselines", "settings"].includes(view)) { await loadJourneyView(view, version); return; }
     if (view === "eval") { await loadEvaluations(version); return; }
     let data = await getJSON(view === "fix" ? "/api/runs" : "/api/audits");
     if (view === null) {
@@ -603,7 +617,7 @@ byId("run-select").addEventListener("change", (event) => {
   window.history.replaceState(null, "", url);
   load();
 });
-for (const name of ["audit", "fix", "eval"]) byId(`view-${name}`).addEventListener("click", () => {
+for (const name of ["audit", "fix", "eval", "baselines", "settings"]) byId(`view-${name}`).addEventListener("click", () => {
   view = name;
   const url = new URL(window.location.href);
   url.searchParams.delete("audit");

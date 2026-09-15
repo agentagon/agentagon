@@ -9,6 +9,8 @@ import click
 
 from agentagon import __version__
 from agentagon.cli.benchmarks import register as register_benchmarks
+from agentagon.cli.journeys import register as register_journeys
+from agentagon.cli.optimization import register as register_optimization
 from agentagon.cli.patches import register as register_patches
 from agentagon.core.records import AuditError, encoded, load_json, resource_path
 from agentagon.dashboard import serve
@@ -535,6 +537,9 @@ def eval_lookup(
 @click.option("--author", required=True)
 @click.option("--from", "from_id")
 @click.option("--audit", "audit_id", help="Carry selected --issue evidence from this saved audit.")
+@click.option(
+    "--intent", "intent_id", help="Accepted goals, creation authorization and overall budget."
+)
 @click.pass_obj
 @output
 def eval_start(
@@ -546,6 +551,7 @@ def eval_start(
     author: str,
     from_id: str | None,
     audit_id: str | None,
+    intent_id: str | None,
 ) -> dict:
     from agentagon.experiments import preparation
 
@@ -558,6 +564,7 @@ def eval_start(
         author=author,
         from_id=from_id,
         audit_id=audit_id,
+        intent_id=intent_id,
     )
 
 
@@ -675,10 +682,12 @@ def fix_start(
             "state": "needs_evaluation",
             "goal": goal,
             "issue_ids": list(issue_ids),
-            "next_action": "Continue within ag:fix: inspect existing benchmarks and authorized preparation limits, then use eval start/check/freeze; if measurement is unavailable, use fix patch with explicit limitations.",
+            "next_action": "Continue within ag:fix: inspect existing benchmarks and authorized preparation limits, then use eval start/check/freeze; if measurement is unavailable, report the blocker; unmeasured patches require an explicit user request.",
         }
     specification = (
-        preparation.fix_spec(workspace, evaluation_id) if evaluation_id else load_json(spec_path)
+        preparation.fix_spec(workspace, evaluation_id, reuse=True)
+        if evaluation_id
+        else load_json(spec_path)
     )
     if evaluation_id and (
         goal is not None
@@ -920,6 +929,9 @@ def fix_cleanup(
 @click.option("--remote", default="origin", show_default=True)
 @click.option("--base", help="Target GitHub branch; defaults to the configured remote default.")
 @click.option(
+    "--eval-parent", "eval_parent_id", help="Stack on this exact reviewed evaluator commit."
+)
+@click.option(
     "--publish", is_flag=True, help="Authorize pushing the selected branch and creating a draft PR."
 )
 @click.pass_obj
@@ -931,14 +943,25 @@ def fix_ship(
     remote: str,
     base: str | None,
     publish: bool,
+    eval_parent_id: str | None,
 ) -> dict:
     """Prepare selected-branch delivery; publish a draft PR only with --publish."""
     from agentagon.experiments.delivery import ship
 
-    return ship(Workspace(path), run_id, candidate_id, remote=remote, base=base, publish=publish)
+    return ship(
+        Workspace(path),
+        run_id,
+        candidate_id,
+        remote=remote,
+        base=base,
+        publish=publish,
+        eval_parent_id=eval_parent_id,
+    )
 
 
 # Internal stages stay available to the two host-led journeys.
 
+register_optimization(fix_group, output)
+register_journeys(main, output)
 register_benchmarks(main, output)
 register_patches(fix_group, output)

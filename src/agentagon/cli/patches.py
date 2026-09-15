@@ -69,6 +69,7 @@ def register(fix_group: click.Group, output) -> None:
     @click.option("--patch", "patch_id")
     @click.option("--remote", default="origin", show_default=True)
     @click.option("--base")
+    @click.option("--eval-parent", "eval_parent_id")
     @click.option(
         "--publish",
         is_flag=True,
@@ -76,7 +77,7 @@ def register(fix_group: click.Group, output) -> None:
     )
     @click.pass_obj
     @output
-    def deliver(path, run_id, evaluation_id, patch_id, remote, base, publish):
+    def deliver(path, run_id, evaluation_id, patch_id, remote, base, publish, eval_parent_id):
         """Prepare local delivery from one reviewed source; optionally publish a draft PR."""
         return delivery.deliver(
             Workspace(path),
@@ -86,4 +87,5 @@ def register(fix_group: click.Group, output) -> None:
             remote=remote,
             base=base,
             publish=publish,
+            eval_parent_id=eval_parent_id,
         )

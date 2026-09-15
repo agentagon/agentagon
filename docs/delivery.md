@@ -1,6 +1,6 @@
 # Prepare delivery within Fix
 
-**ag:fix** carries its result through delivery. It prepares a local branch/patch, diffstat, safe evidence summary and PR description. Local preparation requires no Git remote.
+Init, Eval and Fix carry reviewed results through delivery. The default is a draft PR when the destination and authentication are configured, otherwise a local branch/patch with diffstat, safe evidence summary and PR description. Local preparation requires no Git remote.
 
 ## Deliver the reviewed result
 
@@ -22,9 +22,9 @@ Useful cleanup is a new measured candidate under the same frozen benchmark and r
 
 Inspect the exact diff and generated PR body. Private inputs, credentials and execution material are excluded from summaries; protected eval artifacts must not be added to delivery just to make it self-contained.
 
-## Publish when requested
+## Publish the draft PR
 
-For a GitHub draft PR, ask Fix to publish the prepared result. Once the destination is established and publication authorized, use the same command with `--publish`, for example:
+For a configured GitHub draft-PR destination within the journey's authorized scope, use the same command with `--publish`, for example:
 
 ```sh
 agentagon fix deliver --run RUN_ID --remote origin --base main --publish
@@ -35,3 +35,22 @@ Use `--evaluation` or `--patch` for those result types. Publication validates th
 Repeat the same command after interruption so saved receipts can reconcile a prior push or PR. Changed source or destination base requires fresh applicable validation and review. Conflicting remote branches are not overwritten.
 
 Merging, deployment and issue resolution follow your normal process and remain separate actions. Verified resolution needs matching applied source and evidence for the specific issue; see [issue states](reports.md#follow-persistent-issues).
+
+## Stack an application PR on its eval PR
+
+When the eval-only PR is still open, use the exact reviewed eval branch as the application's parent:
+
+```sh
+agentagon fix deliver --run RUN_ID --eval-parent EVALUATION_ID --remote origin --publish
+```
+
+The operation verifies the recorded eval-parent/application-child relationship and unchanged eval files, then uses the eval branch as the PR base. A different base flag alone is insufficient. Merge the eval PR before the application PR; merging remains a separate action.
+
+## Export a safe report
+
+```sh
+agentagon journey export --baseline BASELINE_ID
+agentagon journey export --run RUN_ID
+```
+
+The returned readable and JSON reports include agreed goals and scoring, behavior results, evidence summaries and source/evaluator identities. Raw traces, private inputs and credentials remain excluded. Detailed evidence remains available locally.

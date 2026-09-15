@@ -11,7 +11,7 @@ import json
 import os
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from agentagon.core.records import AuditError, digest, identifier, now, validate_record
@@ -22,7 +22,15 @@ from agentagon.storage.config import Config
 from agentagon.storage.workspace import Workspace
 
 TERMINAL = {"verified", "rejected", "failed", "duplicate"}
-ACTIVE = {"editing", "sealed", "running", "interrupted", "cancelled", "awaiting_review"}
+ACTIVE = {
+    "editing",
+    "sealed",
+    "running",
+    "interrupted",
+    "cancelled",
+    "awaiting_review",
+    "awaiting_grading",
+}
 REVIEW_ASSESSMENTS = {"patch", "evaluator_integrity", "issue_relevance", "measurements"}
 
 
@@ -87,6 +95,7 @@ def _update(data: dict) -> None:
         )
         if (
             not exhausted
+            and not data.get("optimizer_configured")
             and not cleanup_active
             and data["stagnation"] >= data["limits"]["stagnation_rounds"]
         ):
@@ -203,6 +212,11 @@ def start(
     profile_name: str,
     goal: str | None = None,
     issue_ids: list[str] | None = None,
+    *,
+    run_id: str | None = None,
+    expected_revision: str | None = None,
+    budget_id: str | None = None,
+    execution_profile: dict | None = None,
 ) -> dict:
     workspace.require_initialized()
     spec = copy.deepcopy(spec)
@@ -213,7 +227,12 @@ def start(
     if issue_ids:
         spec["issue_ids"] = list(dict.fromkeys(spec.get("issue_ids", []) + issue_ids))
     validate_record("fix-spec", spec)
-    profile = Config().profile(workspace.root, profile_name)
+    if execution_profile is None:
+        profile = Config().profile(workspace.root, profile_name)
+    else:
+        from agentagon.experiments.spec import validate_profile
+
+        profile = validate_profile(execution_profile)
     from agentagon.experiments.evidence import DEFAULT_LIMITS
 
     profile.setdefault("evidence", dict(DEFAULT_LIMITS))
@@ -227,6 +246,8 @@ def start(
         raise AuditError("benchmark resource requirements exceed the saved resource capacity")
     policy = search.validate_policy(profile.get("search", {}), spec)
     revision = checkouts.clean_revision(workspace.root)
+    if expected_revision is not None and revision != expected_revision:
+        raise AuditError("source changed since this measurement was requested")
     from agentagon.storage.issues import list_issues
 
     known = {issue["issue_id"] for issue in list_issues(workspace)}
@@ -234,10 +255,19 @@ def start(
         raise AuditError("fix specification references unknown saved issues")
     if profile["limits"]["max_trials"] < spec["repetitions"]:
         raise AuditError("trial limit must cover every baseline repetition")
-    run_id = identifier("run", str(workspace.root), revision, uuid.uuid4().hex)
+    run_id = run_id or identifier("run", str(workspace.root), revision, uuid.uuid4().hex)
     baseline_id = identifier("candidate", run_id, "baseline")
     directory = run_dir(workspace, run_id)
     with locked(workspace, run_id):
+        if (directory / "state.json").exists():
+            saved = load_run(workspace, run_id)
+            if (
+                saved["spec"] != spec
+                or saved["profile"] != profile
+                or saved["origin_revision"] != revision
+            ):
+                raise AuditError("measurement identity already belongs to different inputs")
+            return status(workspace, run_id, baseline_id)
         frozen = _freeze(workspace, spec)
         baseline_path = directory / "candidates" / baseline_id
         checkouts.create(workspace.root, baseline_path, revision)
@@ -295,6 +325,7 @@ def start(
             "selections": [],
             "continuations": [],
             "cleanup_pending": False,
+            **({"budget_id": budget_id} if budget_id else {}),
         }
         search.set_policy(data, policy)
         _save(workspace, data)
@@ -541,7 +572,14 @@ def _seal(workspace: Workspace, data: dict, candidate: dict) -> None:
         ),
         None,
     )
-    if existing and not candidate.get("cleanup_of"):
+    if candidate.get("verification_of"):
+        original = _candidate(data, candidate["verification_of"])
+        if (
+            original.get("source_digest") != candidate["source_digest"]
+            or candidate.get("budget_stage") != "verification"
+        ):
+            raise AuditError("final verification must remeasure the exact candidate source")
+    if existing and not candidate.get("cleanup_of") and not candidate.get("verification_of"):
         candidate["state"] = "duplicate"
         candidate["duplicate_of"] = existing["candidate_id"]
     else:
@@ -602,6 +640,26 @@ def _reserve(workspace: Workspace, data: dict, candidate: dict) -> dict | None:
     trial_id = identifier(
         "trial", data["run_id"], candidate["candidate_id"], len(candidate["trials"])
     )
+    admission = None
+    if data.get("budget_id"):
+        from agentagon.experiments.budget import BudgetLedger
+
+        ledger = BudgetLedger(workspace, data["budget_id"])
+        stage = candidate.get(
+            "budget_stage",
+            "preparation" if candidate["candidate_id"] == data["baseline_id"] else "optimization",
+        )
+        admission = ledger.admit(
+            trial_id,
+            stage,
+            timeout_seconds=data["limits"]["trial_timeout_seconds"],
+            binding={
+                "run_id": data["run_id"],
+                "candidate_id": candidate["candidate_id"],
+                "source": candidate["source_digest"],
+                "evaluator": data["evaluation_digest"],
+            },
+        )
     attempt_dir = run_dir(workspace, data["run_id"]) / "attempts" / trial_id
     source = run_dir(workspace, data["run_id"]) / "execution" / trial_id
     checkouts.create(workspace.root, source, candidate["source_revision"])
@@ -619,6 +677,14 @@ def _reserve(workspace: Workspace, data: dict, candidate: dict) -> dict | None:
         "cleanup_pending": False,
     }
     candidate["trials"].append(trial)
+    if admission:
+        trial["request"]["timeout_seconds"] = min(
+            trial["request"]["timeout_seconds"], admission["timeout_seconds"]
+        )
+        trial["request"]["deadline_at"] = min(
+            datetime.fromisoformat(trial["request"]["deadline_at"]),
+            datetime.fromtimestamp(admission["deadline"], UTC),
+        ).isoformat()
     candidate["state"] = "running"
     data["usage"]["trials"] += 1
     return trial
@@ -713,7 +779,14 @@ def _validate_result(
     from agentagon.experiments.spec import finite
 
     metrics = {name: finite(value) for name, value in output["metrics"].items()}
-    if set(data["spec"]["metrics"]) - set(metrics):
+    missing = set(data["spec"]["metrics"]) - set(metrics)
+    judge = data["spec"].get("scoring", {}).get("judge", {})
+    fallback = (
+        judge.get("kind") == "coding-host"
+        and isinstance(output.get("outputs"), (list, dict))
+        and bool(output["outputs"])
+    )
+    if missing and not (fallback and missing <= set(judge["metrics"])):
         raise AuditError("benchmark omitted required metrics")
     tasks = evaluation.task_metrics(data["spec"], output)
     runtime = result.get("runtime_identity")
@@ -755,9 +828,48 @@ def _collect(workspace: Workspace, data: dict, candidate: dict, trial: dict, res
     else:
         trial["state"] = "completed"
         candidate["state"] = "sealed"
+        missing = set(data["spec"]["metrics"]) - set(trial["metrics"])
+        if missing:
+            from agentagon.experiments import grading
+
+            grading.prepare(workspace, data, candidate, trial, result)
+            trial["state"] = candidate["state"] = "awaiting_grading"
     source = _owned(workspace, data, trial["source_path"])
     if not checkouts.remove(workspace.root, source):
         trial["cleanup_pending"] = True
+    if data.get("budget_id") and trial["state"] not in {"running", "interrupted"}:
+        from agentagon.experiments.budget import BudgetLedger
+
+        admitted = BudgetLedger(workspace, data["budget_id"]).finish(
+            trial["trial_id"],
+            status="completed" if trial["state"] in {"completed", "awaiting_grading"} else "failed",
+            result={"artifact": trial["artifact"]},
+        )
+        if admitted.get("deadline_exceeded"):
+            trial["state"] = candidate["state"] = "failed"
+            trial["error"] = "execution exceeded its admitted budget deadline"
+
+
+def _check_trial_budget(workspace: Workspace, data: dict, trial: dict) -> None:
+    if not data.get("budget_id"):
+        return
+    from agentagon.experiments.budget import BudgetLedger
+
+    operation = (
+        BudgetLedger(workspace, data["budget_id"])
+        .snapshot()["operations"]
+        .get(trial["trial_id"], {})
+    )
+    if (
+        operation.get("status") != "completed"
+        or operation.get("deadline_exceeded")
+        or operation.get("kind") != "evaluation"
+        or operation.get("units") != 1
+        or operation.get("result") != {"artifact": trial["artifact"]}
+        or operation.get("binding", {}).get("run_id") != data["run_id"]
+        or operation.get("binding", {}).get("evaluator") != data["evaluation_digest"]
+    ):
+        raise AuditError("trial lacks completed execution within its admitted budget deadline")
 
 
 def _completed(candidate: dict) -> list[dict]:
@@ -793,6 +905,11 @@ def _summarize(data: dict, candidate: dict) -> None:
         and all(c["passed"] for c in candidate["constraints"])
         and all(c["expected"] == "pass" for c in candidate["checks"])
     )
+    if data["spec"].get("scoring"):
+        from agentagon.experiments.scoring import candidate_score
+
+        candidate["score"] = candidate_score(data, candidate)
+        candidate["feasible"] &= candidate["score"]["eligible"]
     candidate["state"] = "awaiting_review"
 
 
@@ -842,9 +959,14 @@ def _accept_review(workspace: Workspace, data: dict, candidate: dict, review: di
     # Re-read every checksummed observation; handwritten receipts never establish metrics.
     task_samples = []
     for trial in _completed(candidate):
+        _check_trial_budget(workspace, data, trial)
         metrics, checks, tasks = _validate_result(
             data, candidate, trial, evidence.read_result(workspace, trial["artifact"])
         )
+        if trial.get("grading"):
+            from agentagon.experiments import grading
+
+            metrics = grading.observed(workspace, data, candidate, trial, metrics)
         if (
             metrics != trial["metrics"]
             or checks != trial["checks"]
@@ -921,6 +1043,13 @@ def run(
                 raise AuditError("invalidated candidates cannot start or resume execution")
             if digest(data["frozen"]) != data["inputs_digest"]:
                 raise AuditError("frozen evaluation inputs changed")
+            if candidate["state"] == "awaiting_grading":
+                from agentagon.experiments import grading
+
+                grading.resume(workspace, data, candidate)
+                _save(workspace, data)
+                if candidate["state"] == "awaiting_grading":
+                    return status(workspace, run_id, candidate_id)
             if review is not None:
                 _accept_review(workspace, data, candidate, review)
                 _save(workspace, data)
@@ -980,7 +1109,7 @@ def run(
                 trial = candidate["trials"][-1]
                 _collect(workspace, data, candidate, trial, result)
                 _save(workspace, data)
-                if candidate["state"] in {"failed", "interrupted", "cancelled"}:
+                if candidate["state"] in {"failed", "interrupted", "cancelled", "awaiting_grading"}:
                     break
     return status(workspace, run_id, candidate_id)
 
@@ -1076,9 +1205,16 @@ def _verified_evidence(workspace: Workspace, data: dict, candidate: dict) -> Non
         raise AuditError("candidate snapshot identity changed")
     metrics, all_checks, task_samples = [], [], []
     for trial in _completed(candidate):
+        _check_trial_budget(workspace, data, trial)
         observed, checks, tasks = _validate_result(
             data, candidate, trial, evidence.read_result(workspace, trial["artifact"])
         )
+        if trial.get("grading"):
+            from agentagon.experiments import grading
+
+            observed = grading.observed(workspace, data, candidate, trial, observed)
+        if observed != trial["metrics"]:
+            raise AuditError("recorded metrics do not match retained execution evidence")
         if tasks != trial.get("task_metrics", {}):
             raise AuditError("recorded tasks do not match retained execution evidence")
         metrics.append(observed)
@@ -1102,6 +1238,11 @@ def _verified_evidence(workspace: Workspace, data: dict, candidate: dict) -> Non
             for c in evaluation.constraints(data["spec"], aggregated, baseline["metrics"])
         ):
             raise AuditError("candidate no longer satisfies original-baseline constraints")
+        if data["spec"].get("scoring"):
+            from agentagon.experiments.scoring import candidate_score
+
+            if not candidate_score(data, candidate)["eligible"]:
+                raise AuditError("candidate no longer satisfies required behavior gates")
 
 
 def _select_locked(workspace: Workspace, data: dict, candidate_id: str) -> None:
@@ -1109,7 +1250,15 @@ def _select_locked(workspace: Workspace, data: dict, candidate_id: str) -> None:
     run_id = data["run_id"]
     candidate = _candidate(data, candidate_id)
     _verified_evidence(workspace, data, candidate)
-    if candidate_id not in evaluation.frontier(data):
+    if data.get("optimizer_configured") and not candidate.get("verification_of"):
+        raise AuditError("optimizer selection requires reserved final verification")
+    if data["spec"].get("scoring"):
+        from agentagon.experiments.scoring import qualifying
+
+        eligible = [item["candidate_id"] for item in qualifying(data)]
+    else:
+        eligible = evaluation.frontier(data)
+    if candidate_id not in eligible:
         raise AuditError("select a reviewed feasible candidate on the current Pareto frontier")
     branch = f"codex/ag-fix-{run_id}-{candidate_id}"
     existing = checkouts.git(workspace.root, "branch", "--list", branch, "--format=%(objectname)")
@@ -1136,6 +1285,32 @@ def select(workspace: Workspace, run_id: str, candidate_id: str) -> dict:
         data = load_run(workspace, run_id)
         _select_locked(workspace, data, candidate_id)
     return status(workspace, run_id, candidate_id)
+
+
+def select_best(workspace: Workspace, run_id: str) -> dict:
+    from agentagon.experiments.scoring import qualifying
+
+    with locked(workspace, run_id):
+        data = load_run(workspace, run_id)
+        if not data["spec"].get("scoring"):
+            raise AuditError("automatic selection requires agreed scoring")
+        ranked = qualifying(data)
+        if data.get("optimizer_configured"):
+            ranked = [
+                entry
+                for entry in ranked
+                if data["candidates"][entry["candidate_id"]].get("verification_of")
+            ]
+        for entry in ranked[:3]:
+            _verified_evidence(workspace, data, data["candidates"][entry["candidate_id"]])
+        if ranked:
+            _select_locked(workspace, data, ranked[0]["candidate_id"])
+        return {
+            "run_id": run_id,
+            "winner": ranked[0] if ranked else None,
+            "alternatives": ranked[1:3],
+            "retained_baseline": not ranked,
+        }
 
 
 def verify_origin(workspace: Workspace, run_id: str, candidate_id: str, issue_id: str) -> dict:
@@ -1216,6 +1391,8 @@ def status(
                 "review exact sealed patch and engine evidence, then fix run --review-file"
             )
             entry["review_template"] = _review_template(data, candidate)
+        elif candidate["state"] == "awaiting_grading":
+            entry["action"] = "complete bound coding-host grading requests, then fix run"
         elif candidate["state"] == "editing":
             entry["action"] = "edit candidate worktree, then fix run"
         elif candidate["state"] in {"sealed", "running", "interrupted"}:

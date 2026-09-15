@@ -209,6 +209,7 @@ def validate_spec(value: dict) -> dict:
                 "repetitions",
                 "seeds",
                 "resources",
+                "scoring",
             },
             {"editable_paths", "evaluation_paths", "benchmark", "metrics"},
             "evaluation specification",
@@ -348,4 +349,8 @@ def validate_spec(value: dict) -> dict:
         or any(type(v) is not int for v in value["seeds"])
     ):
         raise AuditError("one integer seed is required per repetition")
+    if "scoring" in value:
+        from agentagon.experiments.scoring import validate
+
+        value["scoring"] = validate(value["scoring"], value)
     return value

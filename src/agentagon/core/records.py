@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from referencing import Registry, Resource
 
 CONTRACT_VERSION = "1"
 RUBRIC_VERSION = "1"
@@ -101,12 +102,21 @@ def _invalid_constant(value: str) -> None:
     raise AuditError(f"non-finite JSON number: {value}")
 
 
+@lru_cache(maxsize=1)
+def _contract_registry() -> Registry:
+    """Resolve shared contracts from bundled files only, never from the network."""
+    return Registry().with_resources(
+        (file.name, Resource.from_contents(load_json(file)))
+        for file in resource_path("contracts/v1").glob("*.json")
+    )
+
+
 @lru_cache(maxsize=16)
 def _validator(name: str, definition: str | None) -> Draft202012Validator:
     schema = load_json(resource_path(f"contracts/v1/{name}.json"))
     if definition:
         schema = {"$defs": schema["$defs"], "$ref": f"#/$defs/{definition}"}
-    return Draft202012Validator(schema)
+    return Draft202012Validator({"$id": f"{name}.json", **schema}, registry=_contract_registry())
 
 
 def validate_record(name: str, record: Any, *, definition: str | None = None) -> None:

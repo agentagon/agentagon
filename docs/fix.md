@@ -1,73 +1,67 @@
-# Fix agents and evals
+# Improve agents and evals
 
-Use **ag:fix** for a known failure, desired improvement, pasted trace, saved audit finding, or an eval dataset that needs work. Fix establishes checks, makes isolated changes, validates and independently reviews them, and prepares delivery. You do not need to start an audit or invoke a separate evaluation or shipping skill.
+Use **ag:fix** to improve the saved goal or a named issue. Fix reuses accepted behaviors, scoring and limits, compares candidates against a frozen evaluator, independently verifies improvements, and prepares a draft PR or local branch/patch.
 
 <span id="start-with-your-coding-agent"></span>
 
 ## Describe the outcome
 
-Open the application in Codex or Claude Code and select **ag:fix** (or start with `/ag:fix` in Claude Code):
+After [Init](init.md), choose **ag:fix** in Codex or run `/ag:fix` in Claude Code. A bare invocation uses the saved goal and compatible baseline. To focus it:
 
 ```text
-Fix this recurring failure: [describe it or include the trace].
-Expected behavior: [what must happen and what must never happen].
-Reuse suitable evals or prepare missing regression cases. Preserve ordinary
-successful cases. Compare against a baseline when available, independently
-review the change, and prepare local delivery.
+Fix duplicate-ticket failures. Reuse the saved behaviors, evaluator and
+budget. Compare verified improvements against the baseline and prepare
+a draft PR if the destination is configured.
 ```
 
-For eval work:
+A known problem can also start Fix directly. The host resolves requirements and suitable evals first. Missing or unusable eval creation is confirmed unless already requested. Expected behavior comes from trusted requirements and evidence; trace outputs are not automatically correct labels.
 
-```text
-Fix the support agent's eval dataset. Correct unsupported labels and add
-coverage for duplicate-ticket failures. Validate that the revised checks
-catch known failures and prepare the dataset change for delivery.
-```
+For eval work, request the dataset or evaluator change explicitly. It creates a new evaluator version and compares coverage, labels and sensitivity at fixed application source. If both evals and application behavior need changes, establish the revised evaluator first.
 
-The host inspects code, existing tests and permitted evidence, then asks only for material missing expectations, permissions or limits. Observed trace outputs are not automatically ground truth.
+## One budget
 
-## Establish checks
+Fix reuses the accepted total time and evaluation-run limits. Starting allocations are 20% preparation/baseline, 60% optimization and 20% final verification. The baseline and minimum verification must fit before work starts. Unused preparation capacity can flow to optimization; verification keeps its reserve.
 
-Isolated fixes require a clean committed Git checkout. Keep private inputs in ignored `.agentagon/` storage and preserve unrelated changes. Git setup and commits require authorization; `agentagon init` only initializes private Agentagon state.
+Every actual seeded/repeated evaluation, failed trial, retry and final verification counts. Host proposals, judging and review count against applicable time/cost limits. Monetary cost is shown when measured; subscription usage is not assigned an invented price. The budget never expands automatically.
 
-Fix reuses a suitable reviewed benchmark or handles [evaluation preparation](eval.md) within the same journey. Execution uses named [profiles and limits](settings.md); saved authorized choices are reused, and missing preparation/fix limits are collected together while accounting stays separate.
-
-[Intelligence](intelligence.md) is optional. Every outgoing request shows its redacted payload and destination and asks for approval unless you explicitly set Agentagon Intelligence to full access. Declining continues the fix locally.
+Measurement needs clean committed source, a runnable application and a configured [execution profile](settings.md). Without a runnable baseline, Fix reports the blocker. An unmeasured application patch requires your explicit request and follows a separate review process.
 
 <span id="what-to-expect-during-a-run"></span>
+<span id="choose-how-to-explore"></span>
 
-## Validate the change
+## Optimize with Omni
 
-| Change | Evidence |
-|---|---|
-| Application behavior | A fresh baseline and isolated candidates run against the same frozen evaluator, followed by independent review. |
-| Dataset or evaluator | A new version with grounded labels, coverage and sensitivity checks at a fixed application revision. |
-| Baseline unavailable | A separately recorded, independently reviewed patch with actual available checks and explicit measurement limits. |
+Omni is the default composition of GEPA, Agentagon's native-host AutoResearch adapter and Agentagon's native-host Meta-Harness adapter. Exploration starts across all three; fresh GEPA refines the strongest candidate. Three quarters of optimization capacity initially goes to exploration, split evenly, and one quarter to refinement. Work respects your host's actual concurrency.
 
-If both application and evals need work, establish the revised benchmark first, then compare application changes against it. Scores from different datasets do not prove the application improved.
+The three engines are also advanced standalone choices. Host/model overrides apply to candidate authoring; judge configuration remains separate. Unavailable host work stays pending, and durable request identities allow resumption without duplicating completed work.
 
-Failed, dominated and incomplete experiments remain available. Candidates cannot change frozen evaluation files to improve their scores. A failed check or rejected review cannot be bypassed by relabeling a change unmeasured.
+The optimizer proposes candidates. Agentagon enforces the frozen evaluator, permitted edit scope, budgets, gates and independent review. Failed, dominated and incomplete attempts remain evidence. Candidates cannot change their evals to improve scores.
 
 <span id="what-verification-means"></span>
+<span id="explore-review-and-select"></span>
 
-A **reviewed unmeasured patch** is deliverable after independent review, but it does not enter the verified candidate frontier or establish verified issue resolution. If no meaningful executable checks are available, its plan must explicitly explain why and the output says no executable checks ran. See [what verified means](concepts.md#what-verified-means).
+## Select a verified improvement
+
+The winner is the highest-scoring independently verified candidate that satisfies every required behavior and limit and establishes improvement over baseline. A higher score cannot offset a failed gate. Search stops when a candidate reaches your target and passes final verification, or when the budget ends.
+
+The report compares the winner and next two qualifying alternatives with the baseline: score components, checks, limits and concrete changes. It shows fewer when fewer qualify. You can choose another verified alternative. If none establishes improvement, the baseline is retained.
+
+Changed datasets do not establish application improvement. A reviewed unmeasured patch never enters the verified candidate frontier or establishes verified issue resolution. See [what verified means](concepts.md#what-verified-means).
 
 ## Receive delivery
 
-Fix opens the [dashboard](dashboard.md) and finishes with a local branch/patch, safe evidence summary and prepared PR description. A local package needs no remote. Ask for a PR when that is your intended destination.
+The default result is a draft PR when the destination and authentication are configured, otherwise a local branch/patch. An open eval PR becomes the parent of the application PR; delivery verifies the exact commit relationship and explains that the eval PR merges first. Private inputs and evidence stay excluded.
 
-If several verified options have meaningful tradeoffs, choose using their measurements and your priorities. Existing unambiguous selection instructions are reused. [Delivery](delivery.md) preserves the exact reviewed source; publication, merging and deployment are separate actions.
+Fix opens the [dashboard](dashboard.md), retains detailed local evidence and exports readable and JSON summaries. Merging and deployment remain separate actions. [Intelligence](intelligence.md) remains optional with its own consent requirements.
 
-If work pauses, resume the returned audit, benchmark, evaluation, fix run or patch ID in the same coding host. Saved evidence remains intact; an exhausted execution budget requires an explicit extension.
+If interrupted, resume the recorded IDs in the same coding host. Do not create replacement requests just because work is pending. An exhausted budget requires explicit extension.
 
 <span id="configure-execution-once"></span>
 <span id="define-the-benchmark-and-hard-constraints"></span>
-<span id="choose-how-to-explore"></span>
-<span id="explore-review-and-select"></span>
 <span id="steer-a-run-without-losing-queued-work"></span>
 <span id="learn-from-completed-experiments"></span>
 <span id="dashboard-controls-and-delivery"></span>
 
 ## Direct control and references
 
-[Execution, search and controls](reference/fix.md) · [Evaluation preparation](reference/evaluation.md) · [Reviewed patch commands](reference/patches.md) · [Task evidence](task-evidence.md) · [Delivery](delivery.md)
+[Execution and legacy controls](reference/fix.md) · [Evaluation preparation](reference/evaluation.md) · [Baselines](baselines.md) · [Reviewed patch commands](reference/patches.md) · [Delivery](delivery.md)

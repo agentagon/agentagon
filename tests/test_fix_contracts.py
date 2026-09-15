@@ -59,6 +59,22 @@ def test_bundled_fix_schemas_are_valid(name):
     Draft202012Validator.check_schema(load_json(resource_path(f"contracts/v1/{name}.json")))
 
 
+@pytest.mark.parametrize(
+    "contract,definition",
+    [("fix-spec", None), ("evaluation-plan", "spec"), ("journey-intent", None)],
+)
+def test_shared_scoring_rules_are_enforced_in_every_record(contract, definition):
+    from test_journeys import intent_definition
+    from test_scoring import definition as scoring_definition
+
+    value = intent_definition() if contract == "journey-intent" else specification()
+    value["scoring"] = scoring_definition()
+    validate_record(contract, value, definition=definition)
+    del value["scoring"]["metrics"]["quality"]["direction"]
+    with pytest.raises(AuditError, match="required"):
+        validate_record(contract, value, definition=definition)
+
+
 def test_profiles_and_specifications_normalize_without_mutating_input():
     raw_profile, raw_spec = profile(), specification()
     before_profile, before_spec = copy.deepcopy(raw_profile), copy.deepcopy(raw_spec)

@@ -1,6 +1,6 @@
 # What Agentagon can do
 
-The [introduction's task guide](README.md#choose-the-task-that-fits) explains the two journeys: Audit assesses code and evals with benchmark readiness; Fix changes code or evals, validates them and prepares delivery. Setup and Dashboard support both. Start there to choose a journey, or follow the [quickstart](getting-started/first-audit.md) for your first audit.
+Inspect your agents, define custom scores, prepare reusable evals and compare measured fixes. The [introduction's task guide](README.md#choose-the-task-that-fits) helps you choose the right workflow, from investigating failures to preparing a draft PR with verified improvements. Start there or follow the [quickstart](getting-started/first-audit.md).
 
 ## Execution and integrations
 

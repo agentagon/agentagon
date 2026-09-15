@@ -272,6 +272,9 @@
           }
         }
       }
+    },
+    "scoring": {
+      "$ref": "score-definition.json"
     }
   },
   "anyOf": [

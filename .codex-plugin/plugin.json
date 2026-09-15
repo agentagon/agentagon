@@ -1,7 +1,7 @@
 {
   "name": "ag",
   "version": "0.1.2",
-  "description": "Audit agents and evals; fix issues, compare evidence, and prepare delivery.",
+  "description": "Inspect and improve AI agents with measured fixes and custom scores.",
   "author": {
     "name": "Agentagon"
   },
@@ -9,8 +9,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Agentagon",
-    "shortDescription": "Audit and fix agents and evaluations",
-    "longDescription": "Audit all agents, one agent, local changes or existing evaluations. Fix described failures or eval gaps, compare against a baseline when available, independently review, and prepare local or PR delivery. Intelligence requests ask for approval unless explicitly set to full access.",
+    "shortDescription": "Improve your AI agents",
+    "longDescription": "Inspect your agents, agree on behaviors and scoring, and prepare reusable evals to establish a baseline. Use Fix to compare verified improvements and prepare a draft PR.",
     "developerName": "Agentagon",
     "category": "Productivity",
     "capabilities": [
@@ -19,8 +19,9 @@
       "Interactive"
     ],
     "defaultPrompt": [
-      "Use ag:audit to audit this agent application and its existing evals.",
-      "Use ag:fix to fix this failure, validate the change and prepare delivery."
+      "Inspect this AI agent and identify failures with ag:audit.",
+      "Improve this AI agent with ag:fix, compare verified improvements, and prepare a draft PR.",
+      "Agree on behaviors and custom scores, then prepare reusable evals and establish a baseline with ag:init."
     ]
   }
 }

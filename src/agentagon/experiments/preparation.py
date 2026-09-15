@@ -8,7 +8,7 @@ import os
 import re
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -126,10 +126,26 @@ def start(
     from_id: str | None = None,
     audit_id: str | None = None,
     benchmark_id: str | None = None,
+    intent_id: str | None = None,
 ) -> dict:
     workspace.require_initialized()
     revision = checkouts.clean_revision(workspace.root)
     budget = _budget(budget)
+    intent = None
+    if intent_id:
+        from agentagon.experiments import journeys
+
+        intent = journeys.load(workspace, intent_id)["definition"]
+        if (
+            intent["discovery"]["status"] != "usable"
+            and not intent["discovery"]["creation_authorized"]
+        ):
+            raise AuditError("eval creation requires confirmation recorded in the saved intent")
+        goal = goal or intent["goal"]
+        if goal != intent["goal"]:
+            raise AuditError("preparation goal must match accepted intent")
+        if any(budget[k] > intent["budget"][k] for k in budget):
+            raise AuditError("preparation limits exceed the accepted overall budget")
     profile = Config().profile(workspace.root, profile_name)
     profile.setdefault("evidence", dict(DEFAULT_LIMITS))
     text(author, "benchmark author")
@@ -223,7 +239,16 @@ def start(
                 ),
             },
             "previous_plan": prior["package"]["plan"] if prior else None,
+            **({"intent_id": intent_id, "budget_id": evaluation_id} if intent else {}),
         }
+        if intent:
+            from agentagon.experiments.budget import BudgetLedger
+
+            BudgetLedger(workspace, evaluation_id).create(
+                intent["budget"]["max_trials"],
+                intent["budget"]["max_elapsed_seconds"],
+                journey="init",
+            )
         _save(workspace, data)
     return status(workspace, evaluation_id)
 
@@ -360,8 +385,15 @@ def _snapshot(workspace: Workspace, data: dict, plan: dict) -> tuple[str, list[d
         benchmark = benchmarks.load(workspace, benchmark_draft["benchmark_id"])
         if benchmark["snapshot_digest"] != benchmark_draft["snapshot_digest"]:
             raise AuditError("linked benchmark assessment changed")
+        allow_creation = False
+        if data.get("intent_id"):
+            from agentagon.experiments import journeys
+
+            allow_creation = journeys.load(workspace, data["intent_id"])["definition"]["discovery"][
+                "creation_authorized"
+            ]
         for entry in benchmark["snapshot"]["files"]:
-            if entry["kind"] != "dataset":
+            if allow_creation or entry["kind"] != "dataset":
                 continue
             file = checkouts.checked_file(prep, entry["path"])
             if hashlib.sha256(file.read_bytes()).hexdigest() != entry["digest"]:
@@ -488,7 +520,28 @@ def _outcome(spec: dict, trial: dict, result: dict, case: dict | None) -> dict:
                 )
     try:
         output = json.loads(result.get("benchmark_output") or "")
-        metrics, _ = evaluation.aggregate({**spec, "repetitions": 1}, [output["metrics"]])
+        if not isinstance(output, dict) or not isinstance(output.get("metrics"), dict):
+            raise ValueError("missing metrics")
+        emitted = {name: finite(value) for name, value in output["metrics"].items()}
+        missing = set(spec["metrics"]) - set(emitted)
+        judge = spec.get("scoring", {}).get("judge", {})
+        if missing and not (
+            judge.get("kind") == "coding-host"
+            and missing <= set(judge["metrics"])
+            and isinstance(output.get("outputs"), (list, dict))
+            and output["outputs"]
+        ):
+            raise ValueError("missing metrics")
+        measured_spec = {
+            **spec,
+            "repetitions": 1,
+            "metrics": {
+                name: definition
+                for name, definition in spec["metrics"].items()
+                if name not in missing
+            },
+        }
+        metrics, _ = evaluation.aggregate(measured_spec, [emitted])
         evaluation.task_metrics(spec, output)
     except (ValueError, KeyError, TypeError) as exc:
         raise AuditError("preparation benchmark must emit every declared numeric metric") from exc
@@ -498,6 +551,34 @@ def _outcome(spec: dict, trial: dict, result: dict, case: dict | None) -> dict:
             {"id": c["id"], "exit_code": c["exit_code"]} for c in commands if c["role"] == "check"
         ],
     }
+
+
+def _validate_admission(workspace: Workspace, data: dict, trial: dict) -> None:
+    if not data.get("budget_id"):
+        return
+    from agentagon.experiments.budget import BudgetLedger
+
+    operation = (
+        BudgetLedger(workspace, data["budget_id"]).snapshot()["operations"].get(trial["trial_id"])
+    )
+    if (
+        not operation
+        or operation.get("kind") != "evaluation"
+        or operation.get("units") != 1
+        or operation.get("status") != "completed"
+        or operation.get("deadline_exceeded")
+        or operation.get("result") != {"artifact": trial["artifact"]}
+        or operation.get("binding")
+        != {
+            "evaluation_id": data["evaluation_id"],
+            "validation_id": data["current_validation"],
+            "case_id": trial["case_id"],
+            "repetition": trial["repetition"],
+        }
+        or datetime.fromisoformat(trial["request"]["deadline_at"]).timestamp()
+        > operation["deadline"] + 0.000001
+    ):
+        raise AuditError("preparation trial lacks completed in-budget execution admission")
 
 
 def _metric_comparisons(plan: dict, trials: list[dict]) -> list[dict]:
@@ -549,6 +630,12 @@ def check(workspace: Workspace, evaluation_id: str, plan: dict) -> dict:
         if checkouts.clean_revision(workspace.root) != data["origin_revision"]:
             raise AuditError("application source changed; create a newly validated evaluation")
         plan = _plan(plan, data)
+        if data.get("intent_id"):
+            from agentagon.experiments import journeys
+
+            intent = journeys.load(workspace, data["intent_id"])["definition"]
+            if plan["spec"].get("scoring") != intent["scoring"]:
+                raise AuditError("evaluation scoring must match the accepted intent")
         revision, files = _snapshot(workspace, data, plan)
         mutations = {}
         for case in [*plan["negative_cases"], *plan.get("metric_cases", [])]:
@@ -586,12 +673,42 @@ def check(workspace: Workspace, evaluation_id: str, plan: dict) -> dict:
         data["state"] = "checking"
         _save(workspace, data)
         spec = plan["spec"]
+        if spec.get("scoring", {}).get("judge", {}).get("kind") == "coding-host" and not data.get(
+            "budget_id"
+        ):
+            from agentagon.experiments.budget import BudgetLedger
+
+            if data["usage"]["trials"]:
+                raise AuditError(
+                    "coding-host grading needs an overall ledger before the first trial; create a new evaluation draft"
+                )
+            remaining = int(
+                data["budget"]["max_elapsed_seconds"]
+                - (
+                    datetime.fromisoformat(now()) - datetime.fromisoformat(data["created_at"])
+                ).total_seconds()
+            )
+            if remaining <= 0:
+                raise AuditError("preparation budget exhausted before grading setup")
+            BudgetLedger(workspace, evaluation_id).create(
+                data["budget"]["max_trials"], remaining, journey="init"
+            )
+            data["budget_id"] = evaluation_id
+            _save(workspace, data)
         cases = [None, *plan["negative_cases"], *plan.get("metric_cases", [])]
         for case in cases:
             case_id = case["id"] if case else "baseline"
             for repetition, seed in enumerate(spec["seeds"]):
                 attempt_id = identifier("trial", evaluation_id, validation_id, case_id, repetition)
                 trial = next((t for t in record["trials"] if t["trial_id"] == attempt_id), None)
+                if trial and trial.get("state") == "awaiting_grading":
+                    from agentagon.experiments import grading
+
+                    if not grading.resume_evaluation(workspace, data, record, trial):
+                        data["state"] = "awaiting_grading"
+                        _save(workspace, data)
+                        return status(workspace, evaluation_id)
+                    _save(workspace, data)
                 if trial and trial.get("state") in {"passed", "failed"}:
                     continue
                 if not trial:
@@ -628,6 +745,27 @@ def check(workspace: Workspace, evaluation_id: str, plan: dict) -> dict:
                         "commands": evaluation.commands(data["profile"], spec, gate_checks=False),
                         "evidence_limits": data["profile"]["evidence"],
                     }
+                    if data.get("budget_id"):
+                        from agentagon.experiments.budget import BudgetLedger
+
+                        admitted = BudgetLedger(workspace, data["budget_id"]).admit(
+                            attempt_id,
+                            "preparation",
+                            timeout_seconds=request["timeout_seconds"],
+                            binding={
+                                "evaluation_id": evaluation_id,
+                                "validation_id": validation_id,
+                                "case_id": case_id,
+                                "repetition": repetition,
+                            },
+                        )
+                        request["timeout_seconds"] = min(
+                            request["timeout_seconds"], admitted["timeout_seconds"]
+                        )
+                        request["deadline_at"] = min(
+                            datetime.fromisoformat(request["deadline_at"]),
+                            datetime.fromtimestamp(admitted["deadline"], UTC),
+                        ).isoformat()
                     trial = {
                         "trial_id": attempt_id,
                         "case_id": case_id,
@@ -651,11 +789,40 @@ def check(workspace: Workspace, evaluation_id: str, plan: dict) -> dict:
                     return status(workspace, evaluation_id)
                 try:
                     trial["outcome"] = _outcome(spec, trial, result, case)
-                    trial["state"] = "passed"
+                    if set(spec["metrics"]) - set(trial["outcome"]["metrics"]):
+                        trial["state"] = "awaiting_grading"
+                    else:
+                        trial["state"] = "passed"
                 except AuditError as exc:
                     trial["state"], trial["error"] = "failed", str(exc)
-                _save(workspace, data)
+                if data.get("budget_id"):
+                    from agentagon.experiments.budget import BudgetLedger
+
+                    completed = BudgetLedger(workspace, data["budget_id"]).finish(
+                        attempt_id,
+                        status="completed"
+                        if trial["state"] in {"passed", "awaiting_grading"}
+                        else "failed",
+                        result={"artifact": trial["artifact"]},
+                    )
+                    if completed.get("deadline_exceeded"):
+                        trial["state"] = "failed"
+                        trial["error"] = (
+                            "preparation execution exceeded its admitted deadline; evidence retained"
+                        )
+                if trial["state"] == "awaiting_grading":
+                    from agentagon.experiments import grading
+
+                    try:
+                        grading.prepare_evaluation(workspace, data, record, trial)
+                    except AuditError as exc:
+                        trial["state"], trial["error"] = "failed", str(exc)
                 checkouts.remove(workspace.root, source)
+                if trial["state"] == "awaiting_grading":
+                    data["state"] = "awaiting_grading"
+                    _save(workspace, data)
+                    return status(workspace, evaluation_id)
+                _save(workspace, data)
         record["state"] = (
             "passed" if all(t["state"] == "passed" for t in record["trials"]) else "failed"
         )
@@ -678,10 +845,36 @@ def check(workspace: Workspace, evaluation_id: str, plan: dict) -> dict:
             "verdict": "pending",
             "rationale": "",
             "assessments": dict.fromkeys(sorted(ASSESSMENTS), False),
-            "evidence": [t["artifact"] for t in record["trials"]],
+            "evidence": [t["artifact"] for t in record["trials"]]
+            + [
+                t["grading"]["observation"]
+                for t in record["trials"]
+                if t.get("grading", {}).get("observation")
+            ],
         }
         _save(workspace, data)
     return status(workspace, evaluation_id)
+
+
+def _observed_trials(workspace: Workspace, data: dict, record: dict) -> list[dict]:
+    """Revalidate retained runner and grading evidence for freeze and delivery."""
+    observed = []
+    cases = [*record["plan"]["negative_cases"], *record["plan"].get("metric_cases", [])]
+    for trial in record["trials"]:
+        _validate_admission(workspace, data, trial)
+        result = read_result(workspace, trial["artifact"])
+        case = next((c for c in cases if c["id"] == trial["case_id"]), None)
+        outcome = _outcome(record["plan"]["spec"], trial, result, case)
+        if trial.get("grading"):
+            from agentagon.experiments import grading
+
+            outcome["metrics"] = grading.observed_evaluation(
+                workspace, data, record, trial, outcome["metrics"]
+            )
+            if outcome != trial["outcome"]:
+                raise AuditError("preparation measurements changed after validation")
+        observed.append({**trial, "outcome": outcome})
+    return observed
 
 
 def freeze(workspace: Workspace, evaluation_id: str, review: dict) -> dict:
@@ -728,15 +921,7 @@ def freeze(workspace: Workspace, evaluation_id: str, review: dict) -> dict:
             workspace.root, record["source_revision"]
         ):
             raise AuditError("benchmark changed after validation; run eval check again")
-        # Re-read the content-addressed observations instead of trusting supplied review prose.
-        observed_trials = []
-        cases = [*record["plan"]["negative_cases"], *record["plan"].get("metric_cases", [])]
-        for trial in record["trials"]:
-            result = read_result(workspace, trial["artifact"])
-            case = next((c for c in cases if c["id"] == trial["case_id"]), None)
-            observed_trials.append(
-                {**trial, "outcome": _outcome(record["plan"]["spec"], trial, result, case)}
-            )
+        observed_trials = _observed_trials(workspace, data, record)
         comparisons = _metric_comparisons(record["plan"], observed_trials)
         if comparisons != record.get("metric_comparisons", []) or not all(
             c["passed"] for c in comparisons
@@ -829,11 +1014,12 @@ def freeze(workspace: Workspace, evaluation_id: str, review: dict) -> dict:
     return status(workspace, evaluation_id)
 
 
-def fix_spec(workspace: Workspace, evaluation_id: str) -> dict:
+def fix_spec(workspace: Workspace, evaluation_id: str, *, reuse: bool = False) -> dict:
     data = load(workspace, evaluation_id)
     if data["state"] != "frozen":
         raise AuditError("fix requires a reviewed frozen evaluation")
-    if checkouts.clean_revision(workspace.root) != data["package"]["source_revision"]:
+    revision = checkouts.clean_revision(workspace.root)
+    if revision != data["package"]["source_revision"] and not reuse:
         raise AuditError(
             "evaluation source provenance changed; use eval start --from and revalidate"
         )
@@ -843,4 +1029,47 @@ def fix_spec(workspace: Workspace, evaluation_id: str) -> dict:
         content = checkouts.checked_file(workspace.root, entry["artifact"]).read_bytes()
         if hashlib.sha256(content).hexdigest() != entry["digest"]:
             raise AuditError("frozen evaluation input changed")
+    if reuse and revision != data["package"]["source_revision"]:
+        _compatible_source(workspace, data, revision)
     return copy.deepcopy(data["package"]["spec"])
+
+
+def evaluator_identity(workspace: Workspace, evaluation_id: str) -> str:
+    """Identify executable definitions independently of application commit or review branch."""
+    data = load(workspace, evaluation_id)
+    if data["state"] != "frozen":
+        raise AuditError("baseline requires a reviewed frozen evaluation")
+    package = data["package"]
+    spec = copy.deepcopy(package["spec"])
+    for kind in ("overlays", "inputs"):
+        for entry in spec[kind]:
+            entry.pop("source", None)
+    return digest(
+        {
+            "spec": spec,
+            "files": [
+                {k: v for k, v in entry.items() if k != "artifact"} for entry in package["files"]
+            ],
+        }
+    )
+
+
+def _compatible_source(workspace: Workspace, data: dict, revision: str) -> None:
+    """Reject drift inside protected paths, including newly added evaluator files."""
+    package = data["package"]
+    old = package["source_revision"]
+    protected = package["spec"]["evaluation_paths"]
+    frozen = {e["path"]: e for e in package["files"]}
+    for name in checkouts.changes(workspace.root, old, revision):
+        if not any(checkouts.under(name, p) for p in protected):
+            continue
+        entry = frozen.get(name)
+        file = workspace.root / name
+        if entry is None:
+            raise AuditError("evaluator compatibility failed: a protected path changed")
+        if entry.get("deleted") and not file.exists():
+            continue
+        if entry.get("deleted") or not file.is_file() or file.is_symlink():
+            raise AuditError("evaluator compatibility failed: a frozen file changed")
+        if hashlib.sha256(file.read_bytes()).hexdigest() != entry["digest"]:
+            raise AuditError("evaluator compatibility failed: a frozen file changed")

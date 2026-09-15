@@ -57,7 +57,7 @@ Building the site changes no cloud resources or DNS. See [Azure deployment confi
 
 ## Maintain the landing page and articles
 
-Website source lives in `website/`. The landing template preserves the approved causeway design; shared templates place the logo beside the wordmark, center the Docs and Blogs links, and provide the theme control and article layouts. Get Started opens the short first-audit guide. All required assets are checked in, so builds do not depend on sibling repositories.
+Website source lives in `website/`. The landing template preserves the approved causeway design; shared templates place the logo beside the wordmark, center the Docs and Blogs links, and provide the theme control and article layouts. Get Started opens the Init guide. All required assets are checked in, so builds do not depend on sibling repositories.
 
 Add articles as Markdown in `website/blogs/`. Frontmatter requires `title`, `description`, `author`, `published_at`, `updated_at`, and `original_url`. Filenames become `/blogs/<filename>/` routes. Use the approved publication dates and set the revision date to the actual edit date. The builder creates article metadata, related links, and permanent redirects from each original URL.
 

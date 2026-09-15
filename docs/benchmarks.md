@@ -17,7 +17,7 @@ Audit saves a **benchmark draft** with content-pinned dataset and entrypoint ref
 
 A runnable benchmark also needs trusted expectations, a harness, metrics, clean committed source, an execution profile and authorized limits. When ready, Audit continues through validation, baseline measurements, sensitivity checks and independent review. Otherwise it reports what is missing and completes the assessment.
 
-Audit preserves existing dataset contents. When no dataset exists, it proposes cases. Ask **ag:fix** to create or repair the dataset and prepare delivery. Dataset changes become a new evaluator version; coverage and sensitivity comparisons use fixed application source. Scores from changed datasets do not establish application improvement.
+Audit reuses suitable existing evals. If none exist or they are unusable, it proposes cases and confirms the finding and proposed creation/running before editing, unless that work was already requested. **ag:eval** is also independently available to create or repair evals and prepare delivery. Dataset changes become a new evaluator version; coverage and sensitivity comparisons use fixed application source. Scores from changed datasets do not establish application improvement.
 
 ## Direct commands
 

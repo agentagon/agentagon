@@ -1,6 +1,6 @@
 ---
 title: Introduction
-description: Audit, evaluate, and improve AI agents with evidence-backed findings and measured comparisons.
+description: Inspect and improve AI agents with measured fixes and custom scores.
 hide:
   - toc
 ---
@@ -17,9 +17,9 @@ hide:
 
 <div class="ag-intro" markdown>
 
-Agentagon helps you **audit, evaluate, and improve AI agents**. Investigate failures, build benchmarks, and compare fixes against a recorded baseline.
+Agentagon helps you **inspect and improve AI agents with measured fixes and custom scores**. Agree on behaviors and scoring, prepare reusable evals to establish a baseline, and compare independently verified improvements.
 
-Start with a code-only audit to investigate a concern, or [bring one known failure](getting-started/bring-one-failure.md) through evaluation and repair. An audit produces a saved report with evidence-backed findings and concrete recommendations for what to test next.
+[Inspect agent behavior](audit.md), [define scores and evals](init.md), or use [Fix](fix.md) to compare verified improvements and prepare a draft PR.
 
 </div>
 
@@ -33,12 +33,12 @@ For a seeded example using an actual model, follow the [ticket-retry demonstrati
 ## Your first run
 
 1. **Install** the CLI and plugin for your coding host.
-2. **Open your AI agent’s code repo** in Codex or Claude Code and request a code-only audit.
-3. **Read the report** and open the local dashboard to inspect findings and coverage.
+2. **Open your AI agent’s code repo** in Codex or Claude Code and run **ag:init**.
+3. **Agree on behaviors, scoring and limits**, then review the evaluator and measured baseline.
 
 <span id="before-you-begin"></span>
 
-You need macOS or Linux with Python 3.12+ and a working coding-agent session. A first audit needs no evaluation suite, execution traces, or Agentagon API key.
+You need macOS or Linux with Python 3.12+ and a working coding-agent session. Discovery needs no evaluation suite, execution traces, or Agentagon API key. Measurement needs a runnable application, clean committed inputs and agreed execution limits.
 
 The [quickstart](getting-started/first-audit.md) shows what to enter and how to recognize a completed result.
 
@@ -53,12 +53,12 @@ The [quickstart](getting-started/first-audit.md) shows what to enter and how to 
 
 | You want to | Start with | What you get |
 |---|---|---|
-| Understand all agents, one agent, local changes, or existing evals | [Audit](audit.md) | Findings, coverage gaps, a benchmark draft and a baseline when execution is ready. |
-| Repair a failure or improve code, prompts, tools, or evals | [Fix](fix.md) | Changes, validation and independent review, plus a local delivery package or requested PR. |
+| Inspect agent behavior and find failures | [Audit](audit.md) | Evidence-backed findings from code and execution traces. |
+| Improve saved goals or a named issue | [Fix](fix.md) | Bounded optimization, verified winner and alternatives, draft PR or local delivery. |
+| Define behaviors, custom scores and evals | [Init](init.md) | Accepted behaviors, scoring and limits, reviewed evals and a baseline. |
+| Inspect history, rerun or manage settings | [Dashboard](dashboard.md) | Baselines, benchmark and recent-trace results, comparisons and explicit controls. |
 
-Audit accepts optional traces and can focus on a particular issue's eval coverage. Fix accepts a known problem directly; a previous audit or benchmark is not required. It prepares missing evals and reports explicitly when baseline comparison is unavailable.
-
-[Setup](settings.md) and [Dashboard](dashboard.md) are supporting utilities. Evaluation preparation, review and delivery happen inside the two journeys. [Intelligence](intelligence.md) asks before each outgoing request unless you explicitly enable its full access mode.
+[Eval](eval.md) is independently callable for creating, repairing or validating evaluations. [Setup](settings.md), independent review and [delivery](delivery.md) support these workflows. [Intelligence](intelligence.md) requires its own consent before outgoing requests unless you explicitly enable full access.
 
 ## What runs where?
 
