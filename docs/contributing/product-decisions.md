@@ -42,7 +42,7 @@ Keep credentials as references and runtime evidence in the checkout's ignored `.
 
 The dashboard reads the same saved records as CLI status and reports. Its checkout scope makes the relationship between source, findings and experiments explicit. Opening it shows existing progress without starting an audit or model service.
 
-Skills open it automatically through the [shared dashboard lifecycle](../../skills/dashboard/SKILL.md#automatic-workflow-start). The coding host owns the background process, browser tab and active selection, reusing them within a session. Direct CLI operations do not implicitly launch a browser. An unavailable dashboard does not block the evidence workflow.
+Audit and Fix open it automatically through the [shared dashboard lifecycle](../../skills/dashboard/references/lifecycle.md). The coding host owns the background process, browser tab and active selection, reusing them within a session. Direct CLI operations and standalone Setup do not implicitly launch a browser. An unavailable dashboard does not block the evidence workflow.
 
 Controls are opt-in and use the CLI's validated operations. Work requiring the coding agent remains queued until the active host acknowledges it. See [inspection](../audit.md#review-resume-and-inspect) and [controls](../reference/fix.md#dashboard-controls-and-delivery).
 

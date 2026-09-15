@@ -87,6 +87,8 @@ def test_installs_and_updates_native_plugins_without_touching_unrelated_files(tm
     assert (plugin / "skills/audit/references/changes.md").is_file()
     assert (plugin / "skills/fix/references/delivery.md").is_file()
     assert (plugin / "skills/fix/references/evaluation.md").is_file()
+    assert (plugin / "skills/setup/references/profiles.md").is_file()
+    assert (plugin / "skills/dashboard/references/lifecycle.md").is_file()
     assert (plugin / "skills/eval/helpers/agentagon_events.py").is_file()
     assert sorted(path.parent.name for path in (plugin / "skills").glob("*/SKILL.md")) == sorted(
         installation.SKILLS
@@ -332,6 +334,8 @@ def test_real_codex_registers_and_enables_packaged_skills(tmp_path):
         "fix/references/contract.md",
         "fix/references/delivery.md",
         "fix/references/evaluation.md",
+        "setup/references/profiles.md",
+        "dashboard/references/lifecycle.md",
         "eval/helpers/agentagon_events.py",
         "eval/helpers/agentagon_events.cjs",
         "fix/references/roles.md",
@@ -363,6 +367,8 @@ def test_real_claude_registers_and_enables_packaged_skills(tmp_path):
         "fix/references/contract.md",
         "fix/references/delivery.md",
         "fix/references/evaluation.md",
+        "setup/references/profiles.md",
+        "dashboard/references/lifecycle.md",
         "eval/helpers/agentagon_events.py",
         "eval/helpers/agentagon_events.cjs",
         "fix/references/roles.md",

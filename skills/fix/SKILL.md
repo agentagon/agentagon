@@ -1,14 +1,13 @@
 ---
 name: fix
-description: Fix a described issue, trace failure, audit finding, or eval dataset; compare with a baseline when possible, independently review, and prepare local or PR delivery.
-argument-hint: "[problem, trace, finding, eval request, or improvement goal]"
+description: Change an agent application's code or evaluations for a described issue, trace failure, audit finding, or improvement goal; validate, independently review, and prepare delivery.
 ---
 
 # Agentagon fix
 
 At workflow start, run `agentagon telemetry skill_invoked --data '{"skill":"fix"}'` once per invocation. Add `"host":"codex"` or `"host":"claude-code"` when known. Honor opt-out and continue if the hook is unavailable. See [telemetry](../audit/references/telemetry.md).
 
-At start or resume, follow [automatic dashboard opening](../dashboard/SKILL.md#automatic-workflow-start). Reuse this checkout's dashboard through preparation, changes, review and delivery.
+At start or resume, follow the shared [dashboard lifecycle](../dashboard/references/lifecycle.md). Reuse this checkout's dashboard through preparation, changes, review and delivery.
 
 Own the complete request: establish the intended change, prepare checks, make the change, validate, independently review and prepare delivery. The user does not need to invoke a separate evaluation or shipping skill. Read the procedure for the active stage only.
 

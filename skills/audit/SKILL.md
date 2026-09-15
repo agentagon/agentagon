@@ -1,14 +1,13 @@
 ---
 name: audit
-description: Audit all agents, one agent, local changes, or existing evals; optionally use traces and prepare a reproducible benchmark with baseline readiness.
-argument-hint: "[agent, changes, eval dataset, issue coverage, or audit goal]"
+description: Assess an agent application's code, local changes, traces, or existing evaluations without implementing changes; report evidence and benchmark readiness.
 ---
 
 # Agentagon audit
 
 At workflow start, run `agentagon telemetry skill_invoked --data '{"skill":"audit"}'` once per invocation. Add `"host":"codex"` or `"host":"claude-code"` when known. Honor opt-out and continue if the hook is unavailable. See [telemetry](references/telemetry.md).
 
-At start or resume, follow [automatic dashboard opening](../dashboard/SKILL.md#automatic-workflow-start). Reuse this checkout's dashboard throughout the journey and select the active record when its ID is known.
+At start or resume, follow the shared [dashboard lifecycle](../dashboard/references/lifecycle.md). Reuse this checkout's dashboard throughout the journey and select the active record when its ID is known.
 
 Audit assesses existing code and evaluations. The coding host reasons; Python captures evidence, validates records and runs declared checks. Audit can prepare a benchmark and measure a baseline within authorized limits. Application changes and creation or repair of dataset contents belong to [Fix](../fix/SKILL.md).
 
@@ -27,14 +26,14 @@ Run `agentagon --workspace CODEBASE init` and `status`. Initialization stores pr
 
 For full code investigation, use `audit start --code-scope full` with optional repeated `--scope PATH`, `--goal TEXT` and host/model identity. Honor explicit `code`, `traces` or `combined` mode. Otherwise use combined when traces are enabled for this checkout, and code otherwise. Changes-only audits default to code without connecting traces; include them only when explicitly requested and tied to the captured changes.
 
-Local exports need no provider connection. For provider traces obtain a timezone-aware range and a positive count or `all`, asking only for missing choices. Treat supplied traces as relevant without another confirmation, but retain the returned `trace_alignment.warning`. A matching HEAD does not prove traces reflect uncommitted files; a clean revision match is still an assumption unless provenance supports it. Missing Git does not block trace analysis. See [acquisition](references/acquisition.md) and [formats](references/formats.md).
+When the selected mode includes traces, follow [acquisition](references/acquisition.md) and [supported formats](references/formats.md). Local exports need no provider connection. Retain trace-alignment warnings; a matching HEAD does not prove traces reflect uncommitted files, and a clean revision match remains an assumption unless provenance supports it. Missing Git does not block trace analysis.
 
 The goal changes emphasis within the chosen scope. Every applicable fixed rubric facet and evidence standard still applies. See [commands and records](references/records.md).
 
 ## Investigate and establish measurement
 
 1. Establish requirements and expected outcomes from source and permitted evidence. If Intelligence is configured, follow the shared [approval and request procedure](references/intelligence.md): show every outgoing request and wait for approval unless the user explicitly set Intelligence to full access. Declining or missing access never blocks this journey.
-2. Acquire permitted traces through the relevant [provider recipe](references/acquisition.md). Present the acquisition plan before fetching bodies. Inspect diagnostics and coverage before making claims.
+2. When traces are in scope, acquire them through the relevant [provider recipe](references/acquisition.md). Present the acquisition plan before fetching bodies. Inspect diagnostics and coverage before making claims.
 3. Follow [analysis](references/analysis.md). Prepare and submit evidence, diagnosis and clustering packets in order. Unread evidence cannot support a clean result. Use the same approved-request procedure for any useful Intelligence follow-up.
 4. Discover existing evals from configuration, entry points and tests, not filenames alone. Assess general gaps or the selected issue's coverage using [benchmarks](references/benchmarks.md). Preserve grounded expectations; observed outputs are not ground truth.
 5. Save a content-pinned benchmark draft for existing evals. When a clean committed source, trustworthy checks, an execution profile and authorized limits are available, continue through internal [evaluation preparation](../fix/references/evaluation.md). Keep dataset contents unchanged in Audit; if they need repair, record that next action for Fix. A private harness or wrapper may connect existing evals to execution. Declare readiness only after sensitivity checks and independent review allow freezing.
