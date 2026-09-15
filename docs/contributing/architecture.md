@@ -8,7 +8,7 @@ Start with the [local example](../../examples/local-audit/README.md) to see an e
 
 Both `agentagon` and `python -m agentagon` call the Click command group in [cli/main.py](../../src/agentagon/cli/main.py). The executable is declared in [pyproject.toml](../../pyproject.toml); module execution uses [__main__.py](../../src/agentagon/__main__.py).
 
-The bundled [skills](../../skills/) expose `audit`, `fix`, `setup` and `dashboard`. Changes review, evaluation preparation and delivery remain internal Audit/Fix procedures with low-level CLI operations. [installation.py](../../src/agentagon/installation.py) copies the skills and their references into a managed local marketplace and invokes each host's native plugin manager.
+The bundled [skills](../../skills/) expose primary `init`, `fix` and `dashboard` journeys plus standalone `audit`, `eval` and supporting `setup`. Shared eval authoring, independent review and delivery compose these journeys using validated low-level CLI operations. [installation.py](../../src/agentagon/installation.py) copies the skills and their references into a managed local marketplace and invokes each host's native plugin manager.
 
 The [native hook bundle](../../hooks/hooks.json) invokes the hidden `agentagon fix hook` command for host lifecycle events. [Hook handling](../../src/agentagon/experiments/hooks.py) preserves session context and continuation state; a session-start event does not launch work. Runners invoke [worker.py](../../src/agentagon/experiments/worker.py) separately to execute trial commands.
 

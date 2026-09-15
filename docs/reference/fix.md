@@ -2,6 +2,8 @@
 
 Describe the change you want to your coding agent. It prepares the configuration and runs the commands. For your first comparison, follow [Measure candidate fixes](../fix.md).
 
+The current primary journey uses [Omni and one overall budget](../fix.md). This reference retains the low-level execution profiles, search policies and controls used by historical runs. These compatibility policies are not the new journey's optimizer choices.
+
 The prompts below are examples. Replace IDs, paths, metrics, and limits to fit your application.
 
 | Task | In Codex | In Claude Code |
@@ -30,7 +32,7 @@ For remote execution, name your SSH host or E2B template and the inputs it may r
 
     Start in a clean application Git checkout with an existing commit. Initialize ignored local state with `agentagon --workspace CHECKOUT init` if needed. Keep run specifications, private data and review responses in `.agentagon/`; do not commit them merely to satisfy the clean-checkout requirement. Existing unrelated edits must be handled by their owner before starting a run.
 
-    If Git or the initial commit is missing, `ag:fix` and `ag:fix` stop, explain what is missing, and ask you to set it up or approve setup by the agent. They do not fall back to an untracked manual fix. Authorized setup reviews the files and ignore rules, excludes private state and credentials, and creates a local application baseline before resuming. It does not create a remote or publish code. `agentagon init` initializes Agentagon state, not a Git repository.
+    If Git or the initial commit is missing, measured `ag:eval` and `ag:fix` execution stops, explain what is missing, and ask you to set it up or approve setup by the agent. They do not fall back to an untracked manual fix. Authorized setup reviews the files and ignore rules, excludes private state and credentials, and creates a local application baseline before resuming. It does not create a remote or publish code. `agentagon init` initializes Agentagon state, not a Git repository.
 
     Choose a named execution profile through `ag:setup`. The first use requires explicit limits for candidates, trials, elapsed time, candidate/trial concurrency and individual trial timeout. Reuse the saved profile for later runs. This example illustrates the shape; choose limits appropriate to the authorized work before saving it:
 
@@ -338,3 +340,15 @@ Tell the coding agent when you are ready to publish. See [the delivery guide](..
 A verified candidate passed the frozen benchmark's checks and constraints and received an accepted independent review tied to its source snapshot and trial evidence. Choose benchmark cases and expected outcomes that represent your goal; verification applies to those cases, and deployment outcomes still need measurement.
 
 Repeated trials and retained inputs help compare candidates, but external models and services can vary between runs. Use the reported variation when judging an improvement. Configure and check the selected [execution environment](#configure-execution-once) before running a benchmark.
+
+## Native optimizer commands
+
+Configure the current host before proposing candidates, then advance the same run after servicing its pending host requests:
+
+```sh
+agentagon fix optimize RUN_ID --intent INTENT_ID --host ACTUAL_HOST --model ACTUAL_MODEL --engine omni --host-concurrency ACTUAL_CAPACITY
+agentagon fix optimize-status RUN_ID
+agentagon fix optimize RUN_ID
+```
+
+Standalone advanced engines are `gepa`, `autoresearch` and `meta_harness`. Explicit Meta-Harness overrides use `--meta-harness-host` and `--meta-harness-model`; judge configuration stays separate. The host follows the [durable request/reply procedure](../../skills/fix/references/native-host.md). Proposals contain source changes; only bounded Agentagon execution and bound grading observations supply scores.

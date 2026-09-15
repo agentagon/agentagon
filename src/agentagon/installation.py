@@ -11,7 +11,7 @@ from pathlib import Path
 from agentagon.core.records import AuditError, resource_path
 
 HOSTS = {"codex": "codex", "claude-code": "claude"}
-SKILLS = ("audit", "fix", "setup", "dashboard")
+SKILLS = ("init", "fix", "dashboard", "audit", "eval", "setup")
 MARKETPLACE = "agentagon-local"
 PLUGIN_ID = f"ag@{MARKETPLACE}"
 MARKER = ".agentagon-managed.json"
@@ -89,8 +89,9 @@ def install_plugins(hosts: list[str] | None = None, *, home: Path | None = None)
         "hosts": results,
         "skills": [f"ag:{name}" for name in SKILLS],
         "deferred": [],
-        "next": "Start a new coding-agent session. Use ag:audit for local changes or "
-        "a full codebase audit, or ag:fix to improve code or evaluations and prepare delivery. In Claude Code prefix with /; "
+        "next": "Start a new coding-agent session. Use ag:init to agree on goals and establish "
+        "a baseline, ag:fix to improve it, or ag:dashboard to inspect results and settings. "
+        "Audit and Eval remain available for focused work. In Claude Code prefix with /; "
         "in Codex use the skill picker.",
     }
 
@@ -178,8 +179,8 @@ def _plugin_entry(host: str, listing) -> dict | None:
 def _sync_bundle(root: Path) -> str:
     """Update only files recorded as ours; preserve unrelated host files and source additions."""
     payload = {}
-    # Evaluation helpers and contracts are internal resources, without an exposed skill.
-    for name in (*SKILLS, "eval"):
+    # Copy entry points together with their shared references and execution helpers.
+    for name in SKILLS:
         source = resource_path(f"skills/{name}")
         for path in sorted(source.rglob("*")):
             relative = path.relative_to(source)

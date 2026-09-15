@@ -1,7 +1,5 @@
 """Measured multiobjective comparisons, without scalar admission shortcuts."""
 
-import statistics
-
 from agentagon.core.records import AuditError
 from agentagon.experiments.spec import finite
 
@@ -38,7 +36,12 @@ def aggregate(spec: dict, samples: list[dict]) -> tuple[dict, dict]:
         if any(name not in sample for sample in samples):
             raise AuditError("benchmark omitted a declared metric")
         values = [finite(sample[name]) for sample in samples]
-        metrics[name] = statistics.median(values)
+        from agentagon.experiments.scoring import AGGREGATIONS
+
+        aggregation = (
+            spec.get("scoring", {}).get("metrics", {}).get(name, {}).get("aggregation", "median")
+        )
+        metrics[name] = AGGREGATIONS[aggregation](values)
         variation[name] = {"min": min(values), "max": max(values), "samples": values}
     return metrics, variation
 

@@ -9,6 +9,7 @@
   <script src="/theme.js"></script>
   <link rel="stylesheet" href="/app.css">
   <script src="/workflow.js" defer></script>
+  <script src="/journeys.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -30,9 +31,11 @@
       <h1 id="workspace-name">Audit dashboard</h1>
       <p id="workspace-path" class="workspace-path"></p>
       <div class="view-switcher" role="group" aria-label="Dashboard view">
+        <button id="view-baselines" class="button" type="button" aria-pressed="false">Baselines</button>
         <button id="view-audit" class="button" type="button" aria-pressed="true">Audits</button>
         <button id="view-fix" class="button" type="button" aria-pressed="false">Fix runs</button>
         <button id="view-eval" class="button" type="button" aria-pressed="false">Evaluations</button>
+        <button id="view-settings" class="button" type="button" aria-pressed="false">Settings</button>
       </div>
       <div id="audit-history">
         <label for="audit-select">Audit and review history</label>
@@ -50,6 +53,8 @@
     </aside>
     <main id="main" tabindex="-1">
       <p id="announcement" class="sr-only" aria-live="polite"></p>
+      <section id="baselines" aria-labelledby="baselines-heading" hidden><h2 id="baselines-heading">Baseline history</h2><p class="muted">Fixed benchmarks and recent traces are separate populations. Trace scores do not establish controlled improvement between commits.</p><div id="baseline-history"></div></section>
+      <section id="settings" aria-labelledby="settings-heading" hidden><h2 id="settings-heading">Settings and connections</h2><p class="muted">Changes apply to this checkout. Credential fields accept environment variable names.</p><div id="settings-content"></div></section>
       <div id="error" class="error" role="alert" hidden></div>
       <section id="journey-results" class="workflow-section" aria-labelledby="journey-heading" hidden><h2 id="journey-heading"></h2><div id="journey-items"></div></section>
       <div id="loading" class="empty"><p class="eyebrow">Audit workspace</p><h2>Loading local audits…</h2></div>

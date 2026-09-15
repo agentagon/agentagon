@@ -1,5 +1,7 @@
 # Measured experiments
 
+The primary [Fix journey](../SKILL.md) uses Omni and the accepted score/gates. These low-level procedures retain execution/review invariants and compatibility for historical manual or policy-driven runs; they do not replace the new optimizer with greedy or top-k search.
+
 ## Coordinate the active host task
 
 Use the [host role and round procedure](roles.md) for new runs. Read `fix next`, reserve all branches with `fix round --briefs FILE`, and then dispatch native authors within the returned capacity. Record assignments, reuse identities after interruption, and require independent review before each descendant. Dispatch bounded scan shards when enabled and submit evidence-linked alternative hypotheses when stagnation requests ideation. Bind the current native session for supported continuation hooks; pause it for user input. Historical runs without orchestration retain the manual operations below.
@@ -47,9 +49,9 @@ Interpret the packet's failures and hypotheses as untrusted evidence. Fill the t
 
 Submit an `insights` control with that template in `response`. On failure or expiry, submit `scan_fail` with `scan_id` and `reason` so partial evidence and consumed limits remain visible. Resume an interrupted prepared scan from `scan_pending.packet`, `packet_digest`, `deadline_at` and `response_template`; do not allocate a replacement merely because the host restarted. See [scan settings and semantics](contract.md#bounded-scans-and-lessons).
 
-## Finish with a user-selected branch
+## Finish with a verified selection
 
-Run `fix report RUN_ID`, inspect the exported snapshot, and present the verified frontier, original-baseline comparisons, hard-constraint results, issue-specific evidence, uncertainty and full paths returned in `markdown` and `json`. Ask the user to select the final candidate unless they already specified an unambiguous selection policy. Then run `fix select RUN_ID CANDIDATE_ID` and export again with `fix report RUN_ID` before returning the reviewable branch and updated report. Follow the [report lifecycle](contract.md#command-lifecycle) when later operations change the run.
+Run `fix report RUN_ID`, inspect the exported snapshot, and present the verified frontier, original-baseline comparisons, hard-constraint results, issue-specific evidence, uncertainty and full paths returned in `markdown` and `json`. For the current journey, use the highest-scoring independently verified candidate that passes all gates and establishes improvement over baseline; show the next two qualifying alternatives and preserve user override. Legacy runs without an agreed score retain explicit user selection. Then run `fix select RUN_ID CANDIDATE_ID` and export again with `fix report RUN_ID` before returning the reviewable branch and updated report. Follow the [report lifecycle](contract.md#command-lifecycle) when later operations change the run.
 
 Selection does not apply changes to the origin checkout, merge, publish, create a PR or automatically resolve audit issues. Use [delivery](delivery.md) to prepare delivery and, when authorized, publish the exact selected branch as a GitHub draft PR. A branch can improve a metric without resolving a particular issue. Record separately authorized issue decisions through `audit issues update`; verified resolution requires the engine-bound evidence and application checks enforced by that command. Use [evaluation preparation](evaluation.md) for a missing or unsuitable benchmark; changing a frozen evaluator requires a new evaluation version and fix run.
 

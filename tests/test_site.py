@@ -36,7 +36,7 @@ def test_public_routes_metadata_and_sitemap(built_site):
         html = (built_site / post["path"].strip("/") / "index.html").read_text()
         assert f'href="https://agentagon.ai{post["path"]}"' in html
         assert '"@type": "TechArticle"' in html
-        assert 'href="/docs/getting-started/first-audit/#your-first-audit"' in html
+        assert 'href="/docs/init/"' in html
         assert 'href="/docs/getting-started/install/"' in html
         assert 'href="/auth' not in html
 

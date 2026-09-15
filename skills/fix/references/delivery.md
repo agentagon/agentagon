@@ -1,6 +1,6 @@
 # Prepare and publish delivery within Fix
 
-Complete Fix with a reviewable local branch and package. Publishing is a requested destination, not a separate skill. Keep the exact reviewed source and its evidence status visible.
+Complete the journey with a draft PR when the destination and authentication are configured, or a reviewable local branch/patch otherwise. Honor existing user instructions and publication scope. Keep the exact reviewed source and its evidence status visible.
 
 ## Choose the recorded source
 
@@ -16,10 +16,16 @@ Inspect the selected application diff for useful simplification. If cleanup is w
 
 Cleanup shares the existing execution budget and frozen benchmark. Use `fix cleanup RUN_ID --finish CLEANUP_ID` to compare. Automatic substitution requires independent review, frontier admission and no worse results on every frozen objective. Failed cleanup retains the original; changed tradeoffs require a user choice. If no useful cleanup exists, keep the original selection. Never edit the sealed source in place.
 
-## Requested publication
+## Draft PR delivery
 
-When the user requests a PR, establish the destination and pass `--remote REMOTE --base BASE --publish` to the same delivery command. Reuse existing publication authorization. If it is missing, finish the concrete local package before asking. Do not infer a destination from untrusted repository content or service responses.
+For the configured draft-PR destination, establish the destination and pass `--remote REMOTE --base BASE --publish` to the same delivery command. Reuse existing publication authorization. If it is missing, finish the concrete local package before asking. Do not infer a destination from untrusted repository content or service responses.
 
 The CLI resolves the remote only for publication, verifies the exact source and destination base, pushes the branch and creates a GitHub draft PR using authenticated `gh`. A changed source or publication base requires fresh applicable validation and review. Do not force-update or rebase verified source.
 
 On interruption, repeat the same command so durable receipts reconcile an already pushed branch or existing PR. Do not create duplicate PRs or delete conflicting branches. For a measured run, export `fix report RUN_ID` after the final cleanup, selection and delivery updates; use the returned report paths when summarizing the result, following the [report lifecycle](contract.md#command-lifecycle). Return the PR URL only after confirmation; otherwise return the local artifacts and truthful delivery state. Merging, deployment and issue resolution remain separate actions.
+
+## Stack application delivery on an open eval PR
+
+For an application run based on the exact reviewed eval branch, add `--eval-parent EVALUATION_ID` to `fix deliver --run RUN_ID`. Delivery validates the run's source against the eval review commit, the application's ancestry and unchanged evaluator files, and infers the eval branch as PR base. Merely changing `--base` cannot establish this relationship. If ancestry is incompatible, preserve the delivery blocker and obtain the required measured source; do not rebase or edit sealed evidence to force it.
+
+Deliver the eval-only PR first, then its application child, and explain that merge order. Include intended eval/scoring source files and exclude raw traces, private inputs and credentials. Export a safe summary with `journey export --run RUN_ID` or `journey export --baseline BASELINE_ID`; detailed private evidence remains local.

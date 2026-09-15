@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agreed behavior and scoring definition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "mode",
+    "metrics",
+    "behaviors",
+    "source_paths"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "mode": {
+      "enum": [
+        "primary",
+        "weighted",
+        "custom"
+      ]
+    },
+    "primary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "custom_metric": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target": {
+      "type": "number"
+    },
+    "metrics": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "direction",
+          "aggregation",
+          "missing",
+          "unit"
+        ],
+        "properties": {
+          "direction": {
+            "enum": [
+              "min",
+              "max"
+            ]
+          },
+          "aggregation": {
+            "enum": [
+              "mean",
+              "median",
+              "min",
+              "max",
+              "sum"
+            ]
+          },
+          "missing": {
+            "enum": [
+              "unknown",
+              "fail"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1
+          },
+          "weight": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "scale": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        }
+      }
+    },
+    "behaviors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "description",
+          "required"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "check": {
+            "type": "string",
+            "minLength": 1
+          },
+          "metric": {
+            "type": "string",
+            "minLength": 1
+          },
+          "op": {
+            "enum": [
+              "gte",
+              "lte"
+            ]
+          },
+          "bound": {
+            "type": "number"
+          },
+          "rubric": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "check"
+            ]
+          },
+          {
+            "required": [
+              "metric",
+              "op",
+              "bound"
+            ]
+          }
+        ]
+      }
+    },
+    "source_paths": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "judge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "rubric_path",
+        "rubric_version",
+        "metrics"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "api",
+            "coding-host"
+          ]
+        },
+        "rubric_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rubric_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "api_key_env": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "calibration_evidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "min",
+              "max"
+            ],
+            "properties": {
+              "min": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        "trace_command": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "argv"
+          ],
+          "properties": {
+            "argv": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "cwd": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "trace_input_path": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

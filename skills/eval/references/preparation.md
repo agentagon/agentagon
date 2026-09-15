@@ -58,4 +58,8 @@ Every added case consumes one trial per seed under the same preparation budget. 
 
 Results retain `metric_comparisons` with observed values, improvement and pass status, or a `metric_comparison_error` when the required correct observations are unavailable. A failed comparison prevents freezing. The independent reviewer checks the claimed ranking and its provenance; freeze recomputes comparisons from retained observations. Metric cases stay in private preparation evidence and are not exported as application changes.
 
-`eval freeze` exports `.agentagon/evaluations/EVALUATION_ID/fix-spec.json` and a local `codex/eval/EVALUATION_ID` review branch. `fix start --evaluation` requires the exact original committed application revision. Use `eval start --from` and validate again when source or evaluation changes. Old packages remain readable and are never rewritten.
+`eval freeze` exports `.agentagon/evaluations/EVALUATION_ID/fix-spec.json` and a local `codex/eval/EVALUATION_ID` review branch. Compatibility checks allow the same frozen evaluator to measure later clean committed application revisions through `baseline start` or `baseline rerun`. Use `eval start --from` and validate again when evaluator data, behaviors, scoring or judge configuration changes. Old packages remain readable and are never rewritten.
+
+## Agreed scoring
+
+`spec.scoring` optionally supplies the versioned score definition accepted through the [shared authoring procedure](authoring.md). Protect all `source_paths` as evaluation files. It records original metric units/directions/aggregation, missing-data policy, behavior-to-check mappings, required gates, optional target and frozen judge configuration. The agreed score does not replace correctness checks, sensitivity evidence or independent review. Historical specifications without this field remain readable.

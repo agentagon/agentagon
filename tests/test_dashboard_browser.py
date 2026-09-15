@@ -11,6 +11,58 @@ from agentagon.experiments import engine, preparation
 playwright = pytest.importorskip("playwright.sync_api", reason="install the browser extra")
 
 
+@pytest.mark.parametrize(
+    "state,pending", [("complete", None), ("pending", "Complete grading in your coding host")]
+)
+def test_baseline_history_and_explicit_rerun_in_browser(application, monkeypatch, state, pending):
+    import threading
+
+    from test_dashboard_journeys import dashboard
+
+    from agentagon.experiments import baselines
+
+    record = {
+        "baseline_id": "baseline_" + "a" * 24,
+        "evaluation_id": "eval_" + "a" * 24,
+        "branch": "main",
+        "source_revision": "a" * 40,
+        "evaluator_digest": "f" * 64,
+        "state": state,
+        "pending_action": pending,
+        "benchmark_score": {"value": 0.9},
+        "recent_traces": {
+            "state": "partial",
+            "score": None,
+            "provider": "langfuse",
+            "alignment": "unknown",
+        },
+    }
+    advanced = threading.Event()
+    monkeypatch.setattr(baselines, "list_baselines", lambda workspace: [record])
+    monkeypatch.setattr(baselines, "public_projection", lambda value: value)
+    monkeypatch.setattr(baselines, "rerun", lambda workspace, baseline_id, **kwargs: record)
+    monkeypatch.setattr(baselines, "advance", lambda workspace, baseline_id: advanced.set())
+    with dashboard(application) as server, playwright.sync_playwright() as driver:
+        browser = driver.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": 360, "height": 900})
+            page.goto(f"http://127.0.0.1:{server.server_port}/?view=baselines")
+            playwright.expect(page.get_by_role("heading", name="Baseline history")).to_be_visible()
+            playwright.expect(page.locator(".baseline-scores")).to_contain_text("Fixed benchmark")
+            playwright.expect(page.locator(".baseline-scores")).to_contain_text("Recent traces")
+            assert not advanced.is_set()
+            if pending:
+                playwright.expect(page.locator(".baseline-card .pending")).to_contain_text(pending)
+            page.get_by_role("button", name="Rerun baseline").click()
+            playwright.expect(page.locator(".baseline-card [role=status]")).to_contain_text(
+                "survives closing the page"
+            )
+            assert advanced.wait(timeout=5)
+            assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        finally:
+            browser.close()
+
+
 @pytest.mark.parametrize("width", [360, 1280])
 def test_saved_issue_handoff_copies_a_scoped_request_without_starting_work(
     workspace, imported, width

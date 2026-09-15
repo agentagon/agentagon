@@ -337,6 +337,137 @@ def _fix_variation(value: object) -> dict:
     return variation
 
 
+def _score_projection(value: object) -> dict:
+    """Only agreed measurement fields belong in public score summaries."""
+    if _fix_number(value):
+        return {"state": "measured", "score": value}
+    if not isinstance(value, dict):
+        return {"state": "unmeasured", "score": None}
+    result = {
+        key: value[key]
+        for key in ("state", "judging", "population")
+        if isinstance(value.get(key), str)
+    }
+    result.update(
+        {
+            key: value[key]
+            for key in ("eligible_count", "measured_count", "acquisition_count")
+            if type(value.get(key)) is int
+        }
+    )
+    result["score"] = value.get("value") if _fix_number(value.get("value")) else None
+    result["metrics"] = _fix_measurements(value.get("metrics"))
+    for key in ("eligible", "target_reached"):
+        if isinstance(value.get(key), bool):
+            result[key] = value[key]
+    for key in ("components", "behaviors", "gates"):
+        items = value.get(key, [])
+        if isinstance(items, dict):
+            items = [
+                {"id": name, **(entry if isinstance(entry, dict) else {"value": entry})}
+                for name, entry in items.items()
+            ]
+        result[key] = (
+            [
+                {
+                    field: entry[field]
+                    for field in (
+                        "id",
+                        "metric",
+                        "direction",
+                        "unit",
+                        "state",
+                        "passed",
+                        "required",
+                        "value",
+                        "score",
+                        "weight",
+                    )
+                    if isinstance(entry.get(field), (str, bool))
+                    or _fix_number(entry.get(field))
+                    or (field in entry and entry[field] is None)
+                }
+                for entry in items
+                if isinstance(entry, dict)
+            ]
+            if isinstance(items, list)
+            else []
+        )
+    return result
+
+
+def _scoring_definition_projection(value: dict) -> dict:
+    result = {
+        key: value[key]
+        for key in ("version", "mode", "primary", "custom_metric", "target")
+        if key in value
+    }
+    result["metrics"] = {
+        name: {
+            key: metric[key]
+            for key in ("direction", "unit", "aggregation", "missing", "weight", "scale")
+            if key in metric
+        }
+        for name, metric in value.get("metrics", {}).items()
+    }
+    result["behaviors"] = [
+        {
+            key: behavior[key]
+            for key in ("id", "description", "required", "check", "metric", "op", "bound")
+            if key in behavior
+        }
+        for behavior in value.get("behaviors", [])
+    ]
+    judge = value.get("judge", {})
+    result["judge"] = {
+        key: judge[key] for key in ("kind", "rubric_version", "host", "model") if key in judge
+    }
+    return result
+
+
+def _top_comparisons(data: dict, candidates: list[dict]) -> dict:
+    from agentagon.experiments import scoring
+
+    baseline_id = data.get("baseline_id")
+    baseline = next((candidate for candidate in candidates if candidate["id"] == baseline_id), {})
+    ranked = scoring.qualifying(data) if data.get("spec", {}).get("scoring") else []
+    originals = ranked
+    raw = data.get("candidates", {})
+    if data.get("optimizer_configured"):
+        ranked = [entry for entry in ranked if raw[entry["candidate_id"]].get("verification_of")]
+    selected_id = (data.get("selected") or {}).get("candidate_id")
+    ranked = sorted(ranked, key=lambda entry: entry["candidate_id"] != selected_id)
+    displayed = {candidate["id"]: candidate for candidate in candidates}
+    alternatives, seen = [], set()
+    for entry in ranked:
+        candidate = raw[entry["candidate_id"]]
+        source = (
+            candidate.get("source_digest")
+            or candidate.get("source_revision")
+            or entry["candidate_id"]
+        )
+        if source in seen:
+            continue
+        seen.add(source)
+        alternatives.append(displayed[entry["candidate_id"]])
+        if len(alternatives) == 3:
+            break
+    result = "verified_improvement" if alternatives else "baseline_retained"
+    if not alternatives and data.get("optimizer_configured") and originals:
+        finals = [candidate for candidate in raw.values() if candidate.get("verification_of")]
+        if not finals or any(
+            candidate.get("state") not in {"verified", "failed", "rejected", "cancelled"}
+            for candidate in finals
+        ):
+            result = "final_verification_pending"
+    return {
+        "baseline": baseline_id,
+        "baseline_score": baseline.get("score", {}).get("score"),
+        "alternatives": alternatives,
+        "result": result,
+    }
+
+
 def _fix_candidate(candidate: dict, candidate_id: str, *, invalidated: bool = False) -> dict:
     constraints = []
     for constraint in candidate.get("constraints") or []:
@@ -372,6 +503,7 @@ def _fix_candidate(candidate: dict, candidate_id: str, *, invalidated: bool = Fa
     return {
         "id": _fix_text(candidate.get("candidate_id"), candidate_id),
         "parent_id": _fix_text(candidate.get("parent_id")) or None,
+        "source_revision": _fix_text(candidate.get("source_revision")) or None,
         "hypothesis": _fix_text(candidate.get("hypothesis")),
         "state": _fix_text(candidate.get("state"), "unknown"),
         "display_state": "invalidated"
@@ -381,6 +513,7 @@ def _fix_candidate(candidate: dict, candidate_id: str, *, invalidated: bool = Fa
         "expansion_exhausted": bool(candidate.get("expansion_exhausted", False)),
         "feasible": bool(candidate.get("feasible", False)),
         "metrics": _fix_measurements(candidate.get("metrics")),
+        "score": _score_projection(candidate.get("score")),
         "variation": _fix_variation(candidate.get("variation")),
         "task_metrics": _fix_measurements(candidate.get("task_metrics")),
         "task_variation": _fix_variation(candidate.get("task_variation")),
@@ -561,7 +694,7 @@ def build_fix_report(workspace: Workspace, run_state: dict) -> dict:
     This is shared by saved reports and the HTTP viewer. Do not pass
     through the engine's status response: it contains private execution state.
     """
-    from agentagon.experiments import evaluation
+    from agentagon.experiments import evaluation, scoring
     from agentagon.experiments.controls import projection
 
     raw_candidates = {
@@ -571,7 +704,9 @@ def build_fix_report(workspace: Workspace, run_state: dict) -> dict:
     }
     candidates = [
         _fix_candidate(
-            candidate,
+            {**candidate, "score": scoring.candidate_score(run_state, candidate)}
+            if run_state.get("spec", {}).get("scoring")
+            else candidate,
             cid,
             invalidated=evaluation.invalidated(
                 {**run_state, "candidates": raw_candidates}, candidate
@@ -610,6 +745,7 @@ def build_fix_report(workspace: Workspace, run_state: dict) -> dict:
             if isinstance(item, str) and item in valid_ids
         ],
         "candidates": candidates,
+        "comparisons": _top_comparisons(run_state, candidates),
         "rounds": [
             {
                 key: round_[key]
@@ -669,6 +805,151 @@ def build_fix_report(workspace: Workspace, run_state: dict) -> dict:
 
 def _fix_cell(value: object) -> str:
     return _plain(value).replace("|", "\\|").replace("`", "\\`")
+
+
+def build_journey_report(
+    workspace: Workspace, *, baseline_id: str | None = None, run_id: str | None = None
+) -> dict:
+    """Build a shareable report from whitelisted projections, without writing on reads."""
+    from agentagon.core.records import AuditError
+
+    if (baseline_id is None) == (run_id is None):
+        raise AuditError("report requires exactly one baseline or run")
+    report = {
+        "version": 1,
+        "limits": [
+            "Benchmark scores and recent traces describe separate populations.",
+            "Changing trace populations do not establish controlled application improvement.",
+            "Raw traces, private inputs, credentials and detailed local evidence are excluded.",
+        ],
+    }
+    if baseline_id:
+        from agentagon.experiments import baselines, journeys, preparation
+
+        records = baselines.list_baselines(workspace)
+        record = next((item for item in records if item["baseline_id"] == baseline_id), None)
+        if record is None:
+            raise AuditError("baseline not found in this checkout")
+        measurement = baselines.public_projection(record)
+        measurement["benchmark_score"] = _score_projection(record.get("benchmark_score"))
+        measurement["recent_traces"]["score"] = _score_projection(
+            record.get("recent_traces", {}).get("score")
+        )
+        if record.get("intent_id"):
+            definition = journeys.load(workspace, record["intent_id"])["definition"]
+            measurement["goal"] = definition["goal"]
+            measurement["scoring"] = _scoring_definition_projection(definition["scoring"])
+        elif record.get("evaluation_id"):
+            spec = preparation.load(workspace, record["evaluation_id"])["package"]["spec"]
+            measurement["goal"] = spec["goal"]
+            if spec.get("scoring"):
+                measurement["scoring"] = _scoring_definition_projection(spec["scoring"])
+        report.update(kind="baseline", measurement=measurement)
+    else:
+        from agentagon.experiments.store import load_run
+
+        raw = load_run(workspace, run_id)
+        displayed = build_fix_report(workspace, raw)
+        allowed = (
+            "run_id",
+            "goal",
+            "state",
+            "baseline_id",
+            "comparisons",
+            "objectives",
+            "limits",
+            "usage",
+            "selected_branch",
+        )
+        report.update(kind="fix", measurement={key: displayed[key] for key in allowed})
+        report["measurement"].update(
+            source_revision=raw.get("origin_revision"),
+            evaluator_digest=raw.get("evaluation_digest"),
+        )
+        if raw.get("spec", {}).get("scoring"):
+            report["measurement"]["scoring"] = _scoring_definition_projection(
+                raw["spec"]["scoring"]
+            )
+        # Hypotheses are private host prose. Keep measured outcomes and source IDs.
+        candidate_keys = {
+            "id",
+            "state",
+            "score",
+            "metrics",
+            "checks",
+            "constraints",
+            "review_verdict",
+            "branch",
+            "source_revision",
+        }
+        report["measurement"]["comparisons"]["alternatives"] = [
+            {key: value for key, value in candidate.items() if key in candidate_keys}
+            for candidate in displayed["comparisons"]["alternatives"]
+        ]
+        from agentagon.experiments import checkouts
+
+        for candidate in report["measurement"]["comparisons"]["alternatives"]:
+            if candidate.get("source_revision") and raw.get("origin_revision"):
+                candidate["changed_paths"] = checkouts.changes(
+                    workspace.root, raw["origin_revision"], candidate["source_revision"]
+                )
+    return report
+
+
+def render_journey_markdown(report: dict) -> str:
+    """Readable export of the same safe JSON, preserving absent measurement states."""
+    import json
+
+    measurement = report["measurement"]
+    lines = ["# Agentagon results", "", f"Journey: {_fix_cell(report['kind'])}.", ""]
+    for key in (
+        "goal",
+        "baseline_id",
+        "run_id",
+        "state",
+        "branch",
+        "source_revision",
+        "evaluator_digest",
+    ):
+        if measurement.get(key) is not None:
+            lines += [
+                f"**{key.replace('_', ' ').capitalize()}:** {_fix_cell(measurement[key])}",
+                "",
+            ]
+    for key, title in (
+        ("benchmark_score", "Fixed benchmark"),
+        ("recent_traces", "Recent traces — separate population"),
+        ("comparisons", "Verified winner and alternatives"),
+        ("goals", "Agreed goals"),
+        ("scoring", "Scoring rules"),
+        ("behaviors", "Behavior outcomes"),
+    ):
+        if key in measurement:
+            lines += [
+                f"## {title}",
+                "",
+                "```json",
+                json.dumps(measurement[key], ensure_ascii=False, indent=2).replace(
+                    "```", "\\u0060\\u0060\\u0060"
+                ),
+                "```",
+                "",
+            ]
+    lines += ["## Evidence limits", "", *[f"- {limit}" for limit in report["limits"]], ""]
+    return "\n".join(lines)
+
+
+def export_journey_report(
+    workspace: Workspace, *, baseline_id: str | None = None, run_id: str | None = None
+) -> dict:
+    report = build_journey_report(workspace, baseline_id=baseline_id, run_id=run_id)
+    record_id = (
+        report["measurement"].get("baseline_id") if baseline_id else report["measurement"]["run_id"]
+    )
+    directory = workspace.checked(workspace.state / "exports" / record_id)
+    workspace.write(directory / "report.json", report)
+    workspace.write_bytes(directory / "report.md", render_journey_markdown(report).encode())
+    return {"json": str(directory / "report.json"), "markdown": str(directory / "report.md")}
 
 
 def render_fix_markdown(data: dict) -> str:

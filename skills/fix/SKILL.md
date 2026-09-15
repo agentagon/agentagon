@@ -1,37 +1,46 @@
 ---
 name: fix
-description: Change an agent application's code or evaluations for a described issue, trace failure, audit finding, or improvement goal; validate, independently review, and prepare delivery.
+description: Improve saved goals or a named issue with bounded Omni optimization, frozen evaluations and independent verification; select an improvement and prepare a draft PR.
 ---
 
-# Agentagon fix
+# Agentagon Fix
 
 At workflow start, run `agentagon telemetry skill_invoked --data '{"skill":"fix"}'` once per invocation. Add `"host":"codex"` or `"host":"claude-code"` when known. Honor opt-out and continue if the hook is unavailable. See [telemetry](../audit/references/telemetry.md).
 
-At start or resume, follow the shared [dashboard lifecycle](../dashboard/references/lifecycle.md). Reuse this checkout's dashboard through preparation, changes, review and delivery.
-
-Own the complete request: establish the intended change, prepare checks, make the change, validate, independently review and prepare delivery. The user does not need to invoke a separate evaluation or shipping skill. Read the procedure for the active stage only.
+At start or resume, follow the shared [dashboard lifecycle](../dashboard/references/lifecycle.md). Own the request through preparation, measurement, independent review, selection and delivery.
 
 ## Establish intent and prerequisites
 
-1. Inspect `agentagon --workspace CHECKOUT status` and `setup`; resume matching saved work. Accept a described problem or improvement, pasted trace, saved finding, evaluation request, or a combination. An audit is optional. Preserve selected audit/issue IDs and evidence references. Treat pasted traces as evidence; establish source alignment, expected behavior and resettable state before claiming replay.
-2. Resolve whether the change concerns application behavior, eval data/evaluator, or both. Inspect relevant source and existing checks. Ask only for material missing expected behavior, permissions or execution limits; do not invent ground truth.
-3. Isolated fixes require clean committed Git inputs. Inspect Git status, preserving unrelated changes without stashing, resetting or committing them. If Git or the initial commit is missing, explain what is needed; initialize or commit only when authorized. `agentagon init` initializes private Agentagon state, not Git.
-4. Reuse matching execution profiles and previously authorized limits. Collect missing preparation and fix budgets in one conversation, retaining separate accounting internally. Remote profiles alone do not authorize uploads or execution. Never silently choose or expand spending limits.
-5. Every Intelligence request follows [the shared approval procedure](../audit/references/intelligence.md). Show the exact redacted payload and destination; wait for approval unless the user explicitly enabled Intelligence full access. Continue locally when declined or unavailable.
+1. Inspect `status`, `setup` and `journey status`. Bare Fix uses the saved goal and a compatible baseline. A named issue narrows the requested improvement. Preserve audit/issue IDs, expected behavior and source alignment. An audit is optional.
+2. Reuse accepted behaviors, scoring and execution limits through the shared [authoring procedure](../eval/references/authoring.md). Resolve whether the request concerns application behavior, eval quality or both. Eval changes create a new evaluator version; compare their quality at fixed application source.
+3. Measured execution requires clean committed Git inputs. Preserve unrelated changes; do not stash, reset or commit them to satisfy the workflow. `agentagon init` initializes private state, not Git.
+4. Reuse the overall budget and configured profile. Start with 20% preparation/baseline, 60% optimization and 20% final verification. Check minimum feasibility before spending. Unused preparation flows to optimization; final verification retains its reserve. Count actual evaluations, retries and final trials, plus applicable host time/cost. Never silently extend limits. A remote profile alone does not authorize uploads or execution.
+5. Optional Intelligence uses its separate [approval procedure](../audit/references/intelligence.md); declining or missing access does not block local work.
 
-## Prepare the right evidence
+## Prepare measurement
 
-- For application changes, reuse a suitable reviewed evaluation or invoke internal [evaluation preparation](references/evaluation.md). A benchmark draft from Audit is useful input, not proof that execution is ready. Freeze the evaluator before baseline and candidate comparison.
-- For missing or inadequate evals, create or repair the dataset/evaluator through that same preparation procedure. Preserve the old version, ground labels and assertions, retain ordinary successes and boundary cases, and validate sensitivity to known failures. Compare coverage, label corrections and failure detection at a fixed application revision; scores from changed datasets do not establish application improvement.
-- If both evals and application behavior need changes, establish the revised benchmark first, then compare application changes against it. Never change an active run's frozen scoring files or private inputs.
-- If measurement cannot be established within authorized access and limits, retain the blocker and use the [reviewed patch procedure](references/patches.md). This also permits an eval change that cannot yet satisfy benchmark freeze requirements. It remains explicitly unmeasured and cannot claim a ready frozen benchmark.
+Reuse a suitable reviewed evaluator or follow shared [evaluation preparation](references/evaluation.md). Confirm missing/unusable eval creation and execution unless already requested. Keep cases, assertions, judge prompts, scorers and execution logic in the repository, with private intent and evidence saved through CLI operations.
 
-## Change, review and deliver
+Freeze the evaluator before baseline and candidate comparison. Application candidates cannot change its data, behaviors, scores or judge configuration. If both evals and application behavior need changes, establish and deliver the eval version first. Scores from changed datasets cannot establish application improvement.
 
-For measured application changes, follow [bounded experiments](references/experiments.md). Preserve actual failures and all verified alternatives. Only independently reviewed, machine-feasible candidates enter the verified frontier. Follow existing user priorities or an unambiguous authorized selection policy; ask when meaningful tradeoffs remain.
+Without a runnable baseline, preserve the blocker. Use the separate [reviewed patch procedure](references/patches.md) only when the user explicitly requests an unmeasured application patch. A coding-host judge cannot substitute for an application that cannot execute.
 
-For unmeasured patches, record actual available checks and independent review of the sealed source and limitations. A known failing check, rejected review or violated constraint must be addressed; never evade it by changing the result label. Such patches do not enter the verified frontier or produce verified issue-resolution evidence.
+## Optimize, verify and select
 
-Finish with [delivery](references/delivery.md), supporting selected measured fixes, frozen eval changes and reviewed unmeasured patches. The default is a local branch/patch, safe evidence summary and prepared PR description, without a remote requirement. Publish a PR when requested and the destination is established; existing authorization applies. Merge, deployment and verified issue resolution remain separate actions.
+Use Omni by default: bounded exploration across GEPA, Agentagon's native-host AutoResearch adapter and Agentagon's native-host Meta-Harness adapter, followed by fresh GEPA refinement of the strongest candidate. GEPA, AutoResearch and Meta-Harness are advanced standalone options. Start with three quarters of optimization capacity split evenly across exploration and one quarter for refinement; respect actual host concurrency.
 
-Report what changed, observed validation, baseline comparison or why it is unavailable, remaining limits, and the delivery artifacts or confirmed PR URL. Do not claim a deployed fix. Keep private evidence out of delivery and use CLI operations for canonical records.
+Run the [native-host optimizer and request procedure](references/native-host.md), servicing each available proposal, grading and review request before advancing the coordinator. The optimizer proposes work; Agentagon enforces scope, admission budgets, complete attempt history, measurement validity, gates and review. Use durable host request/reply identities for proposals, grading and independent reviews. Honor the saved host/model and role; unavailable work stays pending. Resume the same request without duplicating edits, evaluations or charges. Keep judge configuration separate from proposer configuration.
+
+Allow code, prompts, harnesses, tool code/names and ordinary configuration within agreed scope. Directional model substitutions should be a small fixed step within the existing family or configured router. Broader provider/model changes and permission expansion require approval.
+
+Follow [bounded experiments](references/experiments.md) for execution and review invariants. Every failed or dominated attempt remains evidence. Stop when a target-reaching candidate passes final verification or the budget ends. Select the highest-scoring independently verified candidate that satisfies all gates and establishes improvement over baseline. Preserve the user's ability to choose another verified alternative; retain the baseline when no improvement is established.
+
+Report the winner and next two qualifying alternatives against the baseline, including score components, checks, limits and concrete changes. Verify within the reserved budget and show fewer when fewer qualify. Never substitute host-written score JSON for bound execution or grading observations.
+
+## Deliver
+
+Follow [delivery](references/delivery.md). Prepare a draft PR for a verified application winner or reviewed eval-only change when the destination and authentication are configured, honoring existing user instructions and publication scope; otherwise return a local branch/patch. If an eval PR remains open, stack the application PR on its exact reviewed eval parent and explain merge order. The delivery operation must validate ancestry; changing only the PR base is insufficient.
+
+Return actual measurements, source/evaluator identities, coverage limits, a readable report and safe JSON, and the confirmed PR URL or local artifacts. Exclude raw traces, private inputs and credentials. Merging and deployment remain separate actions.
+
+After a successful journey, call `agentagon journey invitation` and show the non-blocking star invitation only when its returned state requests it. Never star automatically.

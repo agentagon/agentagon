@@ -1,30 +1,30 @@
 ---
-description: Get your first AI agent audit report in three steps.
+description: Agree on goals, prepare evals and establish your first agent baseline.
 hide:
   - toc
 ---
 
 # Quick start {#your-first-audit}
 
-Audit your AI agent’s code and get concrete next steps.
+Inspect your agent, agree on what better means, and establish a scored baseline.
 
 <span id="1-open-your-application"></span>
 <span id="2-start-a-code-only-audit"></span>
 
 1. **[Install Agentagon](install.md)** once.
 2. **Open your AI agent’s repo** in a new Codex or Claude Code session.
-3. **Run ag:audit**
+3. **Run ag:init**
 
 <div class="ag-quickstart" markdown>
 
 === "Codex"
 
-    Select **ag:audit** from the skill picker, then paste:
+    Select **ag:init** from the skill picker, then paste:
 
     ```text
-    Complete a code-only audit of this AI agent.
-    Show the top findings and next steps.
-    Skip traces and optional Intelligence.
+    Inspect this agent and its existing evals. Propose behaviors, scoring
+    and an execution budget, then establish a baseline using the settings
+    I approve. Skip optional Intelligence.
     ```
 
 === "Claude Code"
@@ -32,9 +32,9 @@ Audit your AI agent’s code and get concrete next steps.
     Paste this into Claude Code:
 
     ```text
-    /ag:audit Complete a code-only audit of this AI agent.
-    Show the top findings and next steps.
-    Skip traces and optional Intelligence.
+    /ag:init Inspect this agent and its existing evals. Propose behaviors, scoring
+    and an execution budget, then establish a baseline using the settings
+    I approve. Skip optional Intelligence.
     ```
 
 </div>
@@ -44,6 +44,6 @@ Audit your AI agent’s code and get concrete next steps.
 <span id="5-open-the-dashboard"></span>
 <span id="what-should-i-do-next"></span>
 
-**Your result:** code findings and recommended next steps in a report. The dashboard opens automatically.
+**Your result:** accepted behaviors, scoring and limits, reviewed evals and a scored baseline when execution is ready. The dashboard opens automatically. Missing prerequisites are reported without losing the assessment.
 
-[Read your report](../reports.md) · [Audit details](../audit.md) · [Troubleshooting](../troubleshooting.md)
+[Init details](../init.md) · [Improve the baseline](../fix.md) · [Dashboard](../dashboard.md) · [Troubleshooting](../troubleshooting.md)

@@ -1,0 +1,6 @@
+# Qualified immutable GEPA source archive. The native proposer path needs no
+# extras and this revision declares no runtime dependencies. No model SDK,
+# Claude executable or API credential is needed for fake-host qualification.
+# Install with: python -m pip install --require-hashes -r requirements-optimizer.txt
+gepa @ https://codeload.github.com/gepa-ai/gepa/tar.gz/0632cdb5dcc052e690eab439e1b4a7e3e9cfe407 \
+    --hash=sha256:1ea34ad34724b65a67cf6531bae6d403726eec3cf7dca7be62c1162c80641e1b

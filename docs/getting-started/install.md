@@ -46,7 +46,7 @@ For an existing installation, run `pipx upgrade agentagon` and register the host
     agentagon install --host claude-code
     ```
 
-    Start a **new Claude Code session** after installation. Invoke workflows with commands such as `/ag:audit`.
+    Start a **new Claude Code session** after installation. Invoke workflows with commands such as `/ag:init`.
 
 === "Both hosts"
 
@@ -86,14 +86,16 @@ export PATH="$HOME/.local/bin:$PATH"
 
 Add that line to your shell startup file if you want it to persist. Ensure the coding host can also find the CLI; a desktop session may need to restart after a PATH change.
 
-You should have these seven workflows:
+The plugin exposes three primary journeys and focused supporting skills:
 
 | Skill | Use it to |
 |---|---|
-| `ag:audit` | Inspect your AI agent’s code or traces. |
-| `ag:setup` | Configure preferences, traces, and execution profiles. |
-| `ag:fix` | Compare measured candidate improvements. |
-| `ag:dashboard` | Inspect Agentagon workflow progress and results in a browser. |
+| `ag:init` | Agree on behaviors, scoring and limits; prepare evals and a baseline. |
+| `ag:fix` | Improve saved goals or a named issue and prepare verified delivery. |
+| `ag:dashboard` | Inspect results, rerun baselines and manage settings. |
+| `ag:audit` | Investigate code, local changes, traces or eval coverage. |
+| `ag:eval` | Create, repair or validate reusable evaluations. |
+| `ag:setup` | Configure preferences, providers and execution profiles. |
 
 !!! tip "You can start without connecting anything"
     An Agentagon account, Intelligence key, and trace-provider connection are unnecessary for your first code audit. Your coding host still needs its own working model access.
@@ -119,6 +121,6 @@ You should have these seven workflows:
 
 <div class="ag-next" markdown>
 
-**Next:** [Run your first audit](first-audit.md), or [try the synthetic local example](local-example.md).
+**Next:** [Initialize your agent](first-audit.md), or [try the synthetic local example](local-example.md).
 
 </div>

@@ -37,6 +37,7 @@ for relative in (
 for path in resource_path("contracts/v1").glob("*.json"):
     json.loads(path.read_text())
 assert catalog()
+assert resource_path("skills/eval/references/authoring.md").is_file()
 for suffix in ("py", "cjs"):
     assert resource_path(f"skills/eval/helpers/agentagon_events.{suffix}").read_bytes()
 for name, _ in ASSETS.values():

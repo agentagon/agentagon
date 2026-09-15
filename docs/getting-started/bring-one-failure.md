@@ -2,7 +2,7 @@
 
 Start with one recurring agent failure. Work in your existing application and aim to leave with a measured repair and a regression test you keep.
 
-Choose **ag:audit** if you need to investigate the problem, or **ag:fix** if you already know the failure and expected behavior. Fix reuses a suitable evaluation or moves into preparation. Evaluation preparation, review and delivery are handled within these two journeys.
+Choose **ag:init** to establish goals, evals and a baseline, or **ag:fix** if you already know the failure and expected behavior. Fix reuses suitable evals or handles confirmed preparation. **ag:audit** remains available for focused investigation; **ag:eval** for evaluation work.
 
 ## Describe the case
 

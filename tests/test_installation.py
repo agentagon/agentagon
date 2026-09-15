@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -79,7 +80,14 @@ def test_installs_and_updates_native_plugins_without_touching_unrelated_files(tm
     unrelated.write_text('model = "user-selected-model"\n')
     result = installation.install_plugins(home=tmp_path)
     assert result["deferred"] == []
-    assert result["skills"] == ["ag:audit", "ag:fix", "ag:setup", "ag:dashboard"]
+    assert result["skills"] == [
+        "ag:init",
+        "ag:fix",
+        "ag:dashboard",
+        "ag:audit",
+        "ag:eval",
+        "ag:setup",
+    ]
     assert [item["host"] for item in result["hosts"]] == ["codex", "claude-code"]
     plugin = Path(result["plugin_root"])
     assert all((plugin / "skills" / skill / "SKILL.md").is_file() for skill in installation.SKILLS)
@@ -109,7 +117,7 @@ def test_upgrade_retires_managed_skills_and_preserves_helpers_and_unmanaged_file
     plugin = root / "plugins/ag"
     marker = root / installation.MARKER
     ownership = json.loads(marker.read_text())
-    retired = [f"plugins/ag/skills/{name}/SKILL.md" for name in ("review", "eval", "ship")]
+    retired = [f"plugins/ag/skills/{name}/SKILL.md" for name in ("review", "ship")]
     for relative in retired:
         file = root / relative
         file.parent.mkdir(parents=True, exist_ok=True)
@@ -133,10 +141,25 @@ def test_upgrade_retires_managed_skills_and_preserves_helpers_and_unmanaged_file
     )
     assert (plugin / "skills/eval/helpers/agentagon_events.cjs").is_file()
     assert (plugin / "skills/eval/references/preparation.md").is_file()
+    assert (plugin / "skills/eval/references/authoring.md").is_file()
+    assert (plugin / "skills/init/SKILL.md").is_file()
+    assert (plugin / "skills/eval/SKILL.md").is_file()
     assert (plugin / "skills/fix/references/evaluation.md").is_file()
     assert (plugin / "skills/fix/references/delivery.md").is_file()
     assert note.read_text() == "Preserve this unmanaged user note."
     assert not set(retired).intersection(json.loads(marker.read_text())["files"])
+
+
+def test_installed_skill_procedures_resolve_shared_relative_links(tmp_path):
+    installation._sync_bundle(tmp_path / "bundle")
+    skills = tmp_path / "bundle/plugins/ag/skills"
+    for document in skills.rglob("*.md"):
+        for target in re.findall(r"\]\(([^)]+)\)", document.read_text()):
+            if "://" in target or target.startswith("#"):
+                continue
+            destination = (document.parent / target.split("#", 1)[0]).resolve()
+            assert destination.is_relative_to(skills.resolve()), (document, target)
+            assert destination.is_file(), (document, target)
 
 
 def test_claude_enables_a_disabled_plugin_after_update(tmp_path, managers, monkeypatch):

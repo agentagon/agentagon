@@ -4,15 +4,15 @@ These decisions explain the workflow boundaries contributors should preserve. Co
 
 <span id="separate-triggers-define-the-evidence-scope"></span>
 
-## Two journeys preserve explicit evidence scope
+## Three primary journeys preserve explicit evidence scope
 
-`ag:audit` assesses existing agents, local changes or evals. `ag:fix` makes requested improvements and carries them through review and delivery. Setup and Dashboard remain utilities; evaluation preparation, changes review and delivery are internal procedures with existing low-level CLI operations.
+`ag:init` onboards an application, agrees on behaviors/scoring/limits, prepares reusable evals and establishes a baseline. `ag:fix` improves the saved goal or named issue through measurement, independent verification and draft delivery. `ag:dashboard` inspects history, explicitly reruns baselines and manages existing settings. Audit and Eval remain independently discoverable deep dives. Setup, review and delivery are shared supporting procedures.
 
 Audit defaults to the current application broadly. A named agent resolves to explicit paths. Changes-only scope includes the captured uncommitted diff; related code can explain a change but cannot expand the finding scope. A missing finding in a narrow audit cannot resolve an existing issue.
 
 Changes-only audits default to code without traces. Full audits accept dirty and non-Git directories and retain uncertainty about trace revision alignment. Existing-eval assessments save content-pinned drafts independently of execution readiness. Running and freezing a benchmark still requires clean committed source, trustworthy expectations, authorized limits, sensitivity checks and independent review. Missing execution prerequisites do not block the assessment.
 
-Dataset creation or repair belongs to Fix and creates a new evaluator version. Compare coverage, labels and sensitivity at fixed application source; aggregate scores on changed datasets are not a like-for-like application improvement. Application candidates still cannot change their frozen evaluator.
+Init, Audit, Eval and Fix share one eval-authoring procedure. Reuse suitable existing evals; missing or unusable eval creation/running requires confirmation unless explicitly requested already. Dataset creation or repair creates a new evaluator version. Compare coverage, labels and sensitivity at fixed application source; aggregate scores on changed datasets are not a like-for-like application improvement. Application candidates still cannot change their frozen evaluator.
 
 See [scope and goal](../audit.md#scope-and-goal) and [benchmark readiness](../benchmarks.md).
 
@@ -42,7 +42,7 @@ Keep credentials as references and runtime evidence in the checkout's ignored `.
 
 The dashboard reads the same saved records as CLI status and reports. Its checkout scope makes the relationship between source, findings and experiments explicit. Opening it shows existing progress without starting an audit or model service.
 
-Audit and Fix open it automatically through the [shared dashboard lifecycle](../../skills/dashboard/references/lifecycle.md). The coding host owns the background process, browser tab and active selection, reusing them within a session. Direct CLI operations and standalone Setup do not implicitly launch a browser. An unavailable dashboard does not block the evidence workflow.
+Init, Audit, Eval and Fix open it automatically through the [shared dashboard lifecycle](../../skills/dashboard/references/lifecycle.md). The coding host owns the background process, browser tab and active selection, reusing them within a session. Direct CLI operations and standalone Setup do not implicitly launch a browser. An unavailable dashboard does not block the evidence workflow.
 
 Controls are opt-in and use the CLI's validated operations. Work requiring the coding agent remains queued until the active host acknowledges it. See [inspection](../audit.md#review-resume-and-inspect) and [controls](../reference/fix.md#dashboard-controls-and-delivery).
 
@@ -56,8 +56,30 @@ Only an explicit Agentagon `full_access` setting skips approval prompts. It neve
 
 The host authors candidates and supplies independent reviews; the engine freezes execution inputs, records measurements and applies constraints. Freezing the benchmark before the baseline keeps comparisons consistent. Search policies and retained lessons guide exploration without replacing execution or review.
 
-Keep every verified alternative that is not dominated across the declared objectives. The user chooses a final candidate because tradeoffs between objectives depend on their priorities. Failed and dominated experiments remain useful evidence.
+The accepted quality score ranks candidates while required behaviors and limits remain separate pass/fail gates. Select the highest-scoring independently verified candidate that establishes improvement over baseline and satisfies every gate; preserve user choice among verified alternatives. Report the winner and next two qualifying alternatives when available. Retain the baseline if improvement is not established. Failed and dominated experiments remain useful evidence. Historical policy-driven runs retain their original records and explicit selection behavior.
 
 Selection, publication, merging and deployment are separate actions. A selected branch is reviewable before publication, and changes introduced during delivery need fresh verification. See [measured fixes](../fix.md), [evaluation preparation](../eval.md) and the [shipping procedure](../../skills/fix/references/delivery.md).
 
-Reviewed patches without a trusted baseline use a separate record and independent review of exact source, available checks and limitations. They never enter the measured frontier or establish verified issue resolution. Known failures cannot be bypassed by relabeling the result. Local delivery accepts measured fixes, reviewed eval changes and reviewed unmeasured patches without a remote; publication validates the destination separately.
+An unmeasured application patch requires an explicit user request. Reviewed patches without a trusted baseline use a separate record and independent review of exact source, available checks and limitations. They never enter the measured frontier or establish verified issue resolution. Known failures cannot be bypassed by relabeling the result. Local delivery accepts measured fixes, reviewed eval changes and reviewed unmeasured patches without a remote; publication validates the destination separately.
+
+## Definitions and measurements have separate identities
+
+Save accepted user intent, behavior mappings, score direction/aggregation/missing-data policy, optional target and budget as versioned private records. Keep executable cases, assertions, judge prompts, scorers and harness code in the repository. A changed behavior, dataset, scoring rule or judge configuration creates a new evaluator version. Audit discovery facets remain separate from quality scoring.
+
+A baseline references the evaluator and a particular clean committed application revision. A compatible later commit or another branch can use the same immutable evaluator. Reruns create new measurement identities; completed-run resume does not substitute for execution. Preserve score components, execution settings and evidence status.
+
+Recent traces form a separate population from fixed benchmark cases. Refresh only through saved authorized provider scope and retain time window, sample cap, completeness and deployment alignment. Missing or insufficient trace evidence is unknown, and changing trace scores cannot establish a controlled code improvement.
+
+## Optimizer proposals do not authorize execution
+
+Omni uses real upstream GEPA composition with Agentagon native-host AutoResearch and Meta-Harness adapters. Host/model overrides affect authoring, independently of judge settings. One durable request/reply bridge binds proposals, grading and reviews to role, source, evaluator and scope; unavailable host work stays pending. The finite coordinator resumes recorded work without silently switching hosts.
+
+Agentagon owns attempt history, trial admission, metric validity, gates, independent review and selection. Starting Fix allocations are 20% preparation/baseline, 60% optimization and 20% final verification. Check minimum feasibility first, move unused preparation capacity to optimization and protect verification capacity. Every actual execution, retry and final trial counts; host work counts against applicable time/cost limits. Never invent subscription prices or expand the overall limit automatically.
+
+The starting Omni schedule spends three quarters of optimization capacity on exploration, evenly divided across the three engines, then one quarter on fresh GEPA refinement. Respect actual host concurrency. Advanced standalone engines remain available; old search policies remain compatibility features rather than primary journey choices.
+
+## Delivery preserves the evaluator/application relationship
+
+Deliver reviewed eval source as an eval-only draft PR. Deliver a verified application winner as a draft PR when the destination and authentication are configured, otherwise as a local branch/patch. An application child of an open eval PR must match the exact eval-parent source and preserve its evaluator files; setting a PR base alone cannot establish ancestry. Merge the eval PR first. Merging and deployment remain separate actions.
+
+Readable and JSON report exports include accepted goals, scoring, behavior outcomes, evidence summaries and source/evaluator identities, excluding raw traces, private inputs and credentials. Detailed local evidence remains separate. One saved invitation after the first successful journey may ask the user to star the project; never star automatically or repeat it for every run.

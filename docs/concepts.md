@@ -4,7 +4,7 @@ Agentagon separates a suggestion from the evidence needed to trust it. Your codi
 
 ## The coding host and the CLI
 
-The **coding host** is Codex or Claude Code. Agentagon’s Audit and Fix journeys, with Setup and Dashboard utilities, guide that host through audits, reviews, evaluation preparation, measured fixes, and delivery. See [where work runs](execution.md) for the distinction between model reasoning and benchmark execution.
+The **coding host** is Codex or Claude Code. Agentagon’s primary journeys are Init, Fix and Dashboard; Audit and Eval remain independently available, while Setup, review and delivery support them. See [where work runs](execution.md) for the distinction between model reasoning and benchmark execution.
 
 The **CLI** is the `agentagon` command. It stores local evidence, validates submissions, manages isolated candidate checkouts, runs evaluations, and produces reports. Running CLI commands by themselves does not supply an independent reviewer or model judgment.
 
@@ -14,10 +14,11 @@ The **dashboard** is a browser view of one application checkout’s saved work. 
 
 | Your situation | Start with | Result |
 |---|---|---|
-| Investigate agents, local changes, traces, or existing evals | `ag:audit` | Scoped findings, coverage assessment and benchmark readiness. |
-| Fix a known problem, improve evals, or deliver an improvement | `ag:fix` | Changes, measured evidence when available, independent review and delivery. |
+| Establish goals, scoring and reusable evals | `ag:init` | Accepted definitions, reviewed evals and a scored baseline. |
+| Improve a saved goal or named issue | `ag:fix` | Verified comparisons and draft PR or local delivery. |
+| Inspect results, rerun or configure | `ag:dashboard` | Baseline history, comparisons and explicit controls. |
 
-Setup and Dashboard remain utilities. Evaluation, comparison and delivery are stages within these journeys.
+Audit and Eval support focused deep dives. Evaluation, comparison, review and delivery are composed into the primary journeys.
 
 ## Evidence, findings, and issues
 
@@ -51,11 +52,11 @@ Verification applies to the declared cases and constraints. It does not establis
 
 One candidate may be faster while another has better answer quality. Agentagon retains verified options where neither is better on every objective. This set is called the **Pareto frontier**.
 
-Search policy chooses which parent to explore next. It does not choose the final winner or replace verification. You inspect the tradeoffs and select a candidate.
+The agreed score ranks qualifying candidates while required behaviors and limits remain separate gates. Fix selects the highest-scoring independently verified improvement and preserves your ability to choose another verified alternative. Legacy runs retain their recorded Pareto frontier and search policy.
 
 ## Selection and shipping are separate
 
-Selection creates a reviewable branch from a verified candidate. Delivery prepares the patch and summary. Publication pushes the branch and creates a draft PR when you ask for it.
+Selection creates a reviewable branch from a verified candidate. Delivery prepares the patch and summary. Publication pushes the exact reviewed branch and creates a draft PR when the journey has a configured, authorized destination.
 
 None of those steps automatically merges, deploys, or resolves an audit issue. Verified issue resolution also needs evidence that the applied application matches the tested candidate.
 
@@ -65,4 +66,4 @@ Evidence and workflow state live in `.agentagon/` within the application directo
 
 Local worktrees protect the origin’s files; they are not a machine or network sandbox. Your coding host and execution profile determine where processing occurs. See [Privacy and data](privacy.md).
 
-**Next:** [Your first audit](getting-started/first-audit.md) walks through the smallest complete agent-led workflow.
+**Next:** [Initialize your agent](getting-started/first-audit.md) walks through the smallest complete agent-led workflow.

@@ -56,7 +56,16 @@ def _selected(workspace: Workspace, data: dict, candidate_id: str | None) -> dic
     if not candidate:
         raise AuditError("selected candidate is missing from the run")
     engine._verified_evidence(workspace, data, candidate)
-    if candidate["candidate_id"] not in evaluation.frontier(data):
+    if data.get("optimizer_configured") and not candidate.get("verification_of"):
+        raise AuditError("optimizer delivery requires reserved final verification")
+    if data["spec"].get("scoring"):
+        from agentagon.experiments.scoring import qualifying
+
+        if candidate["candidate_id"] not in {entry["candidate_id"] for entry in qualifying(data)}:
+            raise AuditError(
+                "selected candidate no longer establishes a verified scored improvement"
+            )
+    elif candidate["candidate_id"] not in evaluation.frontier(data):
         raise AuditError("selected candidate is no longer on the verified Pareto frontier")
     branch = f"codex/ag-fix-{data['run_id']}-{candidate['candidate_id']}"
     if selected != {
@@ -144,6 +153,9 @@ def _remote_base(workspace: Workspace, url: str, record: dict) -> None:
 
 
 def _summary(workspace: Workspace, data: dict, candidate: dict) -> dict:
+    from agentagon.experiments import scoring
+    from agentagon.reporting import _score_projection, _scoring_definition_projection
+
     baseline = data["candidates"][data["baseline_id"]]
     metrics, variation = evaluation.aggregate(
         data["spec"],
@@ -196,6 +208,15 @@ def _summary(workspace: Workspace, data: dict, candidate: dict) -> dict:
         "independent_review": "pass",
         **(
             {
+                "agreed_scoring": _scoring_definition_projection(data["spec"]["scoring"]),
+                "baseline_score": _score_projection(scoring.candidate_score(data, baseline)),
+                "candidate_score": _score_projection(scoring.candidate_score(data, candidate)),
+            }
+            if data["spec"].get("scoring")
+            else {}
+        ),
+        **(
+            {
                 "cleanup": {
                     "original_candidate_id": candidate["cleanup_of"],
                     "state": candidate["cleanup_outcome"]["state"],
@@ -229,6 +250,11 @@ def _body(summary: dict, record: dict) -> str:
             f"{metric['candidate']:g} | {metric['min']:g}–{metric['max']:g} |"
         )
     lines += ["", f"Repetitions per candidate: {summary['repetitions']}.", "", "## Validation", ""]
+    if summary.get("candidate_score"):
+        lines += [
+            f"- Agreed score: {summary['baseline_score']['score']} → {summary['candidate_score']['score']} (higher is better).",
+            "- Required behavior gates and hard limits passed independently of the score.",
+        ]
     if summary.get("cleanup"):
         lines.append(
             "- Shipping cleanup was measured and independently reviewed again. "
@@ -368,6 +394,37 @@ def _prepare(
     return record
 
 
+def _eval_parent(workspace: Workspace, data: dict, candidate: dict, evaluation_id: str) -> dict:
+    """Prove that the measured application is a child of the exact reviewed eval commit.
+
+    A PR base name alone cannot establish this relationship: candidates made from the
+    pre-eval commit must be measured again on the evaluation branch before delivery.
+    """
+    prepared = preparation.load(workspace, evaluation_id)
+    source = _evaluation_source(workspace, prepared)
+    if data["origin_revision"] != source["source_revision"]:
+        raise AuditError(
+            "stacked delivery requires the exact eval parent as the measured application base"
+        )
+    _git(
+        workspace.root,
+        "merge-base",
+        "--is-ancestor",
+        source["source_revision"],
+        candidate["source_revision"],
+    )
+    # The frozen evaluator must remain unchanged in the application child.
+    frozen_paths = {
+        entry["path"] for entry in prepared["package"]["files"] if entry["kind"] != "inputs"
+    }
+    changed = set(
+        checkouts.changes(workspace.root, source["source_revision"], candidate["source_revision"])
+    )
+    if frozen_paths & changed:
+        raise AuditError("stacked application delivery changes the frozen eval parent")
+    return {"evaluation_id": evaluation_id, **source}
+
+
 def _save(workspace: Workspace, data: dict, record: dict) -> None:
     record["updated_at"] = now()
     store.save_run(workspace, data)
@@ -450,6 +507,7 @@ def ship(
     remote: str = "origin",
     base: str | None = None,
     publish: bool = False,
+    eval_parent_id: str | None = None,
 ) -> dict:
     """Prepare locally; only an explicit publish request may push and create a draft PR.
 
@@ -473,19 +531,47 @@ def ship(
                 "finish cleanup verification and comparison before preparing or publishing delivery"
             )
         candidate = _selected(workspace, data, candidate_id)
+        parent = (
+            _eval_parent(workspace, data, candidate, eval_parent_id) if eval_parent_id else None
+        )
+        if parent:
+            if base is not None and base != parent["branch"]:
+                raise AuditError("stacked delivery base must be the reviewed evaluation branch")
+            base = parent["branch"]
         destination, url = (
             _destination(workspace, remote, base)
             if publish
             else ({"base_revision": data["origin_revision"]}, None)
         )
         record = _prepare(workspace, data, candidate, destination, reconcile=publish)
+        if parent:
+            record["eval_parent"] = parent
+            record["merge_order"] = "Merge the evaluation PR first, then the application PR."
+            body_path = workspace.root / record["artifacts"]["pr_body"]
+            workspace.write_bytes(
+                body_path,
+                (
+                    body_path.read_text()
+                    + "\n## Stacked delivery\n\n"
+                    + f"Evaluation parent: `{parent['source_revision']}` on `{parent['branch']}`.\n\n"
+                    + record["merge_order"]
+                    + "\n"
+                ).encode(),
+            )
+            _save(workspace, data, record)
+
+        def revalidate():
+            selected = _selected(workspace, data, candidate["candidate_id"])
+            if eval_parent_id:
+                _eval_parent(workspace, data, selected, eval_parent_id)
+
         if publish:
             _publish(
                 workspace,
                 record,
                 url,
                 save=lambda value: _save(workspace, data, value),
-                revalidate=lambda: _selected(workspace, data, candidate["candidate_id"]),
+                revalidate=revalidate,
                 title=f"fix: apply verified Agentagon candidate {candidate['candidate_id'][-8:]}",
             )
         return {
@@ -638,6 +724,7 @@ def deliver(
     remote: str = "origin",
     base: str | None = None,
     publish: bool = False,
+    eval_parent_id: str | None = None,
 ) -> dict:
     """Package one selected measured candidate, frozen eval, or reviewed patch locally."""
     if sum(value is not None for value in (run_id, evaluation_id, patch_id)) != 1:
@@ -645,7 +732,16 @@ def deliver(
     if type(publish) is not bool:
         raise AuditError("publication requires an explicit boolean publish option")
     if run_id:
-        return ship(workspace, run_id, remote=remote, base=base, publish=publish)
+        return ship(
+            workspace,
+            run_id,
+            remote=remote,
+            base=base,
+            publish=publish,
+            eval_parent_id=eval_parent_id,
+        )
+    if eval_parent_id:
+        raise AuditError("an eval parent applies only to a verified application run")
     workspace.require_initialized()
     backend = patches if patch_id else preparation
     source_id = patch_id or evaluation_id

@@ -968,3 +968,12 @@ main > article { max-width: 1120px; }
 .evaluation-handoff { margin-block: 1.25rem; }
 .evaluation-handoff summary { cursor: pointer; font-weight: 600; }
 .handoff-prompt { display: block; box-sizing: border-box; width: 100%; margin-block: .75rem; padding: .75rem; font: inherit; font-size: .875rem; resize: vertical; }
+.baseline-card { margin-block: 20px; padding-block: 16px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.baseline-scores { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.baseline-scores dd { margin: 0; font-weight: 600; }
+.artifact-links { display: flex; flex-wrap: wrap; gap: 16px; }
+.artifact-links a { color: var(--accent); }
+.settings-form fieldset { border: 1px solid var(--line); padding: 16px; margin-block: 20px; min-width: 0; }
+.settings-form label { display: block; margin-top: 12px; font-size: 13px; overflow-wrap: anywhere; }
+.settings-form input { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 5px; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: 4px; font: inherit; }
+@media (max-width: 720px) { .view-switcher { flex-wrap: wrap; } .view-switcher .button { flex-basis: 28%; } }

@@ -1,8 +1,8 @@
-# Create or improve evaluations within Fix
+# Create or improve evaluations
 
-Use **ag:fix** to create or repair an eval dataset and turn a goal, audit finding, or coverage gap into a reusable benchmark. Use **ag:audit** to assess existing evals and [prepare a benchmark draft](benchmarks.md) without changing their contents. The coding agent checks existing tests, defines expected behavior, validates that the benchmark catches mistakes, and obtains an independent review before freezing it.
+Use **ag:eval** to create, repair or reuse an eval dataset and turn agreed behaviors into a reusable benchmark. [Init](init.md), [Audit](audit.md) and [Fix](fix.md) share the same authoring and validation procedure. Audit can create missing evals after confirming the finding and proposed creation/running; an explicit creation request already supplies that authorization.
 
-When validation succeeds, you receive a frozen evaluation package and benchmark-only review branch, then Fix prepares delivery. If application changes are also requested, it continues against that frozen benchmark.
+The coding agent inspects existing evals, agrees on scoring and required gates, validates known examples and sensitivity, and obtains independent review before freezing. Successful preparation produces a frozen evaluation and an eval-only review branch, then prepares draft PR or local delivery. Application changes continue only when requested.
 
 ## Before you begin
 
@@ -12,7 +12,7 @@ You need:
 - Expected behavior you can trust: assertions, labeled cases, accepted outputs, or another declared correctness rule.
 - Explicit preparation limits for trials, elapsed time, and each trial’s timeout.
 
-Keep private inputs and workflow files in ignored `.agentagon/` storage. Do not commit them just to make the checkout clean. If the application has unrelated changes, have their owner handle them before evaluation preparation.
+Keep eval cases, assertions, judge prompts, scorers and execution logic in the repository. Keep private inputs and workflow files in ignored `.agentagon/` storage. Do not commit them just to make the checkout clean. If the application has unrelated changes, have their owner handle them before evaluation preparation.
 
 ## 1. Describe what should be tested
 
@@ -24,7 +24,7 @@ Open the application checkout in your coding host. For a tool-routing applicatio
 
 === "Codex"
 
-    Select **ag:fix**, then send:
+    Select **ag:eval**, then send:
 
     ```text
     Prepare an evaluation for the audit's tool-routing finding.
@@ -39,7 +39,7 @@ Open the application checkout in your coding host. For a tool-routing applicatio
 === "Claude Code"
 
     ```text
-    /ag:fix Prepare an evaluation for the audit's tool-routing finding.
+    /ag:eval Prepare an evaluation for the audit's tool-routing finding.
     Expected behavior: known tool names select the matching tool; unknown or
     empty names return an explicit validation error and invoke no tool.
     Use existing tests and synthetic cases. Use the saved local profile.
@@ -76,7 +76,7 @@ Mark cheap, self-contained checks as [preflights](../skills/fix/references/contr
 
 ## 3. Validate and review
 
-Agentagon executes the declared commands and checks their expectations. Preparation has its own budget. Failed attempts and retries retain identities and consume the relevant limits; preparation does not silently borrow from a future fix budget.
+Agentagon executes the declared commands and checks their expectations. Preparation uses its allocated budget within the agreed overall journey limit. Failed attempts and retries retain identities and consume the relevant limits; preparation cannot consume the final-verification reserve.
 
 An independent reviewer inspects the current evaluation and its evidence. Missing expected behavior, failed sensitivity checks, or missing independent review leaves preparation incomplete.
 
@@ -88,7 +88,7 @@ The frozen package binds source, benchmark files, input data, seeds, metrics, co
 
 Application source remains unchanged. The benchmark-only branch excludes private inputs. Instrumentation stays out of fix delivery by default; explicitly declared `deliver_paths` include intended regression tests in the fix baseline.
 
-Freezing is local. Fix next [prepares delivery](delivery.md) of an eval-only result, or continues to application changes if requested. Publication requires authorization.
+Freezing is local. The journey next [prepares delivery](delivery.md) of an eval-only result: a draft PR when configured, otherwise a local branch/patch. Application changes continue only when requested.
 
 ## 5. Continue to the requested result
 
@@ -100,13 +100,13 @@ Measure a fresh baseline and compare independently reviewed candidates.
 Keep the frozen evaluator unchanged and show verified alternatives for selection.
 ```
 
-Replace `EVALUATION_ID`. The fix must start from the same committed application source. It measures a new baseline; the preparation measurements are not reused as optimization results.
+Replace `EVALUATION_ID`. The frozen evaluator can measure compatible committed application revisions through [baselines](baselines.md). Each comparison measures a fresh baseline; preparation measurements are not reused as optimization results.
 
 [Continue with measured fixes →](fix.md)
 
 ## Revise or reuse an evaluation
 
-A frozen package is immutable. [Create a new draft](reference/evaluation.md#revise-or-reuse-an-evaluation) to change its benchmark or validate it against different source, then obtain new execution evidence and review.
+A frozen package is immutable. [Create a new draft](reference/evaluation.md#revise-or-reuse-an-evaluation) when behaviors, data, scoring or judge configuration changes, then obtain new execution evidence and review. A [baseline rerun](baselines.md) can measure compatible later application source with the same evaluator.
 
 ## Direct CLI reference
 
