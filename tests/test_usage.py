@@ -294,19 +294,46 @@ def test_concurrent_writers_do_not_lose_events_or_hold_database_during_send(post
 
     async def blocked(payloads, token):
         entered.set()
-        assert release.wait(2)
+        release.wait()
         return "accepted", 0
 
     monkeypatch.setattr(usage, "_post", blocked)
     with ThreadPoolExecutor(max_workers=8) as pool:
         first = pool.submit(track, "skill_invoked", skill="audit")
-        assert entered.wait(2)
-        later = [pool.submit(track, "skill_invoked", skill="fix") for _ in range(12)]
-        assert all(future.result()["status"] == "queued" for future in later)
-        assert len(pending()) == 13
-        release.set()
-        assert first.result()["status"] == "accepted"
+        try:
+            assert entered.wait(10)
+            later = [pool.submit(track, "skill_invoked", skill="fix") for _ in range(12)]
+            results = [future.result(timeout=10) for future in later]
+            assert all(result["status"] == "queued" for result in results), results
+            assert len(pending()) == 13
+        finally:
+            release.set()
+        assert first.result(timeout=10)["status"] == "accepted"
     assert len(pending()) == 12
+
+
+def test_queue_waits_for_brief_database_contention(monkeypatch):
+    connecting = threading.Event()
+    original = sqlite3.connect
+
+    def connect(*args, **kwargs):
+        connecting.set()
+        return original(*args, **kwargs)
+
+    with closing(usage._connect(Config())) as db, ThreadPoolExecutor(max_workers=1) as pool:
+        db.execute("BEGIN IMMEDIATE")
+        monkeypatch.setattr(usage.sqlite3, "connect", connect)
+        queued = pool.submit(track, "skill_invoked", skill="audit")
+        try:
+            assert connecting.wait(5)
+            # The writer must keep waiting instead of dropping the event when a
+            # short competing transaction exceeds the old 100 ms busy timeout.
+            with pytest.raises(TimeoutError):
+                queued.result(timeout=0.2)
+        finally:
+            db.commit()
+        assert queued.result(timeout=5) == {"status": "unconfigured"}
+    assert len(pending()) == 1
 
 
 def test_tampered_queue_is_not_forwarded(posthog):

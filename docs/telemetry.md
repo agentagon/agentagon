@@ -53,6 +53,8 @@ These are event counts, not unique-user metrics or evidence that guidance caused
 
 The private SQLite queue is stored in `config.json.telemetry/queue.sqlite3` beside the selected config file (`AGENTAGON_CONFIG` also isolates telemetry). Its directory is private and the database is mode `0600`. Pending payloads are capped at 1,000 events, 1 MiB and seven days; expired or oldest events are discarded on recording. These are retained-payload limits, not a filesystem quota for SQLite pages and journals.
 
+Queue writes wait up to one second per database lock acquisition so concurrent callers can finish short transactions. Network delivery holds no database lock. Longer storage contention still returns a sanitized failure status.
+
 Each tracking call attempts at most one batch of 20 events with a two-second total HTTP deadline. Failed requests back off from one minute to one hour, honoring bounded `Retry-After`; eligible events retry on later tracking calls. There is no daemon, polling or background process. Python calls inside an already-running asyncio loop enqueue without attempting nested synchronous delivery. Changing the project token discards pending events associated with the old destination.
 
 Payloads are validated before queueing and again before transmission. Redirects and environment-derived HTTP proxies/credentials are disabled. Transient failures, quota-limited responses and invalid responses retain pending events; permanently rejected batches are dropped. Transport/storage failures produce a sanitized status and never interrupt the parent workflow. `accepted` means the analytics service accepted the request; individual events may take time to appear and duplicate retries may take time to reconcile.
