@@ -29,7 +29,10 @@ def frozen_rubric(workspace, files, rubric_path):
     frozen = next((entry for entry in files if entry["path"] == rubric_path), None)
     if not frozen or frozen.get("deleted"):
         raise AuditError("grading requires a retained frozen rubric")
-    content = workspace.read_blob(frozen["artifact"])
+    try:
+        content = workspace.read_blob(frozen["artifact"])
+    except AuditError as exc:
+        raise AuditError("frozen grading rubric checksum or path changed") from exc
     if hashlib.sha256(content).hexdigest() != frozen["digest"]:
         raise AuditError("frozen grading rubric checksum changed")
     rubric = content.decode("utf-8")
@@ -173,7 +176,7 @@ def _observed(workspace, data, trial, judge, binding, metrics):
 
 def judgment(bridge, request, binding, judge):
     """Validate one admitted judgment against its exact evidence, host and rubric."""
-    if request["binding_digest"] != digest(binding) or any(
+    if request.get("binding_digest") != digest(binding) or any(
         request.get(key) != value for key, value in binding.items()
     ):
         raise AuditError("grading request no longer matches trial, rubric or host provenance")
@@ -202,7 +205,9 @@ def judgment(bridge, request, binding, judge):
         or not isinstance(response["metrics"], dict)
         or set(response["metrics"]) != set(judge["metrics"])
     ):
-        raise AuditError("grading reply requires exact trial/rubric metrics and an explanation")
+        raise AuditError(
+            "grading reply requires exact observation trial ID, rubric metrics and an explanation"
+        )
     values = {}
     for name, bounds in judge["metrics"].items():
         value = finite(response["metrics"][name])

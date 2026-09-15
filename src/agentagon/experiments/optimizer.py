@@ -74,35 +74,7 @@ class NativeAutoResearchEngine:
 
     def __init__(self, config):
         self.propose = config.engine_config["propose"]
-
-    def run(self, task, server):
-        from gepa.oa.engine import Result
-
-        best = task.seed_candidate
-        best_score, feedback = server.evaluate(best)
-        history = [{"candidate": best, "score": best_score, "feedback": feedback}]
-        while not server.budget.exhausted:
-            candidate = self.propose(
-                best, {"history": history, "method": "hypothesis-measure-keep-or-revert"}
-            )
-            score, feedback = server.evaluate(candidate)
-            history.append({"candidate": candidate, "score": score, "feedback": feedback})
-            if score > best_score:
-                best, best_score = candidate, score
-        return Result(best_candidate=best, best_score=best_score)
-
-    def process_result(self, result, output_dir):
-        pass
-
-
-class NativeMetaHarnessEngine(NativeAutoResearchEngine):
-    """Agentagon host adapter: harness analysis and diverse candidate rounds."""
-
-    name = "agentagon-meta-harness"
-
-    def __init__(self, config):
-        super().__init__(config)
-        self.width = config.engine_config["max_candidates_per_iter"]
+        self.width = 1
 
     def run(self, task, server):
         from gepa.oa.engine import Result
@@ -117,20 +89,36 @@ class NativeMetaHarnessEngine(NativeAutoResearchEngine):
             for branch in range(self.width):
                 if server.budget.exhausted:
                     break
-                candidate = self.propose(
-                    parent,
-                    {
-                        "method": "analyze-harness-and-diversify",
-                        "round": round_number,
-                        "branch": branch,
-                        "history": history,
-                    },
-                )
+                candidate = self.propose(parent, self._feedback(history, round_number, branch))
                 score, feedback = server.evaluate(candidate)
                 history.append({"candidate": candidate, "score": score, "feedback": feedback})
                 if score > best_score:
                     best, best_score = candidate, score
         return Result(best_candidate=best, best_score=best_score)
+
+    def _feedback(self, history, round_number, branch):
+        return {"history": history, "method": "hypothesis-measure-keep-or-revert"}
+
+    def process_result(self, result, output_dir):
+        pass
+
+
+class NativeMetaHarnessEngine(NativeAutoResearchEngine):
+    """Agentagon host adapter: harness analysis and diverse candidate rounds."""
+
+    name = "agentagon-meta-harness"
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.width = config.engine_config["max_candidates_per_iter"]
+
+    def _feedback(self, history, round_number, branch):
+        return {
+            "method": "analyze-harness-and-diversify",
+            "round": round_number,
+            "branch": branch,
+            "history": history,
+        }
 
 
 class OptimizerCoordinator:
@@ -383,16 +371,7 @@ class OptimizerCoordinator:
             )
             if request["state"] == "pending" and host_handler is not None:
                 with semaphore:
-                    claimed = self.bridge.start(request["request_id"])
-                    if not claimed["replay"]:
-                        response = host_handler(claimed)
-                        request = self.bridge.reply(
-                            request["request_id"],
-                            response,
-                            host=host,
-                            model=model,
-                            binding_digest=request["binding_digest"],
-                        )
+                    request = self.bridge.fulfill(request, host_handler)
             if request["state"] == "cancelled":
                 raise MeasurementUnavailable("native-host proposal was cancelled")
             if request["state"] != "completed":

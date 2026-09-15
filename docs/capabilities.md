@@ -1,6 +1,6 @@
 # What Agentagon can do
 
-The [introduction's task guide](README.md#choose-the-task-that-fits) explains Init, Fix and Dashboard. Init establishes agreed goals, evals and a baseline; Fix compares verified improvements and prepares delivery; Dashboard shows history, reruns and settings. Audit and Eval remain independently available. Start there or follow the [quickstart](getting-started/first-audit.md).
+Inspect your agents, define custom scores, prepare reusable evals and compare measured fixes. The [introduction's task guide](README.md#choose-the-task-that-fits) helps you choose the right workflow, from investigating failures to preparing a draft PR with verified improvements. Start there or follow the [quickstart](getting-started/first-audit.md).
 
 ## Execution and integrations
 

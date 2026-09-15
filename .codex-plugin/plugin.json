@@ -1,7 +1,7 @@
 {
   "name": "ag",
   "version": "0.1.2",
-  "description": "Initialize goals and evals, improve agents with measured fixes, and inspect results in the dashboard.",
+  "description": "Inspect and improve AI agents with measured fixes and custom scores.",
   "author": {
     "name": "Agentagon"
   },
@@ -9,8 +9,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Agentagon",
-    "shortDescription": "Init, Fix and Dashboard for AI agents",
-    "longDescription": "Use Init to inspect an agent, agree on behaviors and scoring, prepare reusable evals and establish a baseline. Use Fix to compare verified improvements and prepare a draft PR. Use Dashboard to inspect baselines, results and settings. Audit and Eval remain independently available. Intelligence requests require their own consent.",
+    "shortDescription": "Improve your AI agents",
+    "longDescription": "Inspect your agents, agree on behaviors and scoring, and prepare reusable evals to establish a baseline. Use Fix to compare verified improvements and prepare a draft PR.",
     "developerName": "Agentagon",
     "category": "Productivity",
     "capabilities": [
@@ -19,9 +19,9 @@
       "Interactive"
     ],
     "defaultPrompt": [
-      "Use ag:init to inspect this agent, agree on goals and establish a baseline.",
-      "Use ag:fix to improve the saved goal and prepare verified delivery.",
-      "Use ag:dashboard to inspect baselines, results and settings."
+      "Inspect this AI agent and identify failures with ag:audit.",
+      "Improve this AI agent with ag:fix, compare verified improvements, and prepare a draft PR.",
+      "Agree on behaviors and custom scores, then prepare reusable evals and establish a baseline with ag:init."
     ]
   }
 }

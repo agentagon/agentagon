@@ -86,15 +86,15 @@ export PATH="$HOME/.local/bin:$PATH"
 
 Add that line to your shell startup file if you want it to persist. Ensure the coding host can also find the CLI; a desktop session may need to restart after a PATH change.
 
-The plugin exposes three primary journeys and focused supporting skills:
+Choose a skill for the work you need:
 
 | Skill | Use it to |
 |---|---|
-| `ag:init` | Agree on behaviors, scoring and limits; prepare evals and a baseline. |
-| `ag:fix` | Improve saved goals or a named issue and prepare verified delivery. |
-| `ag:dashboard` | Inspect results, rerun baselines and manage settings. |
 | `ag:audit` | Investigate code, local changes, traces or eval coverage. |
+| `ag:fix` | Improve saved goals or a named issue and prepare verified delivery. |
+| `ag:init` | Agree on behaviors, scoring and limits; prepare evals and a baseline. |
 | `ag:eval` | Create, repair or validate reusable evaluations. |
+| `ag:dashboard` | Inspect results, rerun baselines and manage settings. |
 | `ag:setup` | Configure preferences, providers and execution profiles. |
 
 !!! tip "You can start without connecting anything"
@@ -121,6 +121,6 @@ The plugin exposes three primary journeys and focused supporting skills:
 
 <div class="ag-next" markdown>
 
-**Next:** [Initialize your agent](first-audit.md), or [try the synthetic local example](local-example.md).
+**Next:** [Inspect your agent and establish a baseline](first-audit.md), or [try the synthetic local example](local-example.md).
 
 </div>

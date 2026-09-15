@@ -4,7 +4,7 @@ Agentagon separates a suggestion from the evidence needed to trust it. Your codi
 
 ## The coding host and the CLI
 
-The **coding host** is Codex or Claude Code. Agentagon’s primary journeys are Init, Fix and Dashboard; Audit and Eval remain independently available, while Setup, review and delivery support them. See [where work runs](execution.md) for the distinction between model reasoning and benchmark execution.
+The **coding host** is Codex or Claude Code. It inspects your agent, helps define behaviors and custom scores, prepares evals, and proposes measured fixes. See [where work runs](execution.md) for the distinction between model reasoning and benchmark execution.
 
 The **CLI** is the `agentagon` command. It stores local evidence, validates submissions, manages isolated candidate checkouts, runs evaluations, and produces reports. Running CLI commands by themselves does not supply an independent reviewer or model judgment.
 
@@ -14,11 +14,12 @@ The **dashboard** is a browser view of one application checkout’s saved work. 
 
 | Your situation | Start with | Result |
 |---|---|---|
-| Establish goals, scoring and reusable evals | `ag:init` | Accepted definitions, reviewed evals and a scored baseline. |
+| Inspect agent behavior and find failures | `ag:audit` | Evidence-backed findings from code and execution traces. |
 | Improve a saved goal or named issue | `ag:fix` | Verified comparisons and draft PR or local delivery. |
+| Establish goals, scoring and reusable evals | `ag:init` | Accepted definitions, reviewed evals and a scored baseline. |
 | Inspect results, rerun or configure | `ag:dashboard` | Baseline history, comparisons and explicit controls. |
 
-Audit and Eval support focused deep dives. Evaluation, comparison, review and delivery are composed into the primary journeys.
+Use `ag:eval` for focused evaluation work. Evaluation, comparison, review and delivery are also part of preparing and verifying fixes.
 
 ## Evidence, findings, and issues
 
@@ -66,4 +67,4 @@ Evidence and workflow state live in `.agentagon/` within the application directo
 
 Local worktrees protect the origin’s files; they are not a machine or network sandbox. Your coding host and execution profile determine where processing occurs. See [Privacy and data](privacy.md).
 
-**Next:** [Initialize your agent](getting-started/first-audit.md) walks through the smallest complete agent-led workflow.
+**Next:** [Inspect your agent and establish a baseline](getting-started/first-audit.md) walks through the smallest complete agent-led workflow.

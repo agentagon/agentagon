@@ -210,6 +210,20 @@ class HostBridge:
             r for r in self.snapshot()["requests"].values() if r["state"] in {"pending", "running"}
         ]
 
+    def fulfill(self, request: dict, handler) -> dict:
+        """Run an available host callback only for a newly claimed request."""
+        if request["state"] == "pending" and handler is not None:
+            claimed = self.start(request["request_id"])
+            if not claimed["replay"]:
+                return self.reply(
+                    request["request_id"],
+                    handler(claimed),
+                    host=request["host"],
+                    model=request["model"],
+                    binding_digest=request["binding_digest"],
+                )
+        return request
+
     @staticmethod
     def _get(state: dict, request_id: str) -> dict:
         try:

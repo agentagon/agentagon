@@ -124,8 +124,7 @@ def assemble(destination, *, preview=False):
         "index.html",
         "/",
         "Agentagon — Improve your AI agents. Continuously.",
-        "Audit your AI agent, prepare evaluations, and compare measured improvements "
-        "with the coding agent and tools you already use.",
+        "Inspect and improve AI agents with measured fixes and custom scores.",
     )
     render(
         "blogs.html",

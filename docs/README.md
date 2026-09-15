@@ -1,6 +1,6 @@
 ---
 title: Introduction
-description: Initialize goals and evals, improve agents with measured fixes, and inspect results in the dashboard.
+description: Inspect and improve AI agents with measured fixes and custom scores.
 hide:
   - toc
 ---
@@ -17,9 +17,9 @@ hide:
 
 <div class="ag-intro" markdown>
 
-Agentagon helps you **define, measure, and improve AI agent behavior**. Agree on goals and scoring, establish a baseline, and compare independently verified improvements.
+Agentagon helps you **inspect and improve AI agents with measured fixes and custom scores**. Agree on behaviors and scoring, prepare reusable evals to establish a baseline, and compare independently verified improvements.
 
-Start with [Init](init.md) to prepare reusable evals and a baseline, [Fix](fix.md) to improve a saved goal or named issue, and [Dashboard](dashboard.md) to inspect results, rerun baselines and manage settings.
+[Inspect agent behavior](audit.md), [define scores and evals](init.md), or use [Fix](fix.md) to compare verified improvements and prepare a draft PR.
 
 </div>
 
@@ -34,7 +34,7 @@ For a seeded example using an actual model, follow the [ticket-retry demonstrati
 
 1. **Install** the CLI and plugin for your coding host.
 2. **Open your AI agent’s code repo** in Codex or Claude Code and run **ag:init**.
-3. **Agree on behaviors, scoring and limits**, then inspect the evaluator and baseline in the dashboard.
+3. **Agree on behaviors, scoring and limits**, then review the evaluator and measured baseline.
 
 <span id="before-you-begin"></span>
 
@@ -53,11 +53,12 @@ The [quickstart](getting-started/first-audit.md) shows what to enter and how to 
 
 | You want to | Start with | What you get |
 |---|---|---|
-| Onboard and agree on what better means | [Init](init.md) | Accepted behaviors, scoring and limits, reviewed evals and a baseline. |
+| Inspect agent behavior and find failures | [Audit](audit.md) | Evidence-backed findings from code and execution traces. |
 | Improve saved goals or a named issue | [Fix](fix.md) | Bounded optimization, verified winner and alternatives, draft PR or local delivery. |
+| Define behaviors, custom scores and evals | [Init](init.md) | Accepted behaviors, scoring and limits, reviewed evals and a baseline. |
 | Inspect history, rerun or manage settings | [Dashboard](dashboard.md) | Baselines, benchmark and recent-trace results, comparisons and explicit controls. |
 
-[Audit](audit.md) remains a focused discovery skill. [Eval](eval.md) remains independently callable for creating, repairing or validating evaluations. [Setup](settings.md), independent review and [delivery](delivery.md) are shared supporting procedures. [Intelligence](intelligence.md) requires its own consent before outgoing requests unless you explicitly enable full access.
+[Eval](eval.md) is independently callable for creating, repairing or validating evaluations. [Setup](settings.md), independent review and [delivery](delivery.md) support these workflows. [Intelligence](intelligence.md) requires its own consent before outgoing requests unless you explicitly enable full access.
 
 ## What runs where?
 

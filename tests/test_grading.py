@@ -254,6 +254,16 @@ def test_saved_grading_observation_is_immutable(application, specification):
         grading.observed(application, data, candidate, trial, {"latency": 100})
 
 
+def test_missing_saved_binding_rejects_grading_as_invalid_evidence(application, specification):
+    data, candidate, trial, bridge, request = pending(application, specification)
+    reply(bridge, request, judgment(request))
+    saved = bridge.snapshot()
+    del saved["requests"][request["request_id"]]["binding_digest"]
+    application.write(bridge.path, saved)
+    with pytest.raises(AuditError, match="no longer matches"):
+        grading.observed(application, data, candidate, trial, {"latency": 100})
+
+
 def preparation_pending(application, specification):
     start(application, specification, prepare_only=True)
     started, plan = draft(application, specification)

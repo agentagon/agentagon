@@ -1,6 +1,6 @@
-# Initialize an agent
+# Define behaviors and scores {#initialize-an-agent}
 
-Use **ag:init** to inspect your agent, agree on what better means, prepare reusable evaluations and establish a scored baseline. Init reuses your settings and existing evals; you can complete discovery before execution is ready.
+Agree on what better means for your agent, prepare reusable evaluations and establish a scored baseline. Use **ag:init** to inspect your agent and reuse your settings and existing evals; you can complete discovery before execution is ready.
 
 ## Start in your application
 
@@ -36,7 +36,7 @@ Discovery accepts dirty or non-Git directories. Measurement needs clean committe
 
 ## Receive the result
 
-Init produces the accepted definition, a reviewed evaluator, a scored baseline when executable, and the [dashboard](dashboard.md). New eval source is delivered as an eval-only draft PR when publication is configured, or a local branch/patch. Application changes follow through [Fix](fix.md).
+You receive the accepted definition, a reviewed evaluator and a scored baseline when executable. Inspect the evidence in the [results view](dashboard.md). New eval source is delivered as an eval-only draft PR when publication is configured, or a local branch/patch. Application changes follow through [Fix](fix.md).
 
 A baseline records source commit and branch, evaluator version, execution settings, score components and evidence status. [Reruns](baselines.md) create new measurements while preserving those definitions. Fixed benchmark results and recent-trace scores describe separate populations.
 

@@ -89,9 +89,9 @@ def install_plugins(hosts: list[str] | None = None, *, home: Path | None = None)
         "hosts": results,
         "skills": [f"ag:{name}" for name in SKILLS],
         "deferred": [],
-        "next": "Start a new coding-agent session. Use ag:init to agree on goals and establish "
-        "a baseline, ag:fix to improve it, or ag:dashboard to inspect results and settings. "
-        "Audit and Eval remain available for focused work. In Claude Code prefix with /; "
+        "next": "Start a new coding-agent session. Use ag:audit to inspect agent behavior, "
+        "ag:fix to compare verified improvements, or ag:init to define custom scores and evals. "
+        "In Claude Code prefix with /; "
         "in Codex use the skill picker.",
     }
 

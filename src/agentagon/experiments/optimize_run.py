@@ -12,6 +12,7 @@ import json
 import os
 import threading
 import time
+from dataclasses import asdict
 from datetime import datetime
 
 from agentagon.core.records import AuditError, digest, encoded, load_json
@@ -162,13 +163,7 @@ def configure(
         "optimizer": optimizer,
         "host_concurrency": concurrency,
         "seed": _seed(workspace, data),
-        "meta_harness": {
-            "host": (meta_harness or MetaHarnessConfig()).host,
-            "model": (meta_harness or MetaHarnessConfig()).model,
-            "max_candidates_per_iter": (
-                meta_harness or MetaHarnessConfig()
-            ).max_candidates_per_iter,
-        },
+        "meta_harness": asdict(meta_harness or MetaHarnessConfig()),
     }
     filename = _path(workspace, run_id)
     with ledger.locked():
@@ -200,72 +195,6 @@ def status(workspace, run_id: str) -> dict:
         "pending": HostBridge(workspace, run_id).pending(),
         "budget": BudgetLedger(workspace, run_id).snapshot(),
     }
-
-
-def _review(workspace, run_id, candidate_id, config, stage, host_handler):
-    measured = engine.run(workspace, run_id, candidate_id)
-    candidate = measured["candidate"]
-    if candidate["state"] == "awaiting_grading":
-        bridge = HostBridge(workspace, run_id)
-        if host_handler:
-            for request in bridge.pending():
-                if (
-                    request["role"] != "judging"
-                    or request["payload"].get("candidate_id") != candidate_id
-                ):
-                    continue
-                claimed = bridge.start(request["request_id"])
-                if not claimed["replay"]:
-                    bridge.reply(
-                        request["request_id"],
-                        host_handler(claimed),
-                        host=request["host"],
-                        model=request["model"],
-                        binding_digest=request["binding_digest"],
-                    )
-            measured = engine.run(workspace, run_id, candidate_id)
-            candidate = measured["candidate"]
-        if candidate["state"] == "awaiting_grading":
-            raise HostWorkPending(candidate_id)
-    if candidate["state"] in {"interrupted", "running", "sealed", "editing"}:
-        raise HostWorkPending(candidate_id)
-    if candidate["state"] != "awaiting_review":
-        return candidate
-    bridge = HostBridge(workspace, run_id)
-    request = bridge.request(
-        f"review:{candidate_id}",
-        source=candidate["source_digest"],
-        evaluator=measured["review_template"]["evaluation_digest"],
-        role="review",
-        scope=["sealed patch", "retained trial evidence"],
-        host=config["host"],
-        model=config["model"],
-        stage=stage,
-        payload={
-            "candidate_id": candidate_id,
-            "review_template": measured["review_template"],
-            "source_revision": candidate["source_revision"],
-            "instruction": "Independently inspect the exact sealed patch and retained trial artifacts. Fill review_template; never invent or edit measured metrics.",
-        },
-    )
-    if request["state"] == "pending" and host_handler is not None:
-        claimed = bridge.start(request["request_id"])
-        if not claimed["replay"]:
-            request = bridge.reply(
-                request["request_id"],
-                host_handler(claimed),
-                host=request["host"],
-                model=request["model"],
-                binding_digest=request["binding_digest"],
-            )
-    if request["state"] != "completed":
-        raise HostWorkPending(request["request_id"])
-    if request.get("deadline_exceeded"):
-        raise BudgetExhausted(
-            "native-host review exceeded its admitted deadline; evidence retained"
-        )
-    review = request["response"].get("review", request["response"])
-    return engine.run(workspace, run_id, candidate_id, review=review)["candidate"]
 
 
 def _files(text, data):
@@ -337,6 +266,56 @@ class _ApplicationOptimizer:
     def save(self):
         self.workspace.write(_path(self.workspace, self.run_id), self.state)
 
+    def review(self, candidate_id, stage):
+        workspace, run_id = self.workspace, self.run_id
+        config, host_handler = self.config, self.host_handler
+        measured = engine.run(workspace, run_id, candidate_id)
+        candidate = measured["candidate"]
+        if candidate["state"] == "awaiting_grading":
+            bridge = HostBridge(workspace, run_id)
+            if host_handler:
+                for request in bridge.pending():
+                    if (
+                        request["role"] != "judging"
+                        or request["payload"].get("candidate_id") != candidate_id
+                    ):
+                        continue
+                    bridge.fulfill(request, host_handler)
+                measured = engine.run(workspace, run_id, candidate_id)
+                candidate = measured["candidate"]
+            if candidate["state"] == "awaiting_grading":
+                raise HostWorkPending(candidate_id)
+        if candidate["state"] in {"interrupted", "running", "sealed", "editing"}:
+            raise HostWorkPending(candidate_id)
+        if candidate["state"] != "awaiting_review":
+            return candidate
+        bridge = HostBridge(workspace, run_id)
+        request = bridge.request(
+            f"review:{candidate_id}",
+            source=candidate["source_digest"],
+            evaluator=measured["review_template"]["evaluation_digest"],
+            role="review",
+            scope=["sealed patch", "retained trial evidence"],
+            host=config["host"],
+            model=config["model"],
+            stage=stage,
+            payload={
+                "candidate_id": candidate_id,
+                "review_template": measured["review_template"],
+                "source_revision": candidate["source_revision"],
+                "instruction": "Independently inspect the exact sealed patch and retained trial artifacts. Fill review_template; never invent or edit measured metrics.",
+            },
+        )
+        request = bridge.fulfill(request, host_handler)
+        if request["state"] != "completed":
+            raise HostWorkPending(request["request_id"])
+        if request.get("deadline_exceeded"):
+            raise BudgetExhausted(
+                "native-host review exceeded its admitted deadline; evidence retained"
+            )
+        review = request["response"].get("review", request["response"])
+        return engine.run(workspace, run_id, candidate_id, review=review)["candidate"]
+
     def observation(self, candidate):
         data = load_run(self.workspace, self.run_id)
         score = scoring.candidate_score(data, candidate)
@@ -381,14 +360,7 @@ class _ApplicationOptimizer:
             candidate = load_run(self.workspace, self.run_id)["candidates"][record["candidate_id"]]
             if candidate["state"] == "editing":
                 _materialize(self.workspace, candidate, files)
-            candidate = _review(
-                self.workspace,
-                self.run_id,
-                record["candidate_id"],
-                self.config,
-                "optimization",
-                self.host_handler,
-            )
+            candidate = self.review(record["candidate_id"], "optimization")
             if candidate["state"] == "duplicate":
                 candidate = load_run(self.workspace, self.run_id)["candidates"][
                     candidate["duplicate_of"]
@@ -415,14 +387,7 @@ class _ApplicationOptimizer:
             ]
             if not pending:
                 continue
-            candidate = _review(
-                self.workspace,
-                self.run_id,
-                record["candidate_id"],
-                self.config,
-                "optimization",
-                self.host_handler,
-            )
+            candidate = self.review(record["candidate_id"], "optimization")
             if candidate["state"] == "duplicate":
                 candidate = load_run(self.workspace, self.run_id)["candidates"][
                     candidate["duplicate_of"]
@@ -442,14 +407,7 @@ class _ApplicationOptimizer:
             return status(self.workspace, self.run_id)
         try:
             data = load_run(self.workspace, self.run_id)
-            baseline = _review(
-                self.workspace,
-                self.run_id,
-                data["baseline_id"],
-                self.config,
-                "preparation",
-                self.host_handler,
-            )
+            baseline = self.review(data["baseline_id"], "preparation")
             if (
                 baseline["state"] != "verified"
                 or self.observation(baseline)["score"]["value"] is None
@@ -535,14 +493,7 @@ class _ApplicationOptimizer:
                 if candidate["state"] == "editing":
                     candidate.update(budget_stage="verification", verification_of=original_id)
                     save_run(self.workspace, current)
-            candidate = _review(
-                self.workspace,
-                self.run_id,
-                entry["candidate_id"],
-                self.config,
-                "verification",
-                self.host_handler,
-            )
+            candidate = self.review(entry["candidate_id"], "verification")
             entry["state"] = candidate["state"]
             self.save()
             if (

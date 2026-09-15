@@ -1,12 +1,12 @@
 # Agentagon
 
-**Find failures. Test fixes. Ship with evidence.**
+**Improve your AI agents.**
 
-Agentagon helps you define what better means for an AI agent, establish a scored baseline, and compare verified improvements using its code and execution traces.
+Inspect and improve AI agents with measured fixes and custom scores. Agree on behaviors and scoring, prepare reusable evals to establish a baseline, and compare verified improvements before preparing a draft PR.
 
 The Python CLI captures evidence, runs checks and saves reports. The `ag` plugin guides your coding assistant through the reasoning, reviews and candidate edits. Supported coding hosts and setup commands are listed below.
 
-Start with **[Init](https://github.com/agentagon/agentagon/blob/main/docs/init.md)** to agree on goals and prepare a baseline, **[Fix](https://github.com/agentagon/agentagon/blob/main/docs/fix.md)** to improve it, and **[Dashboard](https://github.com/agentagon/agentagon/blob/main/docs/dashboard.md)** to inspect results and settings. [Install the plugin](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/install.md) if needed.
+[Inspect agent behavior](https://github.com/agentagon/agentagon/blob/main/docs/audit.md), [define scores and evals](https://github.com/agentagon/agentagon/blob/main/docs/init.md), or [compare measured fixes](https://github.com/agentagon/agentagon/blob/main/docs/fix.md). [Install the plugin](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/install.md) if needed.
 
 ## Prerequisites
 
@@ -62,19 +62,20 @@ an execution budget, then establish a baseline using the settings I approve.
 
 In **Claude Code**, prefix the same request with `/ag:init`.
 
-Init reuses suitable evals and confirms missing eval creation before proceeding. It saves the agreed definitions and evidence, prepares reviewed eval source, and measures a baseline when execution is ready. The [dashboard](https://github.com/agentagon/agentagon/blob/main/docs/dashboard.md) opens automatically. See the [quickstart guide](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/first-audit.md).
+Agentagon reuses suitable evals and confirms missing eval creation before proceeding. It saves the agreed definitions and evidence, prepares reviewed eval source, and measures a baseline when execution is ready. Then use [Fix](https://github.com/agentagon/agentagon/blob/main/docs/fix.md) to compare improvements against that baseline. See the [quickstart guide](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/first-audit.md).
 
 Optional examples: [check your installation offline](https://github.com/agentagon/agentagon/blob/main/examples/local-audit/README.md), or [compare fixes in the ticket-retry demonstration](https://github.com/agentagon/agentagon/blob/main/examples/ticket-retry/README.md).
 
 ## Workflows
 
-| Goal | Journey and result |
+| Goal | Skill and result |
 |---|---|
-| Onboard and define what better means | [ag:init](https://github.com/agentagon/agentagon/blob/main/docs/init.md): agreed behaviors, scoring and limits, reusable evals and a scored baseline. |
+| Inspect agent behavior and find failures | [ag:audit](https://github.com/agentagon/agentagon/blob/main/docs/audit.md): evidence-backed findings from code and execution traces. |
 | Improve a saved goal or named issue | [ag:fix](https://github.com/agentagon/agentagon/blob/main/docs/fix.md): bounded Omni optimization, verified comparisons and draft PR or local delivery. |
+| Define behaviors, custom scores and evals | [ag:init](https://github.com/agentagon/agentagon/blob/main/docs/init.md): agreed behaviors, scoring and limits, reusable evals and a scored baseline. |
 | Inspect history, rerun a baseline or manage settings | [ag:dashboard](https://github.com/agentagon/agentagon/blob/main/docs/dashboard.md): checkout-scoped baselines, results and opt-in controls. |
 
-[ag:audit](https://github.com/agentagon/agentagon/blob/main/docs/audit.md) and [ag:eval](https://github.com/agentagon/agentagon/blob/main/docs/eval.md) remain independently available for focused investigation and evaluation work. Setup, review and delivery support these journeys. Discovery accepts dirty or non-Git directories; measurement requires clean committed inputs and authorized limits. Without a runnable baseline, Fix reports the blocker; an unmeasured application patch requires an explicit request.
+[ag:eval](https://github.com/agentagon/agentagon/blob/main/docs/eval.md) is independently available for focused evaluation work. Setup, review and delivery support these workflows. Discovery accepts dirty or non-Git directories; measurement requires clean committed inputs and authorized limits. Without a runnable baseline, Fix reports the blocker; an unmeasured application patch requires an explicit request.
 
 Intelligence is optional and asks for approval of each outgoing request by default. Set its explicit **full access** mode through Setup to skip prompts while keeping calls visible. See [Intelligence permissions](https://github.com/agentagon/agentagon/blob/main/docs/intelligence.md).
 

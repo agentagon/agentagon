@@ -44,6 +44,6 @@ Inspect your agent, agree on what better means, and establish a scored baseline.
 <span id="5-open-the-dashboard"></span>
 <span id="what-should-i-do-next"></span>
 
-**Your result:** accepted behaviors, scoring and limits, reviewed evals and a scored baseline when execution is ready. The dashboard opens automatically. Missing prerequisites are reported without losing the assessment.
+**Your result:** accepted behaviors, scoring and limits, reviewed evals and a scored baseline when execution is ready. Use Fix to compare improvements against that baseline. Missing prerequisites are reported without losing the assessment.
 
-[Init details](../init.md) · [Improve the baseline](../fix.md) · [Dashboard](../dashboard.md) · [Troubleshooting](../troubleshooting.md)
+[Define behaviors and scores](../init.md) · [Improve the baseline](../fix.md) · [Inspect results](../dashboard.md) · [Troubleshooting](../troubleshooting.md)

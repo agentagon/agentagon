@@ -1,7 +1,7 @@
 {
   "name": "ag",
   "version": "0.1.2",
-  "description": "Initialize goals and evals, improve agents with measured fixes, and inspect results in the dashboard.",
+  "description": "Inspect and improve AI agents with measured fixes and custom scores.",
   "author": {
     "name": "Agentagon"
   },
