@@ -6,7 +6,7 @@ Agentagon helps you audit, evaluate, and improve any AI agent using its code and
 
 The Python CLI captures evidence, runs checks and saves reports. The `ag` plugin guides your coding assistant through the reasoning, reviews and candidate edits. Supported coding hosts and setup commands are listed below.
 
-Start with **[Audit your agent](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/first-audit.md)** to investigate a concern, or **[Improve your agent](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/bring-one-failure.md)** to bring one known failure through evaluation and repair. Review, Eval and Ship support the later steps. [Install the plugin](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/install.md) if needed.
+Start with **[Audit your agent](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/first-audit.md)** to investigate a concern, or **[Improve your agent](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/bring-one-failure.md)** to bring one known failure through evaluation and repair. Evaluation preparation, review and delivery happen within these journeys. [Install the plugin](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/install.md) if needed.
 
 ## Prerequisites
 
@@ -75,15 +75,14 @@ Optional examples: [check your installation offline](https://github.com/agentago
 
 ## Workflows
 
-| Goal | Workflow and guide |
+| Goal | Journey and result |
 |---|---|
-| Investigate code, traces or both | [ag:audit](https://github.com/agentagon/agentagon/blob/main/docs/audit.md) |
-| Review staged, unstaged and new files | [ag:review](https://github.com/agentagon/agentagon/blob/main/docs/review.md) |
-| Prepare and review a benchmark | [ag:eval](https://github.com/agentagon/agentagon/blob/main/docs/eval.md) |
-| Measure candidate fixes against a baseline | [ag:fix](https://github.com/agentagon/agentagon/blob/main/docs/fix.md) |
-| Prepare a selected fix for delivery | [ag:ship](https://github.com/agentagon/agentagon/blob/main/docs/fix.md) |
+| Understand all agents, one agent, local changes, or existing evals | [ag:audit](https://github.com/agentagon/agentagon/blob/main/docs/audit.md): findings, coverage gaps and benchmark readiness; optionally include traces. |
+| Fix a problem, trace failure, finding, or eval dataset | [ag:fix](https://github.com/agentagon/agentagon/blob/main/docs/fix.md): changes, baseline comparison when available, independent review and local or PR delivery. |
 
-Evaluation and fix workflows require a clean committed checkout and configured execution limits. See the [capability overview](https://github.com/agentagon/agentagon/blob/main/docs/capabilities.md) for integrations and workflow boundaries.
+`ag:setup` manages preferences; `ag:dashboard` reopens saved work. Audit can finish on dirty or non-Git directories. Isolated fixes and executable evaluation preparation require clean committed inputs and authorized execution limits. A reviewed patch without a runnable baseline is clearly labeled unmeasured.
+
+Intelligence is optional and asks for approval of each outgoing request by default. Set its explicit **full access** mode through Setup to skip prompts while keeping calls visible. See [Intelligence permissions](https://github.com/agentagon/agentagon/blob/main/docs/intelligence.md).
 
 ## Configuration and saved data
 

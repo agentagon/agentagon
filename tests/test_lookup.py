@@ -35,7 +35,13 @@ RESPONSE = {
 @pytest.fixture(autouse=True)
 def clean_environment(monkeypatch, isolated_config):
     monkeypatch.delenv("AGENTAGON_API_KEY", raising=False)
-    Config().update("user", values={"intelligence.endpoint": "https://guidance.example"})
+    Config().update(
+        "user",
+        values={
+            "intelligence.endpoint": "https://guidance.example",
+            "intelligence.mode": "full_access",
+        },
+    )
 
 
 def test_missing_endpoint_is_local_and_can_be_configured_on_resume(
@@ -582,3 +588,190 @@ def test_cli_requires_new_file_options_and_valid_utf8(workspace, imported, tmp_p
     source.write_bytes(b"x" * (24 * 1024 + 1))
     oversized = runner.invoke(main, [*arguments, "--focus-file", str(source)])
     assert oversized.exit_code == 1 and "focus file exceeds" in oversized.output
+
+
+def test_ask_previews_redacted_payload_before_approval_and_preserves_cached_receipts(
+    workspace, imported, monkeypatch, capsys
+):
+    Config().update("user", unset=("intelligence.mode",))
+    monkeypatch.setenv("AGENTAGON_API_KEY", "synthetic-key")
+    calls = []
+    context = "Project for person@example.com with password=private"
+
+    def handler(request):
+        calls.append(request)
+        visible = json.loads(capsys.readouterr().err)
+        assert visible["status"] == "sending"
+        assert visible["request"] == json.loads(request.content)
+        assert "synthetic-key" not in json.dumps(visible)
+        return httpx.Response(200, json=RESPONSE)
+
+    transport = httpx.MockTransport(handler)
+    prepared = lookup(workspace, imported, context, transport=transport)
+    assert prepared["status"] == "approval_required" and not calls
+    assert prepared["mode"] == "ask"
+    assert prepared["workflow"] == "audit"
+    assert prepared["endpoint"] == "https://guidance.example/v1/audit"
+    assert prepared["request"] == {
+        "context": "Project for [REDACTED] with [REDACTED]",
+        "limit": 5,
+    }
+    assert not workspace.read_audit(imported).get("intelligence")
+    assert lookup(workspace, imported, context)["approval_id"] == prepared["approval_id"]
+    complete = lookup(
+        workspace, imported, context, approval_id=prepared["approval_id"], transport=transport
+    )
+    assert complete["status"] == "complete" and len(calls) == 1
+    cached = lookup(workspace, imported, context, transport=transport)
+    assert cached["cached"] and len(calls) == 1
+    with pytest.raises(AuditError, match="already used"):
+        lookup(
+            workspace, imported, context, approval_id=prepared["approval_id"], transport=transport
+        )
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["context", "endpoint", "phase", "refresh", "owner", "preview", "credential_reference"],
+)
+def test_approval_rejects_changed_request_or_owner_before_dispatch(
+    workspace, imported, monkeypatch, change
+):
+    Config().update("user", values={"intelligence.mode": "ask"})
+    monkeypatch.setenv("AGENTAGON_API_KEY", "synthetic-key")
+    fields = {"context": "Project overview"}
+    prepared = lookup(workspace, imported, **fields)
+    if change == "context":
+        fields["context"] = "Changed project overview"
+    elif change == "endpoint":
+        Config().update("user", values={"intelligence.endpoint": "https://other.example"})
+    elif change == "credential_reference":
+        monkeypatch.setenv("OTHER_INTELLIGENCE_KEY", "synthetic-key")
+        Config().update("user", values={"intelligence.api_key_env": "OTHER_INTELLIGENCE_KEY"})
+    elif change == "phase":
+        fields["phase"] = "follow_up"
+    elif change == "refresh":
+        fields["refresh"] = True
+    elif change == "owner":
+        audit = workspace.read_audit(imported)
+        audit["generation"] += 1
+        workspace.save_audit(audit)
+    else:
+        path = lookup_client.owners.approval_path(workspace, "audit", imported)
+        approval = json.loads(path.read_text())
+        approval["preview"]["request"]["context"] = "Corrupted prepared request"
+        workspace.write(path, approval)
+    with pytest.raises(AuditError, match="does not match"):
+        lookup(
+            workspace,
+            imported,
+            **fields,
+            approval_id=prepared["approval_id"],
+            transport=httpx.MockTransport(lambda request: pytest.fail("unapproved HTTP")),
+        )
+
+
+@pytest.mark.parametrize("status", [401, 429, 500])
+def test_failed_request_requires_fresh_approval(workspace, imported, monkeypatch, status):
+    Config().update("user", values={"intelligence.mode": "ask"})
+    monkeypatch.setenv("AGENTAGON_API_KEY", "synthetic-key")
+    prepared = lookup(workspace, imported, "Project overview")
+    failed = lookup(
+        workspace,
+        imported,
+        "Project overview",
+        approval_id=prepared["approval_id"],
+        transport=httpx.MockTransport(lambda request: httpx.Response(status)),
+    )
+    assert failed["status"] != "complete"
+    with pytest.raises(AuditError, match="already used"):
+        lookup(workspace, imported, "Project overview", approval_id=prepared["approval_id"])
+    retry = lookup(workspace, imported, "Project overview")
+    assert retry["status"] == "approval_required"
+    assert retry["approval_id"] != prepared["approval_id"]
+
+
+def test_decline_consumes_approval_and_leaves_audit_available(workspace, imported, monkeypatch):
+    Config().update("user", values={"intelligence.mode": "ask"})
+    monkeypatch.setenv("AGENTAGON_API_KEY", "synthetic-key")
+    prepared = lookup(workspace, imported, "Project overview")
+    declined = lookup(
+        workspace,
+        imported,
+        "Project overview",
+        approval_id=prepared["approval_id"],
+        decline=True,
+        transport=httpx.MockTransport(lambda request: pytest.fail("declined HTTP")),
+    )
+    assert declined["status"] == "declined"
+    assert report(workspace, imported)["pending_action"] == "evidence"
+    with pytest.raises(AuditError, match="already used"):
+        lookup(workspace, imported, "Project overview", approval_id=prepared["approval_id"])
+
+
+def test_full_access_emits_request_before_dispatch(workspace, imported, monkeypatch, capsys):
+    monkeypatch.setenv("AGENTAGON_API_KEY", "synthetic-key")
+
+    def handler(request):
+        visible = json.loads(capsys.readouterr().err)
+        assert visible["mode"] == "full_access"
+        assert visible["approval_id"] is None
+        assert visible["request"] == json.loads(request.content)
+        assert visible["endpoint"] == str(request.url)
+        return httpx.Response(200, json=RESPONSE)
+
+    assert (
+        lookup(workspace, imported, "Project overview", transport=httpx.MockTransport(handler))[
+            "status"
+        ]
+        == "complete"
+    )
+
+
+def test_failed_refresh_preserves_cache_and_requires_new_retry_approval(
+    workspace, imported, monkeypatch
+):
+    Config().update("user", values={"intelligence.mode": "ask"})
+    monkeypatch.setenv("AGENTAGON_API_KEY", "synthetic-key")
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json=RESPONSE) if len(calls) == 1 else httpx.Response(500)
+
+    transport = httpx.MockTransport(handler)
+    pending = lookup(workspace, imported, "Project overview")
+    complete = lookup(
+        workspace,
+        imported,
+        "Project overview",
+        approval_id=pending["approval_id"],
+        transport=transport,
+    )
+    refresh = lookup(workspace, imported, "Project overview", refresh=True, transport=transport)
+    assert refresh["status"] == "approval_required" and len(calls) == 1
+    assert (
+        lookup(
+            workspace,
+            imported,
+            "Project overview",
+            refresh=True,
+            approval_id=refresh["approval_id"],
+            transport=transport,
+        )["status"]
+        == "unavailable"
+    )
+    cached = lookup(workspace, imported, "Project overview", transport=transport)
+    assert cached["cached"] and cached["receipt"] == complete["receipt"] and len(calls) == 2
+    with pytest.raises(AuditError, match="already used"):
+        lookup(
+            workspace,
+            imported,
+            "Project overview",
+            refresh=True,
+            approval_id=refresh["approval_id"],
+            transport=transport,
+        )
+    retry = lookup(workspace, imported, "Project overview", refresh=True, transport=transport)
+    assert retry["status"] == "approval_required" and len(calls) == 2
+    assert retry["approval_id"] != refresh["approval_id"]

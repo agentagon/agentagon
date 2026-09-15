@@ -4,13 +4,13 @@
 
 Agentagon Intelligence adds curated suggestions to audits, evaluation preparation and measured fixes. It is optional: every workflow remains usable when access is missing or the service is unavailable.
 
-Your coding agent handles the lookups and prepares privacy-safe summaries. Suggestions help guide its work; local evidence and verification still determine the result.
+Your coding agent prepares privacy-safe summaries and shows each proposed call. By default it asks for your approval before sending anything to Intelligence. Suggestions help guide its work; local evidence and verification still determine the result.
 
 ## Start with your coding agent
 
 After obtaining access, use **ag:setup** in Codex or `/ag:setup` in Claude Code. Supply the issued service origin and the name of the environment variable containing your key; keep the key itself outside chat.
 
-Once configured, **ag:audit**, **ag:eval**, and **ag:fix** consult Intelligence as part of their workflows. You do not need to prepare request files or run lookup commands yourself. Describe what you want investigated or improved in your normal request.
+Once configured, **ag:audit** and **ag:fix** can consult Intelligence, including during their internal evaluation preparation stages. You do not need to prepare request files or run lookup commands yourself. Describe what you want investigated or improved in your normal request.
 
 ## Configure access
 
@@ -22,9 +22,22 @@ Request access through [hello@agentagon.ai](mailto:hello@agentagon.ai), then ask
 
     `agentagon status` reports whether the key and endpoint are configured without revealing their values. Missing configuration leaves audits, evaluation preparation and fixes available locally. `agentagon setup --scope user --set intelligence.access_presented true` records that optional access was discussed.
 
+## Choose approval mode
+
+The default `ask` mode shows the purpose, destination, workflow and exact redacted JSON payload, then waits for your approval of that request. Declining skips Intelligence and continues the journey locally. A configured key or the coding host's full-access permissions never imply Intelligence consent.
+
+Choose **full access** explicitly through **ag:setup** to allow Intelligence calls without individual approval. Calls and their exact redacted payloads remain visible. Privacy restrictions and workflow limits still apply. You can switch back to `ask` at any time; project settings override user defaults.
+
+```sh
+agentagon setup --scope user --set intelligence.mode full_access
+agentagon --workspace CHECKOUT setup --scope project --set intelligence.mode ask
+```
+
+Existing installations default to `ask` unless this setting is explicitly saved. Credentials are never included in previews.
+
 ## Use during a workflow
 
-The coding agent sends an abstract summary of the application and the question being investigated. It excludes raw code, traces, credentials, customer details, and protected evaluation material. It may consult Intelligence again when later evidence makes a follow-up useful.
+After approval, or under explicitly configured full access, the coding agent sends an abstract summary of the application and the question being investigated. It excludes raw code, traces, credentials, customer details, and protected evaluation material. It may consult Intelligence again when later evidence makes a follow-up useful.
 
 Guidance is advisory. It cannot change your permissions, benchmark, constraints, or execution limits. If the service is unavailable, the workflow continues locally.
 
@@ -40,7 +53,11 @@ Guidance is advisory. It cannot change your permissions, benchmark, constraints,
     agentagon --workspace CHECKOUT fix lookup RUN_ID --context-file CONTEXT_FILE --focus-file FOCUS_FILE --phase initial --limit 5
     ```
 
-    The ID selects the local owner and the client selects the matching service path: `/v1/audit`, `/v1/eval` or `/v1/fix`. The endpoints share a response contract; audit accepts `context` and/or `focus`, evaluation accepts `context` and/or `goal`, and fix requires `focus` with optional `context`. The fix coordinator owns lookups for a run; do not invoke one for each candidate or reviewer. Each workflow makes at most two automatic logical lookups for its owner: an initial request and, when useful, one distinct `--phase follow_up` request after later evidence or measurements. Identical completed requests for the same owner, endpoint and phase reuse receipts; changing a supplied field creates a distinct request. `--refresh` explicitly repeats a completed request. Requests are not automatically retried. See the [shared skill reference](../skills/audit/references/intelligence.md) for preparation and workflow rules.
+    In `ask` mode these commands first return `status: "approval_required"`, an opaque `approval_id`, and the exact redacted request preview without making a network call. The coding host shows that preview and obtains explicit user consent. Repeat the same command and files with `--approve APPROVAL_ID` after consent, or `--decline APPROVAL_ID` to skip it. Do not infer consent from starting a journey. Both options are available on all three commands and cannot be combined.
+
+    Approval is single use and bound to the owner state, destination, credential reference, phase, payload and refresh choice. Changes require a new preview and approval. A failed or interrupted request consumes its approval, so retries require fresh approval. An approved dispatch sends the saved redacted payload and emits its preview to stderr before sending; the final result remains JSON on stdout. Full access emits the same visible preview while skipping the approval prompt. Successful local cache reads are marked `cached: true` and send nothing, so they need no approval. A follow-up or `--refresh` sends a new request and requires new approval in `ask` mode.
+
+    The ID selects the local owner and the client selects the matching service path: `/v1/audit`, `/v1/eval` or `/v1/fix`. The endpoints share a response contract; audit accepts `context` and/or `focus`, evaluation accepts `context` and/or `goal`, and fix requires `focus` with optional `context`. The fix coordinator owns lookups for a run; do not invoke one for each candidate or reviewer. Each workflow proposes at most two logical lookups for its owner: an initial request and, when useful, one distinct `--phase follow_up` request after later evidence or measurements. Identical completed requests for the same owner, endpoint and phase reuse receipts; changing a supplied field creates a distinct request. `--refresh` explicitly repeats a completed request. Requests are not automatically retried. See the [shared skill reference](../skills/audit/references/intelligence.md) for preparation and workflow rules.
 
 ## Client contract
 

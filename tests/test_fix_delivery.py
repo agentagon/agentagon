@@ -2,19 +2,106 @@
 
 import json
 import subprocess
+import sys
 import traceback
 from pathlib import Path
 
 import pytest
 from support.delivery import creates, pushes
+from support.evaluation import draft, review_for
 from support.experiments import git, propose, verify
 
 from agentagon.core.records import AuditError
-from agentagon.experiments import delivery, engine, store
+from agentagon.experiments import delivery, engine, patches, preparation, store
 
 
 def ship(selected, **kwargs):
     return delivery.ship(selected["workspace"], selected["run_id"], **kwargs)
+
+
+def evaluation_change(workspace, specification):
+    started, plan = draft(workspace, specification)
+    prep = workspace.root / started["worktree"]
+    source = prep / "checks.py"
+    source.write_text(source.read_text() + "\n# Explicitly reviewed benchmark version\n")
+    checked = preparation.check(workspace, started["evaluation_id"], plan)
+    return preparation.freeze(workspace, started["evaluation_id"], review_for(checked))
+
+
+def test_frozen_evaluation_delivery_is_local_and_bound_to_reviewed_files(
+    application, specification
+):
+    frozen = evaluation_change(application, specification)
+    shipped = delivery.deliver(application, evaluation_id=frozen["evaluation_id"])
+    summary = json.loads(Path(shipped["artifacts"]["summary"]).read_text())
+    assert summary["status"] == "reviewed_evaluation"
+    assert summary["comparison"] is None
+    assert "Explicitly reviewed" in Path(shipped["artifacts"]["diff"]).read_text()
+    assert (
+        "do not establish application improvement"
+        in Path(shipped["artifacts"]["pr_body"]).read_text()
+    )
+    git(
+        application.root,
+        "update-ref",
+        f"refs/heads/{frozen['package']['review_branch']}",
+        frozen["origin_revision"],
+    )
+    with pytest.raises(AuditError, match="branch changed"):
+        delivery.deliver(application, evaluation_id=frozen["evaluation_id"])
+
+
+@pytest.mark.parametrize("kind", ["patch", "evaluation"])
+def test_other_reviewed_sources_publish_one_exact_draft_pr(selected, github, specification, kind):
+    work = selected["workspace"]
+    if kind == "evaluation":
+        frozen = evaluation_change(work, specification)
+        selector = {"evaluation_id": frozen["evaluation_id"]}
+        selected["branch"] = frozen["package"]["review_branch"]
+        selected["revision"] = frozen["package"]["review_revision"]
+    else:
+        started = patches.start(
+            work,
+            {
+                "editable_paths": ["notes.md"],
+                "checks": [
+                    {
+                        "id": "content",
+                        "argv": [
+                            sys.executable,
+                            "-c",
+                            "from pathlib import Path; assert Path('notes.md').read_text() == 'A reviewed correction'",
+                        ],
+                    }
+                ],
+                "timeout_seconds": 5,
+                "max_attempts": 1,
+            },
+            goal="Clarify the behavior",
+            author="author",
+            reason_no_comparison="No applicable baseline metric",
+        )
+        (work.root / started["worktree"] / "notes.md").write_text("A reviewed correction")
+        checked = patches.check(work, started["patch_id"])
+        review = checked["checks"][-1]["review_template"].copy()
+        review.update(
+            reviewer="independent",
+            verdict="pass",
+            rationale="Read exact correction and command evidence.",
+            assessments=dict.fromkeys(review["assessments"], True),
+        )
+        frozen = patches.review(work, started["patch_id"], review)
+        selector = {"patch_id": frozen["patch_id"]}
+        selected["branch"], selected["revision"] = frozen["branch"], frozen["source_revision"]
+    local = delivery.deliver(work, **selector)
+    assert local["state"] == "prepared"
+    published = delivery.deliver(work, **selector, publish=True)
+    assert published["state"] == "published"
+    assert (
+        delivery.deliver(work, **selector, publish=True)["delivery_id"] == published["delivery_id"]
+    )
+    assert git(selected["remote"], "rev-parse", selected["branch"]) == selected["revision"]
+    assert len(pushes(github)) == len(creates(github)) == 1
 
 
 def test_preparation_is_local_repeatable_and_preserves_unrelated_work(selected, monkeypatch):
@@ -126,16 +213,19 @@ def test_dominated_selection_and_changed_review_are_rejected(selected):
         ship(selected)
 
 
-def test_ambiguous_remote_and_missing_default_require_explicit_settings(selected):
+def test_local_delivery_needs_no_remote_but_publication_validates_destination(selected):
     work = selected["workspace"]
     git(work.root, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+    assert ship(selected)["state"] == "prepared"
     with pytest.raises(AuditError):
-        ship(selected)
+        ship(selected, publish=True)
     assert ship(selected, base=selected["base"])["state"] == "prepared"
     git(work.root, "config", "--add", "remote.origin.pushurl", str(selected["remote"]))
     git(work.root, "config", "--add", "remote.origin.pushurl", "https://other.invalid/org/repo.git")
     with pytest.raises(AuditError, match="unambiguous"):
-        ship(selected, base=selected["base"])
+        ship(selected, base=selected["base"], publish=True)
+    git(work.root, "remote", "remove", "origin")
+    assert ship(selected)["state"] == "prepared"
 
 
 def test_publish_requires_gh_but_saves_prepared_result(selected, monkeypatch):
@@ -217,8 +307,7 @@ def test_prepared_delivery_with_updated_tracking_base_cannot_publish(selected, g
     ship(selected)
     work = selected["workspace"]
     git(work.root, "push", "-q", "origin", f"{selected['revision']}:refs/heads/{selected['base']}")
-    with pytest.raises(AuditError, match="verify a new run"):
-        ship(selected)
+    assert ship(selected)["state"] == "prepared"
     with pytest.raises(AuditError, match="remote base changed"):
         ship(selected, publish=True)
     assert not pushes(github) and not creates(github)

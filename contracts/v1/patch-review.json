@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "patch_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "check_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "source_revision": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "source_digest": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "check_digest": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "reviewer": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail",
+        "pending"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      }
+    },
+    "assessments": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "correctness": {
+          "type": "boolean"
+        },
+        "scope": {
+          "type": "boolean"
+        },
+        "checks": {
+          "type": "boolean"
+        },
+        "known_failures": {
+          "type": "boolean"
+        },
+        "limitations": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "correctness",
+        "scope",
+        "checks",
+        "known_failures",
+        "limitations"
+      ]
+    }
+  },
+  "required": [
+    "patch_id",
+    "check_id",
+    "source_revision",
+    "source_digest",
+    "check_digest",
+    "reviewer",
+    "rationale",
+    "verdict",
+    "evidence",
+    "assessments"
+  ]
+}

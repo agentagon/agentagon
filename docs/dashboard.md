@@ -6,7 +6,7 @@ The dashboard gives you a local browser view of an application’s saved audits,
 
 ## Opens with your workflow
 
-**ag:audit**, **ag:review**, **ag:eval**, **ag:fix**, **ag:ship**, and checkout-scoped **ag:setup** automatically open the dashboard when they start or resume. The coding host keeps its server running in the background, reuses the same session's server and tab for that application, and selects the active audit, evaluation or fix run once its ID is available. Nested skills reuse that dashboard too. User-wide setup without an application directory has no dashboard to open.
+**ag:audit** and **ag:fix** automatically open the dashboard when they start or resume. The coding host keeps its server running in the background, reuses the same session's server and tab for that application, and selects the active audit, evaluation or fix run once its ID is available. Internal stages and Setup invoked within those journeys preserve the same dashboard. Standalone **ag:setup** changes settings without opening one.
 
 The host refreshes the page at workflow milestones; use **Refresh** to inspect saved progress in between. You can explicitly ask to skip or close the dashboard for the session. If the host cannot open a browser, it provides the local URL. If it cannot keep a dashboard server running, it reports that limitation and continues the workflow. Direct CLI commands retain their explicit dashboard launch behavior.
 

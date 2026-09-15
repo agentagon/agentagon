@@ -79,25 +79,20 @@ def test_installs_and_updates_native_plugins_without_touching_unrelated_files(tm
     unrelated.write_text('model = "user-selected-model"\n')
     result = installation.install_plugins(home=tmp_path)
     assert result["deferred"] == []
-    assert result["skills"] == [
-        "ag:audit",
-        "ag:review",
-        "ag:setup",
-        "ag:dashboard",
-        "ag:fix",
-        "ag:ship",
-        "ag:eval",
-    ]
+    assert result["skills"] == ["ag:audit", "ag:fix", "ag:setup", "ag:dashboard"]
     assert [item["host"] for item in result["hosts"]] == ["codex", "claude-code"]
     plugin = Path(result["plugin_root"])
     assert all((plugin / "skills" / skill / "SKILL.md").is_file() for skill in installation.SKILLS)
     assert (plugin / "skills/audit/references/braintrust.md").is_file()
-    assert (plugin / "skills/review/SKILL.md").read_bytes() == installation.resource_path(
-        "skills/review/SKILL.md"
-    ).read_bytes()
-    assert (plugin / "skills/ship/SKILL.md").read_bytes() == installation.resource_path(
-        "skills/ship/SKILL.md"
-    ).read_bytes()
+    assert (plugin / "skills/audit/references/changes.md").is_file()
+    assert (plugin / "skills/fix/references/delivery.md").is_file()
+    assert (plugin / "skills/fix/references/evaluation.md").is_file()
+    assert (plugin / "skills/setup/references/profiles.md").is_file()
+    assert (plugin / "skills/dashboard/references/lifecycle.md").is_file()
+    assert (plugin / "skills/eval/helpers/agentagon_events.py").is_file()
+    assert sorted(path.parent.name for path in (plugin / "skills").glob("*/SKILL.md")) == sorted(
+        installation.SKILLS
+    )
     (plugin / "personal-note.txt").write_text("Keep this")
     again = installation.install_plugins(home=tmp_path)
     assert result["hosts"] == again["hosts"]
@@ -106,6 +101,42 @@ def test_installs_and_updates_native_plugins_without_touching_unrelated_files(tm
     calls, _, _ = managers
     assert ("claude", ["plugin", "update", installation.PLUGIN_ID, "--scope", "user"]) in calls
     assert ("claude", ["plugin", "enable", installation.PLUGIN_ID, "--scope", "user"]) not in calls
+
+
+def test_upgrade_retires_managed_skills_and_preserves_helpers_and_unmanaged_files(tmp_path):
+    root = tmp_path / "managed-marketplace"
+    installation._sync_bundle(root)
+    plugin = root / "plugins/ag"
+    marker = root / installation.MARKER
+    ownership = json.loads(marker.read_text())
+    retired = [f"plugins/ag/skills/{name}/SKILL.md" for name in ("review", "eval", "ship")]
+    for relative in retired:
+        file = root / relative
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("Previous exposed Agentagon journey")
+    ownership["files"].extend(retired)
+    marker.write_text(json.dumps(ownership))
+    note = plugin / "skills/review/personal-note.md"
+    note.write_text("Preserve this unmanaged user note.")
+    helper = plugin / "skills/eval/helpers/agentagon_events.py"
+    helper.write_text("Previous managed helper implementation")
+
+    installation._sync_bundle(root)
+
+    assert all(not (root / relative).exists() for relative in retired)
+    assert sorted(file.parent.name for file in (plugin / "skills").glob("*/SKILL.md")) == sorted(
+        installation.SKILLS
+    )
+    assert (
+        helper.read_bytes()
+        == installation.resource_path("skills/eval/helpers/agentagon_events.py").read_bytes()
+    )
+    assert (plugin / "skills/eval/helpers/agentagon_events.cjs").is_file()
+    assert (plugin / "skills/eval/references/preparation.md").is_file()
+    assert (plugin / "skills/fix/references/evaluation.md").is_file()
+    assert (plugin / "skills/fix/references/delivery.md").is_file()
+    assert note.read_text() == "Preserve this unmanaged user note."
+    assert not set(retired).intersection(json.loads(marker.read_text())["files"])
 
 
 def test_claude_enables_a_disabled_plugin_after_update(tmp_path, managers, monkeypatch):
@@ -291,15 +322,20 @@ def test_real_codex_registers_and_enables_packaged_skills(tmp_path):
     assert result["hosts"][0]["enabled"] is True
     cache = tmp_path / ".codex/plugins/cache/agentagon-local/ag"
     skills = next(cache.iterdir()) / "skills"
-    assert sorted(path.name for path in skills.iterdir()) == sorted(installation.SKILLS)
+    assert sorted(path.parent.name for path in skills.glob("*/SKILL.md")) == sorted(
+        installation.SKILLS
+    )
     assert (skills.parent / "hooks/hooks.json").read_bytes() == installation.resource_path(
         "hooks/hooks.json"
     ).read_bytes()
     for relative in (
-        "review/SKILL.md",
+        "audit/references/changes.md",
         "fix/SKILL.md",
         "fix/references/contract.md",
-        "ship/SKILL.md",
+        "fix/references/delivery.md",
+        "fix/references/evaluation.md",
+        "setup/references/profiles.md",
+        "dashboard/references/lifecycle.md",
         "eval/helpers/agentagon_events.py",
         "eval/helpers/agentagon_events.cjs",
         "fix/references/roles.md",
@@ -319,15 +355,20 @@ def test_real_claude_registers_and_enables_packaged_skills(tmp_path):
     assert result["hosts"][0]["enabled"] is True
     cache = tmp_path / ".claude/plugins/cache/agentagon-local/ag"
     skills = next(cache.iterdir()) / "skills"
-    assert sorted(path.name for path in skills.iterdir()) == sorted(installation.SKILLS)
+    assert sorted(path.parent.name for path in skills.glob("*/SKILL.md")) == sorted(
+        installation.SKILLS
+    )
     assert (skills.parent / "hooks/hooks.json").read_bytes() == installation.resource_path(
         "hooks/hooks.json"
     ).read_bytes()
     for relative in (
-        "review/SKILL.md",
+        "audit/references/changes.md",
         "fix/SKILL.md",
         "fix/references/contract.md",
-        "ship/SKILL.md",
+        "fix/references/delivery.md",
+        "fix/references/evaluation.md",
+        "setup/references/profiles.md",
+        "dashboard/references/lifecycle.md",
         "eval/helpers/agentagon_events.py",
         "eval/helpers/agentagon_events.cjs",
         "fix/references/roles.md",

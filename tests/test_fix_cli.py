@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 import support.delivery as delivery_fixtures
 from click.testing import CliRunner
+from support.experiments import git
 
 from agentagon.cli.main import main
 from agentagon.experiments import delivery, engine
@@ -185,6 +186,9 @@ def test_fix_new_forwards_the_same_operation_identity_on_retry(workspace, monkey
 
 
 def test_fix_ship_cli_prepares_the_selected_candidate_without_network(selected, monkeypatch):
+    workspace = selected["workspace"]
+    origin_revision = git(workspace.root, "rev-parse", "HEAD")
+    git(workspace.root, "remote", "remove", "origin")
     original = delivery._command
 
     def local_only(root, argv, **options):
@@ -192,14 +196,14 @@ def test_fix_ship_cli_prepares_the_selected_candidate_without_network(selected, 
         return original(root, argv, **options)
 
     monkeypatch.setattr(delivery, "_command", local_only)
-    result = invoke(selected["workspace"].root, "fix", "ship", selected["run_id"])
+    result = invoke(workspace.root, "fix", "ship", selected["run_id"])
     assert result.exit_code == 0, result.output
     prepared = json.loads(result.output)
     assert prepared["state"] == "prepared"
     assert prepared["candidate_id"] == selected["candidate_id"]
     assert prepared["source_revision"] == selected["revision"]
-    assert prepared["remote"] == "origin"
-    assert prepared["base"] == selected["base"]
+    assert prepared["base_revision"] == origin_revision
+    assert "remote" not in prepared and "base" not in prepared
     assert all(Path(path).is_file() for path in prepared["artifacts"].values())
     assert "pr" not in prepared
 

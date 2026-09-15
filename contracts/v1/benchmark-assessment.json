@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentagon dataset assessment and benchmark draft",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "goal",
+    "author",
+    "dataset_paths",
+    "entrypoint_paths",
+    "assessments",
+    "proposed_cases"
+  ],
+  "properties": {
+    "goal": {
+      "$ref": "#/$defs/text"
+    },
+    "author": {
+      "$ref": "#/$defs/text"
+    },
+    "dataset_paths": {
+      "$ref": "#/$defs/paths"
+    },
+    "entrypoint_paths": {
+      "$ref": "#/$defs/paths"
+    },
+    "issue_ids": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/text"
+      }
+    },
+    "proposed_cases": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/text"
+      }
+    },
+    "plan": {
+      "type": "object",
+      "description": "Optional evaluation-plan record; independently validated against that contract."
+    },
+    "assessments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coverage",
+        "label_correctness",
+        "duplicates",
+        "representativeness",
+        "provenance",
+        "leakage",
+        "sensitivity"
+      ],
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/assessment"
+        },
+        "label_correctness": {
+          "$ref": "#/$defs/assessment"
+        },
+        "duplicates": {
+          "$ref": "#/$defs/assessment"
+        },
+        "representativeness": {
+          "$ref": "#/$defs/assessment"
+        },
+        "provenance": {
+          "$ref": "#/$defs/assessment"
+        },
+        "leakage": {
+          "$ref": "#/$defs/assessment"
+        },
+        "sensitivity": {
+          "$ref": "#/$defs/assessment"
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "dataset_paths": {
+        "maxItems": 0
+      }
+    }
+  },
+  "then": {
+    "properties": {
+      "proposed_cases": {
+        "minItems": 1
+      }
+    }
+  },
+  "$defs": {
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "path": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/text"
+        },
+        {
+          "not": {
+            "pattern": "^/|\\\\|(?:^|/)(?:\\.\\.|\\.git)(?:/|$)"
+          }
+        }
+      ]
+    },
+    "paths": {
+      "type": "array",
+      "maxItems": 500,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/path"
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "rationale",
+        "evidence"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "supported",
+            "concern",
+            "unknown"
+          ]
+        },
+        "rationale": {
+          "$ref": "#/$defs/text"
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "detail"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/$defs/path"
+              },
+              "detail": {
+                "$ref": "#/$defs/text"
+              }
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "supported",
+              "concern"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "evidence": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  }
+}

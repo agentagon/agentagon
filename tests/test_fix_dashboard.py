@@ -167,3 +167,109 @@ def test_fix_dashboard_empty_before_initialization_does_not_write(workspace):
         assert json.loads(body)["runs"] == []
         assert json.loads(body)["selected_run_id"] is None
     assert not workspace.state.exists()
+
+
+def _save_reviewed_patch(workspace, *, no_checks=False):
+    """Write a stored display fixture without executing checks or creating a branch."""
+    from agentagon.experiments import patches
+
+    patch_id = "patch_" + "a" * 24
+    plan = {"checks": [] if no_checks else [{"id": "unit", "argv": ["private-command"]}]}
+    delivery_id = "delivery_" + "b" * 24
+    data = {
+        "version": 1,
+        "origin": str(workspace.root),
+        "patch_id": patch_id,
+        "created_at": "2026-09-12T00:00:00Z",
+        "updated_at": "2026-09-12T01:00:00Z",
+        "goal": "Fix timeout handling",
+        "origin_revision": "0" * 40,
+        "author": "patch-host",
+        "state": "reviewed_unmeasured",
+        "reason_no_comparison": "No executable baseline is available.",
+        "plan": plan,
+        "plan_digest": digest(plan),
+        "branch": "codex/reviewed-patch",
+        "checks": [{"state": "passed", "stdout": "private-check-output"}],
+        "reviews": [{"verdict": "pass", "private": "private-review-material"}],
+        "review": {"verdict": "pass", "private": "private-review-material"},
+        "intelligence": {"request": "private-intelligence-payload"},
+        "deliveries": {
+            delivery_id: {
+                "state": "prepared",
+                "artifacts": {},
+                "pr": {"url": "javascript:alert('must not serve')"},
+            }
+        },
+    }
+    data["context_digest"] = digest({key: data[key] for key in patches.CONTEXT_FIELDS})
+    for name, filename in dashboard.DELIVERY_FILES.items():
+        path = patches.directory(workspace, patch_id) / "deliveries" / delivery_id / filename
+        workspace.write_bytes(path, f"retained-{name}".encode())
+        data["deliveries"][delivery_id]["artifacts"][name] = str(path.relative_to(workspace.root))
+    workspace.write(patches.directory(workspace, patch_id) / "state.json", data)
+    return data
+
+
+@pytest.mark.parametrize("no_checks", [False, True])
+def test_reviewed_patch_dashboard_keeps_measurement_limits_and_downloads_owned_artifacts(
+    workspace, monkeypatch, no_checks
+):
+    from agentagon.experiments import patches, worker
+
+    source = _save_reviewed_patch(workspace, no_checks=no_checks)
+    before = {path: path.read_bytes() for path in workspace.state.rglob("*") if path.is_file()}
+    monkeypatch.setattr(
+        patches, "verified", lambda *args, **kwargs: pytest.fail("dashboard revalidated delivery")
+    )
+    monkeypatch.setattr(worker, "run", lambda *args, **kwargs: pytest.fail("dashboard ran checks"))
+    with running(workspace) as server:
+        for endpoint in ("/api/runs", "/api/patches"):
+            status, _, body = request(server, endpoint)
+            assert status == 200
+            patch = json.loads(body)["reviewed_patches"][0]
+            assert patch["patch_id"] == source["patch_id"]
+            assert patch["validation_label"] == "Reviewed; unmeasured"
+            assert patch["measurement_status"] == "not_measured"
+            assert patch["reason_no_comparison"] == source["reason_no_comparison"]
+            assert patch["next_action"] == "deliver"
+            assert patch["review_verdict"] == "pass"
+            assert patch["check_count"] == (0 if no_checks else 1)
+            assert patch["check_state"] == ("not_run" if no_checks else "passed")
+            assert patch["executable_checks_run"] is not no_checks
+            assert patch["deliveries"][0]["pr_url"] is None
+            assert b"private-" not in body
+            assert json.loads(request(server, patch["report_url"])[2]) == patch
+            for name, url in patch["deliveries"][0]["artifacts"].items():
+                status, headers, content = request(server, url)
+                assert status == 200 and content == f"retained-{name}".encode()
+                assert headers["Content-Disposition"].startswith("attachment;")
+                assert headers["Content-Type"] == "application/octet-stream"
+                assert request(server, url, headers={"Host": "attacker.example"})[0] == 403
+        assert request(server, "/api/patches/patch_" + "f" * 24)[0] == 404
+    assert {
+        path: path.read_bytes() for path in workspace.state.rglob("*") if path.is_file()
+    } == before
+
+
+def test_patch_delivery_links_reject_changed_paths_and_symlinks(workspace):
+    from agentagon.experiments import patches
+
+    source = _save_reviewed_patch(workspace)
+    patch_id = source["patch_id"]
+    delivery_id, delivery = next(iter(source["deliveries"].items()))
+    delivery["artifacts"]["summary"] = str(
+        (workspace.state / "workspace.json").relative_to(workspace.root)
+    )
+    diff = workspace.root / delivery["artifacts"]["diff"]
+    diff.unlink()
+    diff.symlink_to(workspace.state / "workspace.json")
+    workspace.write(patches.directory(workspace, patch_id) / "state.json", source)
+    with running(workspace) as server:
+        status, _, body = request(server, "/api/patches")
+        assert status == 200
+        artifacts = json.loads(body)["reviewed_patches"][0]["deliveries"][0]["artifacts"]
+        assert set(artifacts) == {"pr_body", "diffstat"}
+        for suffix in ("summary", "diff", "state.json", "../../state.json"):
+            url = f"/api/patches/{patch_id}/deliveries/{delivery_id}/artifacts/{suffix}"
+            assert request(server, url)[0] == 404

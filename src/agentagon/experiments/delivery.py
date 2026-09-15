@@ -1,5 +1,6 @@
-"""Prepare and publish the exact selected, verified experiment as a draft PR."""
+"""Prepare local delivery or a draft PR from the exact reviewed source and evidence."""
 
+import hashlib
 import json
 import os
 import re
@@ -9,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from agentagon.core.records import AuditError, digest, identifier, now
-from agentagon.experiments import checkouts, engine, evaluation, store
+from agentagon.experiments import checkouts, engine, evaluation, patches, preparation, store
 from agentagon.storage.workspace import Workspace
 
 
@@ -156,6 +157,8 @@ def _summary(workspace: Workspace, data: dict, candidate: dict) -> dict:
     # Goal, hypothesis, reviewer prose, commands, environment and raw evidence stay local.
     return {
         "version": 1,
+        "status": "verified",
+        "source_kind": "measured_candidate",
         "run_id": data["run_id"],
         "candidate_id": candidate["candidate_id"],
         "source_revision": candidate["source_revision"],
@@ -265,6 +268,19 @@ def _body(summary: dict, record: dict) -> str:
     return "\n".join(lines)
 
 
+def _safe_snapshot(workspace: Workspace, revision: str) -> None:
+    for name in checkouts.paths(workspace.root, revision):
+        path = Path(name)
+        if (
+            ".agentagon" in path.parts
+            or path.name == ".env"
+            or path.name.startswith(".env.")
+            and path.name not in {".env.example", ".env.sample"}
+            or path.suffix in {".pem", ".key", ".p12"}
+        ):
+            raise AuditError("delivery snapshot contains a private state or credential path")
+
+
 def _prepare(
     workspace: Workspace, data: dict, candidate: dict, destination: dict, *, reconcile: bool
 ) -> dict:
@@ -277,16 +293,7 @@ def _prepare(
         data["origin_revision"],
         candidate["source_revision"],
     )
-    for name in checkouts.paths(workspace.root, candidate["source_revision"]):
-        path = Path(name)
-        if (
-            ".agentagon" in path.parts
-            or path.name == ".env"
-            or path.name.startswith(".env.")
-            and path.name not in {".env.example", ".env.sample"}
-            or path.suffix in {".pem", ".key", ".p12"}
-        ):
-            raise AuditError("delivery snapshot contains a private state or credential path")
+    _safe_snapshot(workspace, candidate["source_revision"])
     binding = {
         **destination,
         "base_revision": data["origin_revision"],
@@ -425,7 +432,7 @@ def _existing_pr(workspace: Workspace, repository: str, record: dict) -> dict | 
         or type(pr.get("isDraft")) is not bool
         or pr.get("url") != f"https://{repository}/pull/{pr['number']}"
     ):
-        raise AuditError("existing PR does not match this verified delivery; it was not changed")
+        raise AuditError("existing PR does not match this delivery; it was not changed")
     return {
         "url": pr["url"],
         "number": pr["number"],
@@ -465,73 +472,389 @@ def ship(
                 "finish cleanup verification and comparison before preparing or publishing delivery"
             )
         candidate = _selected(workspace, data, candidate_id)
-        destination, url = _destination(workspace, remote, base)
+        destination, url = (
+            _destination(workspace, remote, base)
+            if publish
+            else ({"base_revision": data["origin_revision"]}, None)
+        )
         record = _prepare(workspace, data, candidate, destination, reconcile=publish)
         if publish:
-            if shutil.which("gh") is None:
-                raise AuditError(
-                    "install and authenticate GitHub CLI before publishing; preparation is saved"
+            _publish(
+                workspace,
+                record,
+                url,
+                save=lambda value: _save(workspace, data, value),
+                revalidate=lambda: _selected(workspace, data, candidate["candidate_id"]),
+                title=f"fix: apply verified Agentagon candidate {candidate['candidate_id'][-8:]}",
+            )
+        return {
+            **record,
+            "artifacts": {
+                key: str(workspace.root / value) for key, value in record["artifacts"].items()
+            },
+        }
+
+
+def _publish(workspace: Workspace, record: dict, url: str, *, save, revalidate, title: str) -> None:
+    if shutil.which("gh") is None:
+        raise AuditError(
+            "install and authenticate GitHub CLI before publishing; preparation is saved"
+        )
+    repository = _repository(url)
+    existing = _existing_pr(workspace, repository, record)
+    remote_revision = _remote_revision(workspace, url, record["branch"])
+    if remote_revision and remote_revision != record["source_revision"]:
+        raise AuditError("remote delivery branch has different source; it was not overwritten")
+    if existing is None:
+        if record["state"] == "published":
+            raise AuditError("published PR is no longer discoverable; inspect it before retrying")
+        revalidate()
+        _remote_base(workspace, url, record)
+        record["state"] = "publishing"
+        save(record)
+        if remote_revision is None:
+            # An empty expected ref is atomic create-only protection. It cannot
+            # update a branch that appears after our remote read, even by fast-forward.
+            _git(
+                workspace.root,
+                "push",
+                "--porcelain",
+                f"--force-with-lease=refs/heads/{record['branch']}:",
+                "--",
+                url,
+                f"{record['source_revision']}:refs/heads/{record['branch']}",
+            )
+        if _remote_revision(workspace, url, record["branch"]) != record["source_revision"]:
+            raise AuditError("pushed branch identity changed; publication stopped")
+        record["state"] = "pushed"
+        save(record)
+        revalidate()
+        _remote_base(workspace, url, record)
+        _command(
+            workspace.root,
+            [
+                "gh",
+                "pr",
+                "create",
+                "--repo",
+                repository,
+                "--draft",
+                "--base",
+                record["base"],
+                "--head",
+                record["branch"],
+                "--title",
+                title,
+                "--body-file",
+                str(workspace.root / record["artifacts"]["pr_body"]),
+            ],
+        )
+        existing = _existing_pr(workspace, repository, record)
+        if existing is None:
+            raise AuditError(
+                "PR creation was not confirmed; retry to reconcile without duplicating"
+            )
+    record.update(state="published", pr=existing)
+    save(record)
+
+
+def _evaluation_source(workspace: Workspace, data: dict) -> dict:
+    if data["state"] != "frozen":
+        raise AuditError("evaluation delivery requires a reviewed frozen benchmark")
+    package, review = data["package"], data["review"]
+    record = next(c for c in data["checks"] if c["validation_id"] == package["validation_id"])
+    template = record["review_template"]
+    if (
+        record["state"] != "passed"
+        or review["verdict"] != "pass"
+        or review["reviewer"] == data["author"]
+        or review["assessments"] != dict.fromkeys(preparation.ASSESSMENTS, True)
+        or any(
+            review[k] != template[k]
+            for k in ("evaluation_id", "validation_id", "validation_digest", "evidence")
+        )
+        or digest({k: v for k, v in record.items() if k != "review_template"})
+        != review["validation_digest"]
+        or package["files"] != record["files"]
+        or package["plan"] != record["plan"]
+    ):
+        raise AuditError("frozen evaluation review or validation evidence changed")
+    observed = []
+    cases = [*record["plan"]["negative_cases"], *record["plan"].get("metric_cases", [])]
+    for trial in record["trials"]:
+        case = next((c for c in cases if c["id"] == trial["case_id"]), None)
+        outcome = preparation._outcome(
+            record["plan"]["spec"], trial, workspace.read_artifact(trial["artifact"]), case
+        )
+        observed.append({**trial, "outcome": outcome})
+    comparisons = preparation._metric_comparisons(record["plan"], observed)
+    if comparisons != record.get("metric_comparisons", []) or not all(
+        c["passed"] for c in comparisons
+    ):
+        raise AuditError("evaluation metric validation changed")
+    branch = package["review_branch"]
+    revision = _git(workspace.root, "rev-parse", "--verify", f"refs/heads/{branch}")
+    if package.get("review_revision") and package["review_revision"] != revision:
+        raise AuditError("evaluation review branch changed")
+    files = {entry["path"]: entry for entry in package["files"] if entry["kind"] != "inputs"}
+    changed = checkouts.changes(workspace.root, data["origin_revision"], revision)
+    if set(changed) - files.keys():
+        raise AuditError("evaluation branch contains changes outside its reviewed package")
+    names = set(checkouts.paths(workspace.root, revision))
+    for name, entry in files.items():
+        if entry.get("deleted"):
+            if name in names:
+                raise AuditError("evaluation branch does not match its reviewed deletion")
+            continue
+        retained = checkouts.checked_file(workspace.root, entry["artifact"]).read_bytes()
+        delivered = _git(workspace.root, "show", f"{revision}:{name}", binary=True)
+        mode = _git(workspace.root, "ls-tree", revision, "--", name).split(" ", 1)[0]
+        if (
+            hashlib.sha256(retained).hexdigest() != entry["digest"]
+            or delivered != retained
+            or mode != ("100755" if entry["mode"] & 0o111 else "100644")
+        ):
+            raise AuditError("evaluation branch or frozen input changed")
+    # Validate private inputs too, even though their contents never enter the delivery.
+    for entry in package["files"]:
+        if entry["kind"] == "inputs" and not entry.get("deleted"):
+            content = checkouts.checked_file(workspace.root, entry["artifact"]).read_bytes()
+            if hashlib.sha256(content).hexdigest() != entry["digest"]:
+                raise AuditError("frozen evaluation input changed")
+    return {
+        "branch": branch,
+        "source_revision": revision,
+        "source_digest": checkouts.tree(workspace.root, revision),
+    }
+
+
+def deliver(
+    workspace: Workspace,
+    *,
+    run_id: str | None = None,
+    evaluation_id: str | None = None,
+    patch_id: str | None = None,
+    remote: str = "origin",
+    base: str | None = None,
+    publish: bool = False,
+) -> dict:
+    """Package one selected measured candidate, frozen eval, or reviewed patch locally."""
+    if sum(value is not None for value in (run_id, evaluation_id, patch_id)) != 1:
+        raise AuditError("delivery needs exactly one run, evaluation, or patch")
+    if type(publish) is not bool:
+        raise AuditError("publication requires an explicit boolean publish option")
+    if run_id:
+        return ship(workspace, run_id, remote=remote, base=base, publish=publish)
+    workspace.require_initialized()
+    backend = patches if patch_id else preparation
+    source_id = patch_id or evaluation_id
+    with backend.locked(workspace, source_id) as root:
+        data = backend.load(workspace, source_id)
+
+        def revalidate():
+            if patch_id:
+                patches.verified(workspace, data)
+                return {k: data[k] for k in ("branch", "source_revision", "source_digest")}
+            return _evaluation_source(workspace, data)
+
+        source = revalidate()
+        _safe_snapshot(workspace, source["source_revision"])
+        if source["source_digest"] == checkouts.tree(workspace.root, data["origin_revision"]):
+            raise AuditError("reviewed source has no changes to deliver")
+        _git(
+            workspace.root,
+            "merge-base",
+            "--is-ancestor",
+            data["origin_revision"],
+            source["source_revision"],
+        )
+        destination, url = _destination(workspace, remote, base) if publish else ({}, None)
+        binding = {
+            **destination,
+            "base_revision": data["origin_revision"],
+            "source_kind": "patch" if patch_id else "evaluation",
+            "source_id": source_id,
+            **source,
+            "evidence_digest": digest(data["review"]) if patch_id else data["package_digest"],
+        }
+        delivery_id = identifier("delivery", binding)
+        deliveries = data.setdefault("deliveries", {})
+        record = deliveries.get(delivery_id)
+        if record and (
+            record.get("version") != 1 or any(record.get(k) != v for k, v in binding.items())
+        ):
+            raise AuditError("delivery record changed or has an unsupported version")
+        if record is None:
+            record = {
+                "version": 1,
+                "delivery_id": delivery_id,
+                **binding,
+                "state": "prepared",
+                "created_at": now(),
+            }
+            deliveries[delivery_id] = record
+        directory = root / "deliveries" / delivery_id
+
+        def save(value):
+            value["updated_at"] = now()
+            backend._save(workspace, data)
+            workspace.write(directory / "delivery.json", value)
+
+        state = "reviewed_unmeasured" if patch_id else "reviewed_evaluation"
+        limitations = [
+            "No application improvement or issue resolution is established by this delivery.",
+            "Baseline comparison is unavailable; recorded validation and independent review apply to this exact patch."
+            if patch_id
+            else "Evaluation validation applies to the fixed application revision and declared cases; dataset scores do not establish application improvement.",
+            "Publishing a draft PR does not merge or deploy the change.",
+        ]
+        summary = {
+            "version": 1,
+            "status": state,
+            "source_kind": binding["source_kind"],
+            "source_id": source_id,
+            **source,
+            "base_revision": data["origin_revision"],
+            "evidence_digest": binding["evidence_digest"],
+            "independent_review": "pass",
+            "comparison": None,
+            "limitations": limitations,
+        }
+        if patch_id:
+            summary["checks"] = [{"id": c["id"], "passed": True} for c in data["plan"]["checks"]]
+            summary["executable_checks_run"] = bool(data["plan"]["checks"])
+            if not data["plan"]["checks"]:
+                limitations.append(
+                    "No executable checks run; this patch has independent review only."
                 )
-            repository = _repository(url)
-            existing = _existing_pr(workspace, repository, record)
-            remote_revision = _remote_revision(workspace, url, record["branch"])
-            if remote_revision and remote_revision != record["source_revision"]:
-                raise AuditError(
-                    "remote delivery branch has different source; it was not overwritten"
+        else:
+            summary["validation_id"] = data["package"]["validation_id"]
+            summary["coverage"] = data["package"]["plan"]["coverage"]["status"]
+            comparison = data["package"].get("version_comparison")
+            if comparison:
+                delivered = set(
+                    checkouts.changes(
+                        workspace.root, data["origin_revision"], source["source_revision"]
+                    )
                 )
-            if existing is None:
-                if record["state"] == "published":
-                    raise AuditError(
-                        "published PR is no longer discoverable; inspect it before retrying"
-                    )
-                _selected(workspace, data, candidate["candidate_id"])
-                _remote_base(workspace, url, record)
-                record["state"] = "publishing"
-                _save(workspace, data, record)
-                if remote_revision is None:
-                    # An empty expected ref is atomic create-only protection. It cannot
-                    # update a branch that appears after our remote read, even by fast-forward.
-                    _git(
-                        workspace.root,
-                        "push",
-                        "--porcelain",
-                        f"--force-with-lease=refs/heads/{record['branch']}:",
-                        "--",
-                        url,
-                        f"{record['source_revision']}:refs/heads/{record['branch']}",
-                    )
-                if _remote_revision(workspace, url, record["branch"]) != record["source_revision"]:
-                    raise AuditError("pushed branch identity changed; publication stopped")
-                record["state"] = "pushed"
-                _save(workspace, data, record)
-                _selected(workspace, data, candidate["candidate_id"])
-                _remote_base(workspace, url, record)
-                _command(
-                    workspace.root,
-                    [
-                        "gh",
-                        "pr",
-                        "create",
-                        "--repo",
-                        repository,
-                        "--draft",
-                        "--base",
-                        record["base"],
-                        "--head",
-                        record["branch"],
-                        "--title",
-                        f"fix: apply verified Agentagon candidate {candidate['candidate_id'][-8:]}",
-                        "--body-file",
-                        str(workspace.root / record["artifacts"]["pr_body"]),
+                summary["comparison"] = {
+                    "kind": "evaluation_version",
+                    **{
+                        key: comparison[key]
+                        for key in (
+                            "previous_evaluation_id",
+                            "previous_package_digest",
+                            "previous_validation_id",
+                            "validation_id",
+                            "application_revision",
+                            "same_application_revision",
+                        )
+                    },
+                    "changed_delivered_paths": [
+                        name for name in comparison["changed_paths"] if name in delivered
                     ],
-                )
-                existing = _existing_pr(workspace, repository, record)
-                if existing is None:
-                    raise AuditError(
-                        "PR creation was not confirmed; retry to reconcile without duplicating"
+                    "coverage_before": comparison["coverage_before"]["status"],
+                    "coverage_after": comparison["coverage_after"]["status"],
+                    "provenance_changed": comparison["provenance_before"]
+                    != comparison["provenance_after"],
+                    "claim": "Evaluator version change; scores across versions do not establish application improvement.",
+                }
+        body = "\n".join(
+            [
+                "# Reviewed Agentagon patch" if patch_id else "# Reviewed Agentagon evaluation",
+                "",
+                f"Evidence status: `{state}`.",
+                "",
+                "## Validation",
+                "",
+                "- Independent review passed.",
+                *[f"- Check `{c['id']}` passed." for c in summary.get("checks", [])],
+                "",
+                "## Evidence identity",
+                "",
+                *[
+                    f"- {k}: `{summary[k]}`"
+                    for k in (
+                        "source_id",
+                        "source_revision",
+                        "source_digest",
+                        "base_revision",
+                        "evidence_digest",
                     )
-            record.update(state="published", pr=existing)
-            _save(workspace, data, record)
+                ],
+                "",
+                "## Limits",
+                "",
+                *[f"- {limit}" for limit in limitations],
+                *(
+                    [
+                        "",
+                        "## Evaluation version comparison",
+                        "",
+                        f"- Previous evaluation: `{summary['comparison']['previous_evaluation_id']}`.",
+                        f"- Same application revision: `{summary['comparison']['same_application_revision']}`.",
+                        f"- Coverage: `{summary['comparison']['coverage_before']}` → `{summary['comparison']['coverage_after']}`.",
+                        "- Evaluator changes do not establish application improvement across dataset versions.",
+                    ]
+                    if summary["comparison"]
+                    else []
+                ),
+                "",
+                f"<!-- agentagon-delivery:{delivery_id} -->",
+                "",
+            ]
+        )
+        workspace.write(directory / "summary.json", summary)
+        workspace.write_bytes(directory / "pull-request.md", body.encode())
+        workspace.write_bytes(
+            directory / "diff.patch",
+            _git(
+                workspace.root,
+                "diff",
+                "--binary",
+                "--no-ext-diff",
+                "--no-textconv",
+                data["origin_revision"],
+                source["source_revision"],
+                "--",
+                binary=True,
+            ),
+        )
+        workspace.write_bytes(
+            directory / "diffstat.txt",
+            (
+                _git(
+                    workspace.root,
+                    "diff",
+                    "--stat",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    data["origin_revision"],
+                    source["source_revision"],
+                    "--",
+                )
+                + "\n"
+            ).encode(),
+        )
+        record["artifacts"] = {
+            key: str((directory / filename).relative_to(workspace.root))
+            for key, filename in {
+                "summary": "summary.json",
+                "pr_body": "pull-request.md",
+                "diff": "diff.patch",
+                "diffstat": "diffstat.txt",
+            }.items()
+        }
+        save(record)
+        if publish:
+            _publish(
+                workspace,
+                record,
+                url,
+                save=save,
+                revalidate=revalidate,
+                title=f"fix: apply reviewed Agentagon {binding['source_kind']} {source_id[-8:]}",
+            )
         return {
             **record,
             "artifacts": {

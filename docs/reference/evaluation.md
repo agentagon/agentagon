@@ -8,7 +8,7 @@ A frozen package is immutable. Ask your coding agent to create a new draft from 
 
 === "Codex"
 
-    Select **ag:eval**, then send:
+    Select **ag:fix**, then send:
 
     ```text
     Create a new evaluation draft from EVALUATION_ID. Add coverage for
@@ -21,7 +21,7 @@ A frozen package is immutable. Ask your coding agent to create a new draft from 
 === "Claude Code"
 
     ```text
-    /ag:eval Create a new evaluation draft from EVALUATION_ID. Add coverage
+    /ag:fix Create a new evaluation draft from EVALUATION_ID. Add coverage
     for tool timeouts and empty search results, using the configured local
     profile. Agree the preparation limits with me, validate the revised
     benchmark, and obtain an independent review before freezing it.

@@ -79,3 +79,8 @@ def usage_path(workspace: Workspace, workflow: str, owner_id: str):
     if workflow == "eval":
         return preparation.directory(workspace, owner_id) / "usage.json"
     return store.run_dir(workspace, owner_id) / "usage.json"
+
+
+def approval_path(workspace: Workspace, workflow: str, owner_id: str):
+    """Private mutable consent state, separate from versioned workflow records."""
+    return usage_path(workspace, workflow, owner_id).with_name("intelligence-approval.json")

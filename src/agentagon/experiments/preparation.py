@@ -125,6 +125,7 @@ def start(
     author: str,
     from_id: str | None = None,
     audit_id: str | None = None,
+    benchmark_id: str | None = None,
 ) -> dict:
     workspace.require_initialized()
     revision = checkouts.clean_revision(workspace.root)
@@ -149,8 +150,34 @@ def start(
     selected_evidence = _selected_evidence(workspace, audit_id, issue_ids) if audit_id else None
     if not audit_id and prior and issue_ids == prior["issue_ids"]:
         selected_evidence = copy.deepcopy(prior["inventory"].get("selected_evidence"))
-    evaluation_id = identifier("eval", str(workspace.root), revision, uuid.uuid4().hex)
+    benchmark = None
+    if benchmark_id:
+        from agentagon.experiments import benchmarks
+
+        benchmark = benchmarks.load(workspace, benchmark_id)
+        if benchmarks._readiness(workspace, benchmark, profile_name, budget):
+            raise AuditError("benchmark draft is not ready for evaluation preparation")
+        assessment = benchmark["snapshot"]["assessment"]
+        if goal != assessment["goal"] or issue_ids != assessment["issue_ids"]:
+            raise AuditError("evaluation must retain its benchmark assessment goal and issues")
+    evaluation_id = (
+        identifier(
+            "eval",
+            str(workspace.root),
+            benchmark_id,
+            benchmark["snapshot_digest"],
+            revision,
+            profile,
+            budget,
+            author,
+        )
+        if benchmark
+        else identifier("eval", str(workspace.root), revision, uuid.uuid4().hex)
+    )
     with locked(workspace, evaluation_id) as root:
+        if benchmark and (root / "state.json").exists():
+            # Reconcile a completed preparation start whose benchmark link save was lost.
+            return {**status(workspace, evaluation_id), "reused": True}
         prep = root / "preparation"
         checkouts.create(workspace.root, prep, revision)
         if prior:
@@ -184,6 +211,16 @@ def start(
                 "truncated": len(found) > 500,
                 "issues": [issues[i] for i in issue_ids],
                 **({"selected_evidence": selected_evidence} if selected_evidence else {}),
+                **(
+                    {
+                        "benchmark_draft": {
+                            "benchmark_id": benchmark_id,
+                            "snapshot_digest": benchmark["snapshot_digest"],
+                        }
+                    }
+                    if benchmark
+                    else {}
+                ),
             },
             "previous_plan": prior["package"]["plan"] if prior else None,
         }
@@ -317,19 +354,61 @@ def _snapshot(workspace: Workspace, data: dict, plan: dict) -> tuple[str, list[d
 
     imported = _freeze(workspace, spec)
     checkouts.copy_frozen(workspace.root, prep, imported)
+    if benchmark_draft := data["inventory"].get("benchmark_draft"):
+        from agentagon.experiments import benchmarks
+
+        benchmark = benchmarks.load(workspace, benchmark_draft["benchmark_id"])
+        if benchmark["snapshot_digest"] != benchmark_draft["snapshot_digest"]:
+            raise AuditError("linked benchmark assessment changed")
+        for entry in benchmark["snapshot"]["files"]:
+            if entry["kind"] != "dataset":
+                continue
+            file = checkouts.checked_file(prep, entry["path"])
+            if hashlib.sha256(file.read_bytes()).hexdigest() != entry["digest"]:
+                raise AuditError(
+                    "audit benchmark preparation cannot change the assessed dataset; "
+                    "start a separate evaluation version for dataset repairs"
+                )
     revision = checkouts.snapshot(prep, data["origin_revision"], "Prepare evaluation benchmark")
     scopes = spec["evaluation_paths"] + [e["path"] for e in imported]
     changed = checkouts.changes(workspace.root, data["origin_revision"], revision)
-    if any(not (prep / name).is_file() for name in changed):
-        raise AuditError(
-            "evaluation preparation cannot delete files; frozen packages overlay files"
-        )
     if any(not any(checkouts.under(name, scope) for scope in scopes) for name in changed):
         raise AuditError(
             "evaluation preparation changed application source outside evaluation paths"
         )
-    files = []
+    previous_by_path = (
+        {entry["path"]: entry for entry in load(workspace, data["from_id"])["package"]["files"]}
+        if data.get("from_id")
+        else {}
+    )
+    # Retiring an untracked private input needs no public deletion record. Inputs
+    # that remain explicitly protected (or exist in the origin) retain tombstones.
+    previous_paths = [
+        name
+        for name, entry in previous_by_path.items()
+        if entry["kind"] != "inputs" or any(checkouts.under(name, scope) for scope in scopes)
+    ]
+    removed = sorted({name for name in [*changed, *previous_paths] if not (prep / name).exists()})
+    if any(not any(checkouts.under(name, scope) for scope in scopes) for name in removed):
+        raise AuditError("evaluation deletions must remain within declared evaluation paths")
     imported_by_path = {entry["path"]: entry for entry in imported}
+    removed_kinds = {
+        name: imported_by_path.get(name, previous_by_path.get(name, {})).get("kind", "overlays")
+        for name in removed
+    }
+    files = [
+        {
+            "path": name,
+            "deleted": True,
+            "kind": removed_kinds[name],
+            "deliver": any(checkouts.under(name, scope) for scope in plan["deliver_paths"]),
+        }
+        for name in removed
+    ]
+    # A renewed package can retain a deletion even when the new origin already lacks it.
+    files.extend(
+        entry for entry in imported if entry.get("deleted") and entry["path"] not in removed
+    )
     for name in checkouts.paths(prep, revision):
         if not name or not any(checkouts.under(name, scope) for scope in scopes):
             continue
@@ -350,10 +429,9 @@ def _snapshot(workspace: Workspace, data: dict, plan: dict) -> tuple[str, list[d
         not any(checkouts.under(name, scope) for name in names)
         for scope in spec["evaluation_paths"]
     ):
-        raise AuditError(
-            "every evaluation path must contain a frozen file; deletions are unsupported"
-        )
-    if any(scope not in names for scope in plan["coverage"]["holdout_paths"]):
+        raise AuditError("every evaluation path must contain a frozen file or scoped deletion")
+    present = {entry["path"] for entry in files if not entry.get("deleted")}
+    if any(scope not in present for scope in plan["coverage"]["holdout_paths"]):
         raise AuditError("holdout inputs must be separate frozen files")
     if any(
         not any(checkouts.under(name, scope) for name in names) for scope in plan["deliver_paths"]
@@ -668,7 +746,17 @@ def freeze(workspace: Workspace, evaluation_id: str, review: dict) -> dict:
             )
         spec = copy.deepcopy(record["plan"]["spec"])
         spec["overlays"], spec["inputs"] = [], []
+        spec.pop("deletions", None)
         for entry in files:
+            if entry.get("deleted"):
+                spec.setdefault("deletions", []).append(
+                    {
+                        "path": entry["path"],
+                        "deliver": entry["deliver"],
+                        **({"kind": "inputs"} if entry["kind"] == "inputs" else {}),
+                    }
+                )
+                continue
             exported = {"source": entry["artifact"], "path": entry["path"]}
             if entry["kind"] == "overlays":
                 exported["deliver"] = entry["deliver"]
@@ -704,12 +792,36 @@ def freeze(workspace: Workspace, evaluation_id: str, review: dict) -> dict:
             "source_revision": data["origin_revision"],
             "validation_id": record["validation_id"],
             "review_branch": branch,
+            "review_revision": existing or review_revision,
             **(
                 {"selected_evidence": record["selected_evidence"]}
                 if "selected_evidence" in record
                 else {}
             ),
         }
+        if data.get("from_id"):
+            previous = load(workspace, data["from_id"])
+            previous_files = {entry["path"]: entry for entry in previous["package"]["files"]}
+            current_files = {entry["path"]: entry for entry in files}
+            data["package"]["version_comparison"] = {
+                "previous_evaluation_id": previous["evaluation_id"],
+                "previous_package_digest": previous["package_digest"],
+                "previous_validation_id": previous["package"]["validation_id"],
+                "validation_id": record["validation_id"],
+                "application_revision": data["origin_revision"],
+                "same_application_revision": previous["package"]["source_revision"]
+                == data["origin_revision"],
+                "changed_paths": sorted(
+                    name
+                    for name in previous_files.keys() | current_files.keys()
+                    if previous_files.get(name) != current_files.get(name)
+                ),
+                "coverage_before": previous["package"]["plan"]["coverage"],
+                "coverage_after": record["plan"]["coverage"],
+                "provenance_before": previous["package"]["plan"]["provenance"],
+                "provenance_after": record["plan"]["provenance"],
+                "claim": "Evaluator version change; scores across versions do not establish application improvement.",
+            }
         data["package_digest"] = digest(data["package"])
         data["review"], data["state"] = copy.deepcopy(review), "frozen"
         workspace.write(root / "fix-spec.json", spec)
@@ -726,6 +838,8 @@ def fix_spec(workspace: Workspace, evaluation_id: str) -> dict:
             "evaluation source provenance changed; use eval start --from and revalidate"
         )
     for entry in data["package"]["files"]:
+        if entry.get("deleted"):
+            continue
         content = checkouts.checked_file(workspace.root, entry["artifact"]).read_bytes()
         if hashlib.sha256(content).hexdigest() != entry["digest"]:
             raise AuditError("frozen evaluation input changed")

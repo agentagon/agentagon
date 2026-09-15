@@ -78,24 +78,28 @@ nav:
       - Install: getting-started/install.md
       - Quick start: getting-started/first-audit.md
       - Bring one failure: getting-started/bring-one-failure.md
-  - Using Agentagon:
-      - Audit your application: audit.md
-      - Review your changes: review.md
-      - Read reports and issues: reports.md
-      - Prepare an evaluation: eval.md
-      - Measure candidate fixes: fix.md
-      - Select and deliver a fix: delivery.md
-      - Explore the dashboard: dashboard.md
+  - Audit:
+      - Audit agents and evals: audit.md
+      - Local changes: review.md
+      - Existing evals and benchmarks: benchmarks.md
+      - Reports and issues: reports.md
+  - Fix:
+      - Fix agents and evals: fix.md
+      - Create or improve evaluations: eval.md
+      - Prepare delivery: delivery.md
+  - Utilities:
+      - Dashboard: dashboard.md
+      - Setup: settings.md
   - Concepts:
       - How it works: concepts.md
       - Where work runs: execution.md
       - Privacy and data: privacy.md
   - Reference:
-      - Settings and profiles: settings.md
       - Connect execution traces: traces.md
       - Agentagon Intelligence: intelligence.md
       - Evaluation preparation: reference/evaluation.md
       - Fix configuration and controls: reference/fix.md
+      - Reviewed patch commands: reference/patches.md
       - Coordinate work and resume: orchestration.md
       - Task events and artifacts: task-evidence.md
       - CLI reference: reference/cli.md

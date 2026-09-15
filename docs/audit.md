@@ -1,8 +1,8 @@
-# Audit your application
+# Audit agents and existing evals
 
-Use **ag:audit** to investigate your current application code, supplied execution traces, or both. You receive findings tied to evidence, improvement and evaluation recommendations, and saved issue history.
+Use **ag:audit** to inspect all agents in the current repository, one named agent, uncommitted changes, or existing evals. Add permitted traces when useful. You receive scoped findings, coverage gaps, saved issue history and benchmark readiness.
 
-For a guided first run, follow [Your first audit](getting-started/first-audit.md). If you want feedback only on an uncommitted diff, use [ag:review](review.md).
+For a guided first run, follow [Your first audit](getting-started/first-audit.md). For an uncommitted diff, ask Audit to [inspect local changes only](review.md). For dataset quality or issue coverage, see [existing evals and benchmarks](benchmarks.md).
 
 ## Install
 
@@ -25,6 +25,8 @@ Agentagon initializes private local state in `.agentagon/`. When Git is present,
 On first use it may offer optional Intelligence access and ask whether to connect traces. You can decline both and continue. [Settings](settings.md) explains how to change those choices later.
 
 ## Scope and goal
+
+Default to all detected agents in this repository. Name an agent to scope its entry point, supporting code and evals; ambiguous matches require clarification. Ask for “changes only” to restrict findings to the captured diff.
 
 Choose an evidence mode:
 
@@ -66,7 +68,7 @@ This creates audit state. Use the coding host to complete the evidence, diagnosi
 4. Diagnoses and groups related findings into issues.
 5. Writes Markdown and JSON reports with coverage and next actions.
 
-A report can include defects, improvement opportunities, and evaluation-coverage recommendations. Those recommendations propose work; the audit does not implement or execute new evaluations, run your application, or instrument production.
+Audit also assesses existing evals and saves a content-pinned benchmark draft. When execution is configured and authorized within agreed limits, it validates the benchmark and records a baseline. Otherwise the report shows concrete readiness blockers and the assessment still completes. Dataset creation or repair belongs to [Fix](fix.md); Audit keeps existing dataset contents unchanged.
 
 ## Add execution traces
 

@@ -34,7 +34,13 @@ RESPONSE = {
 @pytest.fixture(autouse=True)
 def configured_intelligence(monkeypatch):
     monkeypatch.setenv("AGENTAGON_API_KEY", "synthetic-key")
-    Config().update("user", values={"intelligence.endpoint": "https://guidance.example"})
+    Config().update(
+        "user",
+        values={
+            "intelligence.endpoint": "https://guidance.example",
+            "intelligence.mode": "full_access",
+        },
+    )
 
 
 @pytest.fixture
@@ -375,7 +381,13 @@ def test_missing_configuration_and_network_failures_are_saved_for_each_workflow(
         focus="Reduce repeated calls",
         transport=httpx.MockTransport(unexpected),
     )
-    Config().update("user", values={"intelligence.endpoint": "https://guidance.example"})
+    Config().update(
+        "user",
+        values={
+            "intelligence.endpoint": "https://guidance.example",
+            "intelligence.mode": "full_access",
+        },
+    )
     unavailable = lookup(
         workspace,
         run_id,
@@ -608,3 +620,110 @@ def test_busy_workflow_lookup_returns_promptly_without_overwriting_state(
         transport=httpx.MockTransport(lambda request: httpx.Response(200, json=RESPONSE)),
     )
     assert resumed["status"] == "complete"
+
+
+@pytest.mark.parametrize("workflow", ["audit", "eval", "fix"])
+def test_workflow_cli_requires_approval_then_sends_only_prepared_fields(
+    workflow_owners, workflow, tmp_path, monkeypatch
+):
+    from agentagon.lookup import client
+
+    workspace, evaluation_id, run_id = workflow_owners
+    if workflow == "audit":
+        owner_id = start(
+            workspace,
+            mode="code",
+            source=None,
+            project=None,
+            start_time=None,
+            end_time=None,
+            limit=None,
+            scopes=[],
+            host="test",
+            model="fixture",
+        )["audit_id"]
+    else:
+        owner_id = evaluation_id if workflow == "eval" else run_id
+    Config().update("user", values={"intelligence.mode": "ask"})
+    focus = tmp_path / "question.txt"
+    focus.write_text("Measure coverage" if workflow == "eval" else "Reduce retries")
+    arguments = [
+        "--workspace",
+        str(workspace.root),
+        workflow,
+        "lookup",
+        owner_id,
+        "--goal-file" if workflow == "eval" else "--focus-file",
+        str(focus),
+    ]
+    calls = []
+
+    async def request(endpoint, key, payload, transport):
+        calls.append((endpoint, payload))
+        return {"status": "complete", "response": RESPONSE}
+
+    monkeypatch.setattr(client, "_request", request)
+    runner = CliRunner()
+    pending = runner.invoke(main, arguments)
+    assert pending.exit_code == 0, pending.output
+    prepared = json.loads(pending.stdout)
+    assert prepared["status"] == "approval_required" and calls == []
+    approved = runner.invoke(main, [*arguments, "--approve", prepared["approval_id"]])
+    assert approved.exit_code == 0, approved.output
+    assert json.loads(approved.stdout)["status"] == "complete"
+    visible = json.loads(approved.stderr)
+    assert visible["status"] == "sending"
+    assert calls == [(prepared["endpoint"], prepared["request"])]
+    refresh = runner.invoke(main, [*arguments, "--refresh"])
+    next_request = json.loads(refresh.stdout)
+    assert next_request["status"] == "approval_required"
+    declined = runner.invoke(
+        main, [*arguments, "--refresh", "--decline", next_request["approval_id"]]
+    )
+    assert json.loads(declined.stdout)["status"] == "declined" and len(calls) == 1
+
+
+@pytest.mark.parametrize("workflow", ["eval", "fix"])
+def test_approval_is_single_use_during_concurrent_dispatch(workflow_owners, workflow):
+    from threading import Event
+
+    workspace, evaluation_id, run_id = workflow_owners
+    owner_id = evaluation_id if workflow == "eval" else run_id
+    fields = {"goal": "Measure coverage"} if workflow == "eval" else {"focus": "Reduce retries"}
+    Config().update("user", values={"intelligence.mode": "ask"})
+    prepared = lookup(workspace, owner_id, workflow=workflow, **fields)
+    entered, release = Event(), Event()
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        entered.set()
+        assert release.wait(3)
+        return httpx.Response(200, json=RESPONSE)
+
+    transport = httpx.MockTransport(handler)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            lookup,
+            workspace,
+            owner_id,
+            workflow=workflow,
+            **fields,
+            approval_id=prepared["approval_id"],
+            transport=transport,
+        )
+        try:
+            assert entered.wait(3)
+            with pytest.raises(AuditError, match="already used"):
+                lookup(
+                    workspace,
+                    owner_id,
+                    workflow=workflow,
+                    **fields,
+                    approval_id=prepared["approval_id"],
+                    transport=transport,
+                )
+        finally:
+            release.set()
+        assert future.result(timeout=3)["status"] == "complete"
+    assert len(calls) == 1

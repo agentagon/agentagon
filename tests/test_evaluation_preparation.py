@@ -2,6 +2,7 @@
 
 import copy
 import json
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -10,7 +11,7 @@ from support.experiments import git, passing_review, verify
 
 from agentagon.cli.main import main
 from agentagon.core.records import AuditError
-from agentagon.experiments import engine, preparation
+from agentagon.experiments import delivery, engine, preparation
 
 
 def test_existing_benchmark_freezes_then_drives_verified_fix(application, specification):
@@ -197,6 +198,133 @@ def test_new_source_requires_new_draft_and_old_package_cannot_change(application
     assert renewed["evaluation_id"] != started["evaluation_id"]
     assert renewed["state"] == "draft" and renewed["usage"]["trials"] == 0
     assert renewed["origin_revision"] != started["origin_revision"]
+
+
+def test_dataset_repair_deletes_scoped_files_in_a_new_version(application, specification):
+    (application.root / "duplicate-case.json").write_text('{"quality":0.8}')
+    git(application.root, "add", "duplicate-case.json")
+    git(
+        application.root,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@localhost",
+        "commit",
+        "-qm",
+        "Add duplicate dataset case",
+    )
+    specification["evaluation_paths"].extend(["duplicate-case.json", "new-duplicate.json"])
+    original, plan = draft(application, specification)
+    (application.root / original["worktree"] / "new-duplicate.json").write_text('{"quality":0.8}')
+    checked = preparation.check(application, original["evaluation_id"], plan)
+    frozen = preparation.freeze(application, original["evaluation_id"], review_for(checked))
+    renewed = preparation.start(
+        application,
+        "local",
+        BUDGET,
+        author="dataset-repair-author",
+        from_id=original["evaluation_id"],
+    )
+    prep = application.root / renewed["worktree"]
+    (prep / "duplicate-case.json").unlink()
+    (prep / "new-duplicate.json").unlink()
+    plan["deliver_paths"] = ["duplicate-case.json", "new-duplicate.json"]
+    updated = preparation.check(application, renewed["evaluation_id"], plan)
+    revised = preparation.freeze(application, renewed["evaluation_id"], review_for(updated))
+    assert (
+        preparation.load(application, original["evaluation_id"])["package_digest"]
+        == frozen["package_digest"]
+    )
+    assert (application.root / "duplicate-case.json").exists()
+    assert (
+        "duplicate-case.json"
+        not in git(
+            application.root, "ls-tree", "-r", "--name-only", revised["package"]["review_branch"]
+        ).splitlines()
+    )
+    comparison = revised["package"]["version_comparison"]
+    assert comparison["same_application_revision"]
+    assert comparison["changed_paths"] == ["duplicate-case.json", "new-duplicate.json"]
+    assert revised["package"]["spec"]["deletions"] == [
+        {"path": "duplicate-case.json", "deliver": True},
+        {"path": "new-duplicate.json", "deliver": True},
+    ]
+    delivered = delivery.deliver(application, evaluation_id=renewed["evaluation_id"])
+    assert delivered["state"] == "prepared"
+    patch = Path(delivered["artifacts"]["diff"]).read_text()
+    assert "deleted file mode" in patch and "a/duplicate-case.json" in patch
+    fix = engine.start(
+        application, preparation.fix_spec(application, renewed["evaluation_id"]), "local"
+    )
+    run = engine.status(application, fix["run_id"], fix["candidate_id"])
+    assert not (application.root / run["candidate"]["worktree"] / "duplicate-case.json").exists()
+    assert (
+        verify(application, fix["run_id"], fix["candidate_id"])["candidate"]["state"] == "verified"
+    )
+    again = preparation.start(
+        application, "local", BUDGET, author="next-author", from_id=renewed["evaluation_id"]
+    )
+    assert not (application.root / again["worktree"] / "duplicate-case.json").exists()
+
+
+def test_preparation_cannot_delete_application_files(application, specification):
+    started, plan = draft(application, specification)
+    (application.root / started["worktree"] / "app.json").unlink()
+    with pytest.raises(AuditError, match="changed application source"):
+        preparation.check(application, started["evaluation_id"], plan)
+    plan["spec"]["deletions"] = [{"path": "app.json"}]
+    with pytest.raises(AuditError, match="explicitly named evaluation paths"):
+        preparation.check(application, started["evaluation_id"], plan)
+    plan["spec"]["deletions"] = [{"path": "checks.py", "kind": "inputs", "deliver": True}]
+    with pytest.raises(AuditError, match="private input deletions"):
+        preparation.check(application, started["evaluation_id"], plan)
+
+
+@pytest.mark.parametrize("retain_scope", [False, True])
+def test_retired_private_input_never_becomes_a_public_deletion(
+    application, specification, retain_scope
+):
+    started, plan = draft(application, specification)
+    private = application.state / "private-cases.json"
+    private.write_text('[{"expected":"private fixture"}]')
+    plan["spec"]["inputs"] = [
+        {"source": str(private.relative_to(application.root)), "path": "private-cases.json"}
+    ]
+    checked = preparation.check(application, started["evaluation_id"], plan)
+    preparation.freeze(application, started["evaluation_id"], review_for(checked))
+    renewed = preparation.start(
+        application,
+        "local",
+        BUDGET,
+        author="dataset-repair-author",
+        from_id=started["evaluation_id"],
+    )
+    prep = application.root / renewed["worktree"]
+    (prep / "private-cases.json").unlink()
+    # Keep one visible evaluator correction so its local delivery can be inspected.
+    (prep / "checks.py").write_text(
+        (prep / "checks.py").read_text() + "# Corrected evaluator documentation\n"
+    )
+    plan["spec"]["inputs"] = []
+    if retain_scope:
+        plan["spec"]["evaluation_paths"].append("private-cases.json")
+    checked = preparation.check(application, renewed["evaluation_id"], plan)
+    frozen = preparation.freeze(application, renewed["evaluation_id"], review_for(checked))
+    removed = [
+        entry for entry in frozen["package"]["files"] if entry["path"] == "private-cases.json"
+    ]
+    assert removed == (
+        [{"path": "private-cases.json", "deleted": True, "kind": "inputs", "deliver": False}]
+        if retain_scope
+        else []
+    )
+    if retain_scope:
+        assert preparation.fix_spec(application, renewed["evaluation_id"])["deletions"] == [
+            {"path": "private-cases.json", "deliver": False, "kind": "inputs"}
+        ]
+    delivered = delivery.deliver(application, evaluation_id=renewed["evaluation_id"])
+    for key in ("diff", "summary", "pr_body"):
+        assert "private-cases.json" not in Path(delivered["artifacts"][key]).read_text()
 
 
 def test_preparation_budget_cannot_be_spent_twice_by_retry(application, specification):

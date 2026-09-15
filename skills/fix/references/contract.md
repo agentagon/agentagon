@@ -140,4 +140,4 @@ Submitted reviews follow `contracts/v1/fix-review.json`: version, run/candidate/
 
 Run transitions automatically update Markdown/JSON reports. `status` returns their paths; `audit report` remains the separate audit-report command. Invalid, rejected, interrupted and dominated experiments remain part of the archive.
 
-`fix new --operation-id ID` makes a candidate reservation resumable with identical arguments. After the user's selection, [ag:ship](../../ship/SKILL.md) prepares delivery locally; publishing the selected branch and a GitHub draft PR requires explicit authorization and `fix ship --publish`.
+`fix new --operation-id ID` makes a candidate reservation resumable with identical arguments. After the user's selection, [delivery](delivery.md) prepares delivery locally; publishing the selected branch and a GitHub draft PR requires explicit authorization and `fix ship --publish`.

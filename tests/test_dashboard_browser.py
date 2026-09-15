@@ -37,12 +37,11 @@ def test_saved_issue_handoff_copies_a_scoped_request_without_starting_work(
             page.on("request", lambda request: methods.append(request.method))
             page.goto(f"http://127.0.0.1:{server.server_port}/?audit={imported}")
             page.locator(".issue > summary").click()
-            page.get_by_text("Create regression evaluation", exact=True).click()
-            prompt = page.get_by_role(
-                "textbox", name="Evaluation request for Weather requests time out"
-            )
+            page.get_by_text("Fix this issue", exact=True).click()
+            prompt = page.get_by_role("textbox", name="Fix request for Weather requests time out")
             playwright.expect(prompt).to_be_visible()
             value = prompt.input_value()
+            assert "Use ag:fix to fix saved issue" in value
             assert f"--audit {imported} --issue {issue_id}" in value
             assert "do not treat observed outputs as ground truth" in value
             assert "ordinary successes" in value
@@ -214,3 +213,99 @@ def test_metric_comparison_distinguishes_correct_cases_from_negative_controls(
             assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
         finally:
             browser.close()
+
+
+@pytest.mark.parametrize("width", [360, 1280])
+def test_benchmark_and_unmeasured_patch_journeys_show_limits_without_running_work(
+    application, width
+):
+    from pathlib import Path
+
+    from agentagon.experiments import benchmarks, delivery, patches
+
+    assessment = {
+        "goal": "Audit existing retry eval coverage",
+        "author": "audit-host",
+        "dataset_paths": ["app.json"],
+        "entrypoint_paths": ["benchmark.py"],
+        "assessments": {
+            topic: {
+                "status": "unknown",
+                "rationale": "Sensitivity needs validation.",
+                "evidence": [],
+            }
+            for topic in benchmarks.ASSESSMENTS
+        },
+        "proposed_cases": ["Retry after a timeout."],
+    }
+    benchmarks.draft(application, assessment)
+    patch = patches.start(
+        application,
+        {
+            "editable_paths": ["app.json"],
+            "checks": [],
+            "no_checks_reason": "No meaningful executable checks for this fixture change.",
+            "timeout_seconds": 5,
+            "max_attempts": 1,
+        },
+        goal="Clarify the retry variant",
+        author="patch-author",
+        reason_no_comparison="Baseline credentials unavailable.",
+    )
+    (application.root / patch["worktree"] / "app.json").write_text(
+        json.dumps({"latency": 100, "quality": 0.8, "variant": "reviewed"})
+    )
+    checked = patches.check(application, patch["patch_id"])
+    review = checked["checks"][-1]["review_template"]
+    review.update(
+        reviewer="independent-reviewer",
+        verdict="pass",
+        rationale="Reviewed exact diff and limitations.",
+    )
+    review["assessments"] = dict.fromkeys(review["assessments"], True)
+    patches.review(application, patch["patch_id"], review)
+    shipped = delivery.deliver(application, patch_id=patch["patch_id"])
+    before = {path: path.read_bytes() for path in application.state.rglob("*") if path.is_file()}
+    with running(application) as server, playwright.sync_playwright() as driver:
+        browser = driver.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": width, "height": 1000})
+            methods, errors = [], []
+            page.on("request", lambda request: methods.append(request.method))
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(f"http://127.0.0.1:{server.server_port}/?view=audit")
+            playwright.expect(
+                page.get_by_role("heading", name="Benchmark readiness")
+            ).to_be_visible()
+            page.locator("#journey-items summary").click()
+            playwright.expect(page.get_by_text("Draft; not measured", exact=False)).to_be_visible()
+            playwright.expect(
+                page.get_by_text("Declare a bounded preparation budget.")
+            ).to_be_visible()
+            playwright.expect(page.locator("#empty")).to_be_hidden()
+            page.locator("#view-fix").click()
+            playwright.expect(page.get_by_role("heading", name="Reviewed patches")).to_be_visible()
+            page.locator("#journey-items summary").click()
+            playwright.expect(
+                page.get_by_text("No executable checks run", exact=True)
+            ).to_be_visible()
+            playwright.expect(page.get_by_text("Baseline credentials unavailable.")).to_be_visible()
+            playwright.expect(page.get_by_text("Independent review: pass")).to_be_visible()
+            playwright.expect(page.locator("#fix-empty")).to_be_hidden()
+            with page.expect_download() as download:
+                page.locator("#journey-items").get_by_role("link", name="diff", exact=True).click()
+            downloaded = download.value
+            assert (
+                Path(downloaded.path()).read_bytes()
+                == Path(shipped["artifacts"]["diff"]).read_bytes()
+            )
+            page.get_by_role("button", name="Refresh", exact=True).click()
+            playwright.expect(page.get_by_role("heading", name="Reviewed patches")).to_be_visible()
+            assert not errors
+            assert set(methods) == {"GET"}
+            assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        finally:
+            browser.close()
+    assert {
+        path: path.read_bytes() for path in application.state.rglob("*") if path.is_file()
+    } == before

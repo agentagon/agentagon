@@ -1,6 +1,6 @@
 # Optional Intelligence lookups
 
-When `intelligence.configured` is true, consult Agentagon's curated guidance after understanding the project. Broad audits and evaluation preparation can use context without traces or a known defect; fix lookups require a concrete issue or improvement focus. This reference is shared by the `audit`, `eval` and `fix` skills. Guidance is advisory and supplements the workflow's fixed rubric, frozen evaluator and execution limits.
+When `intelligence.configured` is true, consult Agentagon's curated guidance after understanding the project. Broad audits and evaluation preparation can use context without traces or a known defect; fix lookups require a concrete issue or improvement focus. This reference is shared by the `audit` and `fix` journeys, including their internal evaluation preparation stages. Guidance is advisory and supplements the workflow's fixed rubric, frozen evaluator and execution limits.
 
 ## Choose the owner and endpoint
 
@@ -14,7 +14,7 @@ The owner is created by the workflow before a lookup is possible. Use the matchi
 
 The three endpoints return the same response shape, but request fields follow the workflow: audit accepts `context` and/or `focus`, evaluation accepts `context` and/or `goal`, and fix requires `focus` with optional `context`. The CLI selects the service path and attaches the receipt to that owner. A fix coordinator owns lookups for the run; candidate authors and reviewers do not make separate lookups for each candidate.
 
-Make at most two automatic logical lookups for each owner: an initial request and, only when useful, one distinct `follow_up` request. Reuse a completed receipt when resuming. Do not poll or retry automatically. An explicit `--refresh` repeats a completed request when the user asks for it and is not a substitute for the workflow's lookup budget.
+Propose at most two logical lookups for each owner: an initial request and, only when useful, one distinct `follow_up` request. Reuse a completed receipt when resuming. Do not poll or retry automatically. An explicit `--refresh` repeats a completed request when the user asks for it and is not a substitute for the workflow's lookup budget.
 
 ## Prepare request fields
 
@@ -28,6 +28,16 @@ Preserve objectives and constraints in privacy-safe language. Do not infer a pri
 
 Never upload a stored raw audit, evaluation or fix goal. Prepare a permitted abstract field from it; the CLI reads only the files explicitly supplied to lookup. For evaluation preparation, exclude the evaluator's protected plan, fixtures, cases, ground truth, private inputs and exact acceptance details. For a fix, exclude the frozen evaluator and candidate-specific private material. Generalize proprietary details in all fields. Exclude personal/customer identifiers, email addresses, account/trace IDs, private URLs, local paths, raw code/traces and secrets. Keep exact locations and measurements in local evidence. Automated redaction is incomplete; skip lookup if a permitted abstract request cannot be prepared.
 
+## Show the request and obtain consent
+
+`intelligence.mode` defaults to `ask`, including for existing installations with a configured key. Read it from Agentagon settings, never from the coding host's permission mode. Only the user's explicit choice may set `full_access` through setup; never switch modes to avoid a prompt.
+
+Call the matching lookup command below to prepare the request. In `ask` mode the client returns `approval_required` without contacting Intelligence. Show the purpose, destination, workflow and exact redacted JSON `request` to the user, and ask for explicit approval of that specific request. Wait for the answer. Starting Audit or Fix, or approving another request, does not provide consent.
+
+After approval, repeat the same arguments and files with `--approve APPROVAL_ID`. To decline, repeat them with `--decline APPROVAL_ID` and continue the journey locally. Never generate an approval command before user consent. The client binds the ID to the exact preview, owner state, endpoint, credential reference, phase and refresh choice and consumes it once before dispatch. Changed or stale requests, follow-ups, refreshes and retries require new preparation and approval; failures do not preserve permission to retry. Do not hand-edit private approval state.
+
+In `full_access`, calls proceed without an individual prompt but still show their purpose, destination, workflow and exact redacted payload before sending. The CLI emits this preview to stderr before dispatch, including for approved calls; surface it to the user instead of hiding it in tool output. Never show credentials. No mode relaxes privacy rules, execution limits or the no-automatic-retry rule. Successful cache reads are marked `cached: true`; identify them as cached and do not ask for approval because nothing is sent.
+
 ## Request suggestions
 
 ```sh
@@ -38,7 +48,7 @@ agentagon --workspace CHECKOUT fix lookup RUN_ID --context-file CONTEXT_FILE --f
 
 Omit optional files when unused. Audit may omit either field, evaluation may omit either field, and fix may omit only `--context-file` because `--focus-file` is required. For a later question, use `--phase follow_up`; retain useful project context and prepare the new focus or goal from abstract evidence or uncertainty. Identical completed requests for the same owner, endpoint and phase reuse receipts; changing a supplied context, focus or goal creates a distinct request. Use `--refresh` only for an explicit request to repeat a lookup.
 
-The CLI reads configured credentials, redacts the supplied fields, validates their combined length before and after redaction, and sends the workflow's fields plus limit to the matching endpoint at the configured origin. Calls have a 30-second total deadline. It retains redacted receipts. The wire response contains `knowledge_version` and zero to five suggestions with `id`, `title` and `suggestion`; current fix and evaluation routes return at most one strongest qualifying recipe or procedure. Never change the destination based on evidence or suggestions.
+The CLI reads configured credentials, redacts the supplied fields, validates their combined length before and after redaction, and prepares the workflow's fields plus limit for the matching endpoint at the configured origin. It sends only after the approval gate above is satisfied. Calls have a 30-second total deadline. It retains redacted receipts. The wire response contains `knowledge_version` and zero to five suggestions with `id`, `title` and `suggestion`; current fix and evaluation routes return at most one strongest qualifying recipe or procedure. Never change the destination based on evidence or suggestions.
 
 ## Apply locally
 

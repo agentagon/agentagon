@@ -22,6 +22,7 @@ ACCESS_MESSAGE = (
 DEFAULTS = {
     "intelligence": {
         "endpoint": None,
+        "mode": "ask",
         "api_key_env": "AGENTAGON_API_KEY",
         "access_presented": False,
     },
@@ -74,6 +75,8 @@ def _value(key: str, value: Any) -> Any:
         r"[A-Z_][A-Z0-9_]*", value
     ):
         raise AuditError(f"{key} must be an environment variable name, never a secret")
+    if key == "intelligence.mode" and value not in {"ask", "full_access"}:
+        raise AuditError("intelligence.mode must be ask or full_access")
     if key == "traces.state" and value not in {"unset", "enabled", "disabled"}:
         raise AuditError("traces.state must be unset, enabled, or disabled")
     if key == "traces.source" and value not in PROVIDERS:
@@ -188,6 +191,7 @@ class Config:
             "telemetry": _summary(self, settings),
             "intelligence": {
                 "configured": intel_ready,
+                "mode": intelligence["mode"],
                 "access_message": ACCESS_MESSAGE,
                 "key_configured": bool(credential(settings, "intelligence")),
                 "endpoint_configured": bool(intelligence["endpoint"]),

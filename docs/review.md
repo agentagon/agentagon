@@ -1,6 +1,6 @@
 # Review your changes
 
-Use **ag:review** when you want feedback on local changes before committing or sharing them. It reports defects, improvement opportunities, and concrete evaluation cases tied to the captured diff.
+Use **ag:audit** when you want feedback on local changes before committing or sharing them. It reports defects, improvement opportunities, and concrete evaluation cases tied to the captured diff.
 
 **You need:** the [installed plugin](getting-started/install.md), a Git application checkout, and local changes. A first commit is not required; a repository without commits uses an empty baseline.
 
@@ -12,7 +12,7 @@ The request below is an example. Change the focus, paths, and expected behavior 
 
 === "Codex"
 
-    Select **ag:review**, then adapt and send this example:
+    Select **ag:audit**, then adapt and send this example:
 
     ```text
     Review my local changes. Focus on tool error handling and behavior
@@ -23,7 +23,7 @@ The request below is an example. Change the focus, paths, and expected behavior 
 === "Claude Code"
 
     ```text
-    /ag:review Review my local changes. Focus on tool error handling and
+    /ag:audit Review my local changes. Focus on tool error handling and
     behavior that needs regression coverage. Explain each finding with
     evidence and suggest concrete evaluation cases. Do not implement fixes.
     ```
@@ -61,4 +61,4 @@ See [Read reports and issues](reports.md) for help interpreting status and evide
 
 Review defaults to code-only even if this checkout has saved trace settings. To use combined code and traces, explicitly provide the trace scope and explain how those executions relate to the local changes. Every finding must still cite change evidence. Trace-only mode is not a changes review.
 
-**Next:** use [ag:eval](eval.md) to turn a recommendation into a benchmark, or keep the report as review feedback. Review itself does not implement or execute new evaluations.
+The result also reports [benchmark readiness](benchmarks.md) for existing evals. Uncommitted source blocks isolated baseline execution, so Audit retains a draft with that limit. Use [ag:fix](fix.md) to implement code or dataset changes, or keep the report as review feedback.

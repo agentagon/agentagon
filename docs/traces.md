@@ -70,7 +70,7 @@ uncommitted changes. Preserve that limitation when relating code to failures.
 
 With dirty or non-Git source, alignment cannot be verified. Even matching revision metadata in a clean checkout remains a provenance assumption. Contradictory metadata prevents unsupported code/trace correlation. The report retains these limitations.
 
-Changes reviews stay code-only by default. To add traces to `ag:review`, explicitly explain their connection to the captured changes; trace-only mode cannot satisfy a changes review.
+Changes reviews stay code-only by default. To add traces to `ag:audit`, explicitly explain their connection to the captured changes; trace-only mode cannot satisfy a changes review.
 
 ## Interpret runtime measurements
 

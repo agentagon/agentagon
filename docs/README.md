@@ -53,14 +53,12 @@ The [quickstart](getting-started/first-audit.md) shows what to enter and how to 
 
 | You want to | Start with | What you get |
 |---|---|---|
-| Investigate an AI agent's behavior | [Audit your AI agent](audit.md) | Findings from source, supplied traces, or both, with saved issue history. |
-| Check local changes before committing | [Review your changes](review.md) | Findings and suggested regression cases tied to the captured diff. |
-| Turn a concern into a benchmark | [Prepare an evaluation](eval.md) | A reviewed, frozen evaluation package. |
-| Compare possible improvements | [Measure candidate fixes](fix.md) | Isolated candidates measured against the same benchmark. |
-| Deliver a chosen result | [Select and deliver a fix](delivery.md) | A reviewable branch and delivery package; publication is a separate choice. |
-| Inspect saved progress | [Explore the dashboard](dashboard.md) | Findings, comparisons, diffs, and task diagnostics. |
+| Understand all agents, one agent, local changes, or existing evals | [Audit](audit.md) | Findings, coverage gaps, a benchmark draft and a baseline when execution is ready. |
+| Repair a failure or improve code, prompts, tools, or evals | [Fix](fix.md) | Changes, validation and independent review, plus a local delivery package or requested PR. |
 
-An audit is one starting point. If you already have a goal and benchmark, you can start a measured fix directly.
+Audit accepts optional traces and can focus on a particular issue's eval coverage. Fix accepts a known problem directly; a previous audit or benchmark is not required. It prepares missing evals and reports explicitly when baseline comparison is unavailable.
+
+[Setup](settings.md) and [Dashboard](dashboard.md) are supporting utilities. Evaluation preparation, review and delivery happen inside the two journeys. [Intelligence](intelligence.md) asks before each outgoing request unless you explicitly enable its full access mode.
 
 ## What runs where?
 

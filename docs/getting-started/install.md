@@ -91,11 +91,8 @@ You should have these seven workflows:
 | Skill | Use it to |
 |---|---|
 | `ag:audit` | Inspect your AI agent’s code or traces. |
-| `ag:review` | Review uncommitted changes. |
 | `ag:setup` | Configure preferences, traces, and execution profiles. |
-| `ag:eval` | Prepare a reusable benchmark. |
 | `ag:fix` | Compare measured candidate improvements. |
-| `ag:ship` | Prepare a selected fix for delivery. |
 | `ag:dashboard` | Inspect Agentagon workflow progress and results in a browser. |
 
 !!! tip "You can start without connecting anything"

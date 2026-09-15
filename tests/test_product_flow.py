@@ -192,7 +192,7 @@ def test_build_report_is_read_only_even_when_a_report_already_exists(workspace, 
 
 def test_resources_expose_all_bundled_skills(workspace):
     result = invoke(workspace.root, "resources")
-    assert set(result["skills"]) == {"audit", "review", "setup", "dashboard", "fix", "ship", "eval"}
+    assert set(result["skills"]) == {"audit", "fix", "setup", "dashboard"}
     for name, path in result["skills"].items():
         text = Path(path).read_text()
         assert f"name: {name}" in text
