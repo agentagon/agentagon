@@ -8,20 +8,21 @@ recorded calls in a fresh upstream engine, never deserializing host pickle data.
 """
 
 import fcntl
+import json
 import math
 import os
 import tempfile
 import threading
 from dataclasses import asdict, dataclass
 
-from agentagon.core.records import AuditError, load_json
+from agentagon.core.records import AuditError, encoded, load_json, validate_record
 from agentagon.experiments.budget import BudgetExhausted, BudgetLedger
 from agentagon.experiments.host_bridge import HostBridge, HostWorkPending
 
 GEPA_REVISION = "0632cdb5dcc052e690eab439e1b4a7e3e9cfe407"
 GEPA_VERSION = "0.1.4"
 # Persisted identity stays stable across module renames.
-RUNTIME_VERSION = "agentagon-gepa-bridge-v1"
+RUNTIME_VERSION = "agentagon-gepa-reflection-v2"
 ENGINES = {"omni", "gepa", "autoresearch", "meta_harness"}
 
 
@@ -399,6 +400,70 @@ class OptimizerCoordinator:
                 )
             return proposed
 
+        def reflect(prompt):
+            if stop_requested.is_set():
+                raise OptimizationTargetReached()
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise MeasurementUnavailable(
+                    "native GEPA reflection requires a text prompt; multimodal prompts are not supported"
+                )
+            if len(prompt.encode("utf-8")) > 8 * 1024 * 1024:
+                raise MeasurementUnavailable(
+                    "GEPA reflection prompt exceeds the native transport limit"
+                )
+            index = counters["proposal"]
+            counters["proposal"] += 1
+            try:
+                request = self.bridge.request(
+                    f"{stage['id']}:reflection:{index}",
+                    source=config["source"],
+                    evaluator=config["evaluator"],
+                    role="proposal",
+                    scope=config["scope"],
+                    host=host,
+                    model=model,
+                    payload={
+                        "protocol": "gepa-reflection-v1",
+                        "engine": "gepa",
+                        "stage": stage["id"],
+                        "prompt": prompt,
+                    },
+                )
+            except AuditError as exc:
+                # Upstream retries ordinary reflection exceptions. A changed
+                # durable binding must instead stop this stage, without redispatch.
+                raise MeasurementUnavailable(str(exc)) from exc
+            if request["state"] == "pending" and host_handler is not None:
+                with semaphore:
+                    try:
+                        request = self.bridge.fulfill(request, host_handler)
+                    except Exception as exc:
+                        # A claimed callback may already have started a native
+                        # turn. Stop upstream retries and collect that exact call.
+                        raise HostWorkPending(request["request_id"]) from exc
+            if request["state"] == "cancelled":
+                raise MeasurementUnavailable("native GEPA reflection was cancelled")
+            if request["state"] != "completed":
+                raise HostWorkPending(request["request_id"])
+            if request.get("deadline_exceeded"):
+                raise BudgetExhausted("native GEPA reflection exceeded its admitted deadline")
+            try:
+                validate_record("host-reflection", request["response"], definition="response")
+            except AuditError as exc:
+                raise MeasurementUnavailable(
+                    "native GEPA reflection returned an invalid response contract"
+                ) from exc
+            text = request["response"].get("text")
+            if (
+                not isinstance(text, str)
+                or not text.strip()
+                or len(text.encode("utf-8")) > 8 * 1024 * 1024
+            ):
+                raise MeasurementUnavailable(
+                    "native GEPA reflection must return bounded raw final text"
+                )
+            return text
+
         def evaluate(candidate, example=None, **kwargs):
             if stop_requested.is_set():
                 raise OptimizationTargetReached()
@@ -464,7 +529,12 @@ class OptimizerCoordinator:
                     )
                 # Gates remain in the durable observation and final selection.
                 # Feasibility is not a made-up numeric penalty.
-                return float(value), {"observation": observation, "operation_id": operation_id}
+                # Upstream renders mapping insertion order into its exact prompt.
+                # Match freshly returned observations to their serialized replay.
+                return float(value), {
+                    "observation": json.loads(encoded(observation)),
+                    "operation_id": operation_id,
+                }
 
         server = EvalServer(
             Task(
@@ -481,10 +551,6 @@ class OptimizerCoordinator:
         if stage["engine"] == "gepa":
             from agentagon.experiments.runtime import GepaEngine
 
-            def gepa_propose(candidate, reflective_dataset, components_to_update, **kwargs):
-                updated = propose(next(iter(candidate.values())), dict(reflective_dataset))
-                return {key: updated for key in components_to_update}
-
             upstream_config = OptimizeAnythingConfig(
                 engine="gepa",
                 run_dir=f"{run_dir}/{stage['id']}",
@@ -497,8 +563,7 @@ class OptimizerCoordinator:
                         "cache_evaluation_storage": "memory" if not count_trial else "auto",
                     },
                     "reflection": {
-                        "reflection_lm": None,
-                        "custom_candidate_proposer": gepa_propose,
+                        "reflection_lm": reflect,
                     },
                     "tracking": {"logger": _QuietLogger()},
                 },

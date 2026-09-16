@@ -21,7 +21,7 @@ Entry point: `ag:audit`; CLI `audit changes`, `start`, `prepare`, `submit`, `rep
 
 ## 2. Runtime evidence
 
-Trace retrieval is performed by the coding agent through available provider tools. The CLI plans selection and imports exports; it is not a production trace collector. See [acquisition](../../skills/audit/references/acquisition.md) and [supported formats](../../skills/audit/references/formats.md).
+The web app imports bounded selections through named provider connections. Coding-agent workflows can also retrieve exports through available provider tools. The CLI plans selection and imports exports; it is not a production trace collector. See [the web app](../app.md), [acquisition](../../skills/audit/references/acquisition.md) and [supported formats](../../skills/audit/references/formats.md).
 
 | Capability | Observable behavior and conditions | Implementation / representative tests |
 |---|---|---|
@@ -115,7 +115,17 @@ Entry points: `ag:init`, `ag:fix`, `ag:dashboard`; standalone `ag:audit` and `ag
 |---|---|---|
 | **INIT-01 · Save accepted intent** | Version behaviors, scoring, discovery/creation authorization, limits and optional acquisition settings. Bind accepted scoring to a frozen evaluator. | [Journey records](../../src/agentagon/experiments/journeys.py), [authoring](../../skills/eval/references/authoring.md), [journey tests](../../tests/test_journeys.py) |
 | **SCORE-01 · Rank with explicit gates** | Preserve original metrics and missing states; convert agreed primary/weighted/custom scoring to higher-is-better values without allowing a score to offset failed gates. | [Scoring](../../src/agentagon/experiments/scoring.py), [definition contract](../../contracts/v1/score-definition.json), [scoring tests](../../tests/test_scoring.py) |
-| **BASE-01 · Measure compatible source revisions** | Retain immutable baseline identities, evaluator/source references, settings and separate recent-trace evidence. Reruns use current committed source and saved definitions. | [Baseline tests](../../tests/test_baselines.py), [CLI](../../src/agentagon/cli/journeys.py) |
+| **BASE-01 · Measure compatible source revisions** | Retain immutable baseline identities, evaluator/source references, settings and separate recent-trace evidence. Reruns use current committed source and saved definitions. Browser comparisons require matching evaluator, scoring and execution settings. | [Baseline tests](../../tests/test_baselines.py), [CLI](../../src/agentagon/cli/journeys.py), [comparison](../../src/agentagon/webapp/comparisons.py), [comparison tests](../../tests/test_webapp_comparisons.py) |
+
+## 10. Local application
+
+Entry point: `agentagon` or `agentagon app`. Existing workflow subcommands and the checkout dashboard remain available. See [the web app guide](../app.md).
+
+| Capability | Observable behavior and conditions | Implementation / representative tests |
+|---|---|---|
+| **APP-01 · Work across local projects** | Reuse one loopback service, register canonical checkout paths and scope all operations to explicit project IDs. Reads do not start workflows. | [Launcher](../../src/agentagon/webapp/launcher.py), [service](../../src/agentagon/webapp/service.py), [HTTP boundary](../../src/agentagon/webapp/server.py); [application tests](../../tests/test_webapp.py), [browser journeys](../../tests/test_webapp_browser.py) |
+| **APP-02 · Manage author and reviewer sessions** | Persist jobs, exact host sessions and approvals; share capacity while serializing project work. Browser closure leaves jobs running; service interruption requires explicit resume. Independent reviews use separate sessions. | [Jobs](../../src/agentagon/webapp/jobs.py), [agent adapters](../../src/agentagon/webapp/agents.py), [runtime procedures](../../src/agentagon/webapp/workflows.py); [job lifecycle tests](../../tests/test_webapp_jobs.py), [adapter tests](../../tests/test_webapp_agents.py) |
+| **APP-03 · Import immutable provider evidence** | Preview bounded Braintrust, LangSmith and Langfuse traces or datasets, preserve source versions and limits, and save project-bound snapshots. Imported datasets remain draft private inputs until evaluator validation and review. | [Providers](../../src/agentagon/webapp/providers.py), [snapshots](../../src/agentagon/webapp/snapshots.py); [provider tests](../../tests/test_webapp_providers.py), [privacy and delivery tests](../../tests/test_webapp_review.py) |
 
 ## Maintaining the map
 

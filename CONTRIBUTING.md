@@ -37,6 +37,7 @@ python -m pytest tests/test_config.py -q
 | `src/agentagon/cli/` | Click commands and JSON output |
 | `src/agentagon/storage/`, `src/agentagon/core/`, `src/agentagon/telemetry/` | Saved state, record validation and trace processing |
 | `src/agentagon/experiments/` | Evaluation preparation, candidate execution and delivery |
+| `src/agentagon/webapp/` | Multi-project application service, managed agent jobs and provider imports |
 | `src/agentagon/dashboard.py`, `src/agentagon/dashboard_assets/` | Local dashboard server and browser assets |
 | `skills/`, `contracts/v1/`, `signals/` | Host workflows, JSON contracts and audit criteria |
 | `tests/`, `examples/`, `docs/` | Behavioral checks, runnable examples and documentation |
@@ -60,7 +61,7 @@ python -m build
 
 Successful lint and formatting checks exit with status 0; pytest reports the pass/skip summary, and the build writes a source archive and wheel to `dist/`. CI tests Ubuntu with Python 3.12/3.13 and macOS with Python 3.13, then installs and checks the wheel outside the checkout.
 
-Without the `browser` extra, pytest skips the dashboard browser module. Native host registration and live SSH/E2B tests are opt-in. Local dashboard and mock HTTP tests require loopback socket access. See [packaging, browser and integration checks](docs/contributing/README.md) for additional commands and test boundaries.
+Without the `browser` extra, pytest skips the browser modules. Native host registration and live SSH/E2B tests are opt-in. Local application, dashboard and mock HTTP tests require loopback socket access. See [packaging, browser and integration checks](docs/contributing/README.md) for additional commands and test boundaries.
 
 For documentation changes, execute changed command examples and check relative links. Report any checks you could not run instead of presenting them as verified.
 

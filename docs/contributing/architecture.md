@@ -1,6 +1,6 @@
 # How Agentagon works
 
-Agentagon separates coding-agent judgment from repeatable local mechanics. The host reads evidence, authors changes and supplies independent reviews. Python captures inputs, validates records, executes bounded checks and saves results.
+Agentagon separates coding-agent judgment from repeatable local mechanics. Managed or host-driven coding-agent sessions read evidence, author changes and supply independent reviews. Python captures inputs, validates records, executes bounded checks and saves results. The local web app is the primary interface and manages explicitly started tasks across registered projects.
 
 Start with the [local example](../../examples/local-audit/README.md) to see an evidence packet and partial report. This guide explains the implementation behind that workflow. The [implementation map](capabilities.md) provides more detailed source and test links.
 
@@ -8,12 +8,18 @@ Start with the [local example](../../examples/local-audit/README.md) to see an e
 
 Both `agentagon` and `python -m agentagon` call the Click command group in [cli/main.py](../../src/agentagon/cli/main.py). The executable is declared in [pyproject.toml](../../pyproject.toml); module execution uses [__main__.py](../../src/agentagon/__main__.py).
 
+Without a subcommand, the CLI launches or reuses the local web app; `agentagon app` is an alias. [webapp/](../../src/agentagon/webapp/) owns project registration, session-validated browser actions, immutable provider imports and durable task coordination. Named workflow subcommands retain their existing behavior. App-managed sessions receive bundled workflow references without requiring host plugin registration.
+
 The bundled [skills](../../skills/) expose primary `init`, `fix` and `dashboard` journeys plus standalone `audit`, `eval` and supporting `setup`. Shared eval authoring, independent review and delivery compose these journeys using validated low-level CLI operations. [installation.py](../../src/agentagon/installation.py) copies the skills and their references into a managed local marketplace and invokes each host's native plugin manager.
 
 The [native hook bundle](../../hooks/hooks.json) invokes the hidden `agentagon fix hook` command for host lifecycle events. [Hook handling](../../src/agentagon/experiments/hooks.py) preserves session context and continuation state; a session-start event does not launch work. Runners invoke [worker.py](../../src/agentagon/experiments/worker.py) separately to execute trial commands.
 
 ```mermaid
 flowchart TD
+    L[agentagon or agentagon app] --> U[Local web app]
+    U --> J[Explicit task queue]
+    J --> M[Managed Codex or Claude session]
+    M --> C[Click CLI]
     H[Codex or Claude Code: bundled skills] --> C[Click CLI]
     C --> A[Audit operations]
     C --> E[Evaluation and fix engine]
@@ -24,15 +30,19 @@ flowchart TD
     K --> E
     W --> P[Reports and display projections]
     P --> D[Local dashboard]
+    P --> U
+    U --> T[Provider trace and dataset reads]
+    T --> W
     A --> H
     E --> H
 ```
 
-Arrows show calls and returned evidence, not an autonomous supervisor. Host work waits for the active coding-agent task. Optional dashboard controls are described separately below.
+Arrows show calls and returned evidence. The app continues explicitly started tasks while its service runs; host-driven workflows wait for the active coding-agent task. Optional legacy dashboard controls remain separate.
 
 | Component | Responsibility | Source |
 |---|---|---|
 | Command layer | Parse options, resolve settings and return JSON | [cli/main.py](../../src/agentagon/cli/main.py) |
+| Web application | Register projects, manage agent sessions and task controls, import provider snapshots | [webapp/](../../src/agentagon/webapp/) |
 | Audit operations | Capture scope; prepare, accept and resume host work | [operations.py](../../src/agentagon/operations.py) |
 | Evidence storage | Resolve the workspace, snapshot code, hash artifacts and serialize writes | [workspace.py](../../src/agentagon/storage/workspace.py), [changes.py](../../src/agentagon/storage/changes.py) |
 | Trace processing | Select roots, normalize exports, retain provenance and flag alignment limits | [telemetry/](../../src/agentagon/telemetry/) |
@@ -45,10 +55,12 @@ Arrows show calls and returned evidence, not an autonomous supervisor. Host work
 
 [Config](../../src/agentagon/storage/config.py) supplies shared defaults and checkout overrides. [Issue history](../../src/agentagon/storage/issues.py) combines audit groups with recorded status events. The optional [Intelligence client](../../src/agentagon/lookup/client.py) sends separately prepared context; it does not replace local evidence or host judgment.
 
+The app keeps a user-local registry alongside Config and routes every workflow to a registered checkout. Its managed-agent adapter uses Codex app-server over stdio or the optional Claude Agent SDK with API-key authentication. Session IDs, explicit approvals and job state are retained independently of browser connections. A service restart marks unfinished work interrupted; only explicit resume advances it. See [the app guide](../app.md) for dependency and lifecycle requirements.
+
 ## Follow an audit through the system
 
 1. **Initialize and select scope.** `init` creates private workspace state. `audit start` captures either the current source or the selected local changes. Full code audits split text into 100-line units; changes reviews use captured hunks and bounded context.
-2. **Import traces when requested.** The host obtains exports through its available provider tools. `audit plan` records a metadata selection; `audit import` checks the acquisition receipt when a plan exists. The importer reads JSON/JSONL/NDJSON, redacts recognized credentials and normalizes spans. It validates records, groups traces and computes measurements. Malformed rows and missing evidence remain coverage limits.
+2. **Import traces when requested.** The app previews bounded provider reads and saves an immutable snapshot, or a host supplies a compatible local export. `audit plan` records a metadata selection; `audit import` checks the acquisition receipt when a plan exists. The importer reads JSON/JSONL/NDJSON, redacts recognized credentials and normalizes spans. It validates records, groups traces and computes measurements. Malformed rows and missing evidence remain coverage limits.
 3. **Prepare an evidence packet.** `audit prepare AUDIT_ID --stage evidence` selects pending units and writes a bounded packet plus response template. The packet contains evidence identifiers and required rubric judgments. Larger content remains available through referenced files.
 4. **Accept host judgments.** The host fills the response and calls `audit submit`. Validation checks the schema, packet identity and digest, current captured inputs, required judgments and citations. An untouched template keeps work pending.
 5. **Diagnose and group.** Evidence judgments enable diagnosis packets. The host records findings and accounts for diagnostic flags, including dismissed flags. Clustering packets group findings into issues when findings remain unassigned.
@@ -83,8 +95,12 @@ Paths below are relative to the application's `.agentagon/` directory. In a Git 
 | `evaluations/EVALUATION_ID/` | Benchmark preparation state and work |
 | `runs/RUN_ID/` | Frozen experiment state, active candidate worktrees, attempts and explicitly exported fix reports |
 | `cases/events/` | Issue status events |
+| `webapp/imports/` | Immutable private trace and dataset snapshots with provenance and completeness |
+| `webapp/jobs/` | Managed task state, session identity, questions and retained progress |
 
-These files are workflow state, not configuration inputs to edit manually. Use CLI operations; only prepared host responses/templates are intended for authoring. Settings live in the separate user-local file described in [configuration](../audit.md#first-audit-and-setup).
+These files are workflow state, not configuration inputs to edit manually. Use app actions or CLI operations; only prepared host responses/templates are intended for authoring. Settings live in the separate user-local file described in [configuration](../settings.md). The app registry defaults to the settings path with a `.app` suffix, with `AGENTAGON_APP_STATE` as an override. Removing a registry entry preserves checkout evidence.
+
+Provider datasets retain structured inputs and references as drafts. The import adapter pins the provider version where available and records incomplete selections. Evaluation materialization copies selected data into private evaluator inputs, separately from delivered source; imports do not replace harness preparation, accepted expectations or independent review.
 
 [Workspace writes](../../src/agentagon/storage/workspace.py) use atomic replacement and an exclusive audit writer lock. [Experiment storage](../../src/agentagon/experiments/store.py) uses per-run file locks, verifies frozen specification/profile digests and exports reports on request. [Task evidence](../task-evidence.md) explains shared result storage; the [fix reference](../reference/fix.md) describes finished worktree cleanup. See [issue history](../../skills/audit/references/history.md) before changing status semantics.
 
@@ -98,7 +114,7 @@ These files are workflow state, not configuration inputs to edit manually. Use C
 | Configuration and immutable run inputs stay separate | New defaults must not alter an existing comparison | [Configuration scopes](product-decisions.md#one-config-file-two-settings-scopes) |
 | Dashboard reads use one checkout's display projections | Inspection must not execute work or reconnect to runners | [Dashboard scope](product-decisions.md#dashboard-covers-one-checkout) |
 
-The dashboard binds to `127.0.0.1` and checks the exact host. `--controls` explicitly enables mutations with origin/session validation; controls use validated workflow operations. It is a local UI, not a deployment interface for a shared web service. See [dashboard controls](../reference/fix.md#dashboard-controls-and-delivery) and [server tests](../../tests/test_dashboard.py).
+Both browser interfaces are local loopback services with exact-host checks. The primary app validates browser sessions and origins before mutations and scopes tasks to registered projects. The legacy dashboard remains read-only by default; `--controls` explicitly enables its validated operations. Neither interface is a shared hosted deployment service. See [dashboard controls](../reference/fix.md#dashboard-controls-and-delivery) and [server tests](../../tests/test_dashboard.py).
 
 Local worktrees isolate files, not machine or network access. Remote worker and Python event helper code remain compatible with Python 3.10 and the standard library. [Runner boundaries](../reference/fix.md#configure-execution-once) and [task evidence](../task-evidence.md) explain these constraints.
 

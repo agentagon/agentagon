@@ -58,7 +58,7 @@ jobs:
           python-version: '3.13'
       - run: python -m pip install '.[dev,browser]'
       - run: python -m playwright install --with-deps chromium
-      - run: python -m pytest tests/test_dashboard_browser.py -q
+      - run: python -m pytest tests/test_dashboard_browser.py tests/test_webapp_browser.py -q
 
   source-package:
     name: Source package and website

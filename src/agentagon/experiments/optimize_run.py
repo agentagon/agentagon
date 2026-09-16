@@ -68,6 +68,15 @@ def configure(
 ) -> dict:
     """Attach optimization to an existing frozen, scored engine run."""
     data = load_run(workspace, run_id)
+    for entry in data["frozen"]:
+        if entry.get("kind") != "inputs" or entry.get("deleted"):
+            continue
+        try:
+            value = json.loads(workspace.read_blob(entry["artifact"]))
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if isinstance(value, dict) and value.get("dataset_partition") == "final_holdout":
+            raise AuditError("final holdout inputs cannot be used for optimization feedback")
     if not data["spec"].get("scoring"):
         raise AuditError("agree on scoring before configuring automatic optimization")
     intent_id = intent_id or data.get("intent_id")
@@ -93,13 +102,14 @@ def configure(
         if not _path(workspace, run_id).exists():
             raise AuditError("configure optimization before proposing application candidates")
     repetitions = data["spec"]["repetitions"]
+    suite_reserve = data.get("suite", {}).get("verification_trials", 0)
     ledger = BudgetLedger(workspace, run_id)
     if not ledger.path.exists():
         ledger.create(
             max_trials or data["limits"]["max_trials"],
             max_elapsed_seconds or data["limits"]["max_elapsed_seconds"],
             baseline_trials=repetitions,
-            verification_trials=repetitions,
+            verification_trials=repetitions + suite_reserve,
             started_at=datetime.fromisoformat(data["created_at"]).timestamp(),
         )
     elif max_trials is not None or max_elapsed_seconds is not None:
@@ -108,6 +118,10 @@ def configure(
             max_elapsed_seconds is not None and max_elapsed_seconds != limits["max_elapsed_seconds"]
         ):
             raise AuditError("overall budget is already frozen")
+    if suite_reserve:
+        budget = ledger.snapshot()
+        if budget["limits"]["verification_trials"] < repetitions + suite_reserve:
+            raise AuditError("budget does not protect the complete bound suite")
     # Historical baseline trials are charged once when an existing measured run
     # gains the unified ledger. A fresh run charges these at engine admission.
     for trial in data["candidates"][data["baseline_id"]]["trials"]:
@@ -422,7 +436,7 @@ class _ApplicationOptimizer:
                 evaluator=data["evaluation_digest"],
                 seed=self.config["seed"],
                 objective=(data["spec"]["goal"] or "Improve the saved issues")
-                + " Return only JSON with a files map; preserve the frozen evaluator and allowed scope.",
+                + " The replacement component must be a JSON object containing exactly a files map; preserve the frozen evaluator and allowed scope.",
                 scope=data["spec"]["editable_paths"],
                 host=self.config["host"],
                 model=self.config["model"],
@@ -459,6 +473,7 @@ class _ApplicationOptimizer:
 
     def verify_and_select(self):
         data = load_run(self.workspace, self.run_id)
+        suite_reserve = data.get("suite", {}).get("verification_trials", 0)
         if "verification_queue" not in self.state:
             self.state["verification_queue"] = [
                 entry["candidate_id"]
@@ -472,9 +487,11 @@ class _ApplicationOptimizer:
                 (e for e in self.state["verification"] if e["original_id"] == original_id), None
             )
             if entry is None:
-                remaining = self.ledger.snapshot()["allocations"][
-                    "verification"
-                ] - self.ledger.spent(self.ledger.snapshot(), "verification")
+                remaining = (
+                    self.ledger.snapshot()["allocations"]["verification"]
+                    - self.ledger.spent(self.ledger.snapshot(), "verification")
+                    - suite_reserve
+                )
                 if remaining < data["spec"]["repetitions"]:
                     break
                 created = engine.new(
@@ -514,8 +531,10 @@ class _ApplicationOptimizer:
             entry for entry in scoring.qualifying(data) if entry["candidate_id"] in verified_ids
         ]
         budget = self.ledger.snapshot()
-        remaining_verification = budget["allocations"]["verification"] - self.ledger.spent(
-            budget, "verification"
+        remaining_verification = (
+            budget["allocations"]["verification"]
+            - self.ledger.spent(budget, "verification")
+            - suite_reserve
         )
         remaining_optimization = budget["allocations"]["optimization"] - self.ledger.spent(
             budget, "optimization"
@@ -532,11 +551,26 @@ class _ApplicationOptimizer:
             self.state["state"] = "optimization"
             self.save()
             return False
+        if qualifying and data.get("suite"):
+            from agentagon.experiments import suites
+
+            result = suites.advance(
+                self.workspace,
+                self.run_id,
+                candidate_id=qualifying[0]["candidate_id"],
+                host_handler=self.host_handler,
+            )
+            self.state["suite"] = {"state": result["state"], "result": result.get("result")}
+            self.save()
+            if result["state"] in {"host_pending", "running", "blocked"}:
+                raise HostWorkPending(result.get("next_action", "Complete the required suite"))
+            if result["state"] != "completed":
+                qualifying = []
         if qualifying:
             engine.select(self.workspace, self.run_id, qualifying[0]["candidate_id"])
         self.state["selection"] = {
             "winner": qualifying[0] if qualifying else None,
-            "alternatives": qualifying[1:3],
+            "alternatives": [] if data.get("suite") else qualifying[1:3],
             "retained_baseline": not qualifying,
         }
         self.state["state"] = "completed"

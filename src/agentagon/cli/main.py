@@ -9,9 +9,11 @@ import click
 
 from agentagon import __version__
 from agentagon.cli.benchmarks import register as register_benchmarks
+from agentagon.cli.datasets import register as register_datasets
 from agentagon.cli.journeys import register as register_journeys
 from agentagon.cli.optimization import register as register_optimization
 from agentagon.cli.patches import register as register_patches
+from agentagon.cli.suites import register as register_suites
 from agentagon.core.records import AuditError, encoded, load_json, resource_path
 from agentagon.dashboard import serve
 from agentagon.installation import SKILLS, install_plugins
@@ -41,13 +43,35 @@ def output(function):
     return wrapped
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.option("--workspace", type=click.Path(path_type=Path), default=Path("."), show_default=True)
 @click.version_option(__version__)
 @click.pass_context
 def main(ctx: click.Context, workspace: Path) -> None:
-    """Audit local code and traces. Model reasoning stays in your coding agent."""
+    """Open the local web app, or use a workflow subcommand for automation."""
     ctx.obj = workspace
+    if ctx.invoked_subcommand is None:
+        _open_app(workspace)
+
+
+def _open_app(path, *, port=0, open_browser=True):
+    from agentagon.webapp.launcher import launch
+
+    try:
+        launch(path, port=port, open_browser=open_browser)
+    except (AuditError, OSError) as exc:
+        message = str(exc) if isinstance(exc, AuditError) else "unable to start local application"
+        click.echo(encoded({"state": "error", "error": message}), err=True)
+        raise SystemExit(1) from exc
+
+
+@main.command("app")
+@click.option("--port", type=click.IntRange(0, 65535), default=0, show_default=True)
+@click.option("--open/--no-open", "open_browser", default=True)
+@click.pass_obj
+def app(path: Path, port: int, open_browser: bool) -> None:
+    """Open a project in the web app, reusing its running local service."""
+    _open_app(path, port=port, open_browser=open_browser)
 
 
 @main.command("init")
@@ -964,4 +988,6 @@ def fix_ship(
 register_optimization(fix_group, output)
 register_journeys(main, output)
 register_benchmarks(main, output)
+register_datasets(main, output)
+register_suites(main, output)
 register_patches(fix_group, output)

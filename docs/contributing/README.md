@@ -43,12 +43,12 @@ Browser tests run in a separate CI job. With the development environment active,
 ```sh
 python -m pip install -e '.[dev,browser]'
 python -m playwright install chromium
-python -m pytest tests/test_dashboard_browser.py -q
+python -m pytest tests/test_dashboard_browser.py tests/test_webapp_browser.py -q
 ```
 
 The Linux CI job uses `python -m playwright install --with-deps chromium` to install browser system dependencies too. These tests exercise dashboard navigation, refresh, accessible empty states and theme persistence at mobile and desktop widths.
 
-Without the browser extra, the regular suite skips this module. Once the extra is installed, Chromium must also be installed for these tests to run. Tests that serve the dashboard or mock HTTP endpoints require permission to bind loopback sockets.
+Without the browser extra, the regular suite skips these modules. Once the extra is installed, Chromium must also be installed for these tests to run. App checks cover project switching, workflow setup, provider import and scoped agent approvals through the real HTTP service. Tests that serve the dashboard or mock HTTP endpoints require permission to bind loopback sockets.
 
 ## Optional integration checks
 

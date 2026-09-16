@@ -73,6 +73,7 @@ extra:
       name: Agentagon on GitHub
 copyright: Agentagon · Apache 2.0
 nav:
+  - Web app: app.md
   - Getting started:
       - Introduction: README.md
       - Install: getting-started/install.md

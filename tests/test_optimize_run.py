@@ -4,6 +4,7 @@ import json
 
 import pytest
 from support.experiments import executions, passing_review
+from support.optimizer import candidate_text, proposal_response
 from test_scoring import definition
 
 from agentagon.core.records import AuditError
@@ -36,13 +37,13 @@ def _host(request):
         return {
             "review": passing_review({"review_template": request["payload"]["review_template"]})
         }
-    proposal = json.loads(request["payload"]["candidate"])
+    proposal = json.loads(candidate_text(request))
     app = json.loads(proposal["files"]["app.json"])
     app["quality"] += 0.01
     app["latency"] -= 1
     app["variant"] = f"optimized-{app['quality']}"
     proposal["files"]["app.json"] = json.dumps(app)
-    return {"candidate": json.dumps(proposal)}
+    return proposal_response(request, json.dumps(proposal))
 
 
 @pytest.mark.parametrize("optimizer", ["gepa", "omni", "autoresearch", "meta_harness"])
@@ -79,7 +80,7 @@ def test_application_proposal_cannot_touch_evaluator(application, specification)
     def invalid_host(request):
         if request["role"] == "review":
             return _host(request)
-        return {"candidate": json.dumps({"files": {"benchmark.py": "print('fake')"}})}
+        return proposal_response(request, json.dumps({"files": {"benchmark.py": "print('fake')"}}))
 
     result = optimize_run.advance(application, run_id, host_handler=invalid_host)
     assert result["state"] == "completed"
@@ -103,11 +104,14 @@ def test_repeated_trials_leave_room_for_every_omni_stage(application, specificat
         response = _host(request)
         if request["role"] == "proposal":
             stages.append(request["payload"]["stage"])
-            proposal = json.loads(response["candidate"])
+            proposal = json.loads(
+                response.get("candidate")
+                or response["text"].removeprefix("```\n").removesuffix("\n```")
+            )
             app = json.loads(proposal["files"]["app.json"])
             app["variant"] = request["request_id"]
             proposal["files"]["app.json"] = json.dumps(app)
-            response["candidate"] = json.dumps(proposal)
+            response = proposal_response(request, json.dumps(proposal))
         return response
 
     result = optimize_run.advance(application, run_id, host_handler=host)
