@@ -1,4 +1,4 @@
-"""Real GEPA composition with Agentagon native-host adapters and durable replay.
+"""Coordinate optimizer engines, native-host callbacks and durable replay.
 
 Upstream selects search parents; Agentagon remains authoritative for actual
 trial admission, evidence, gates, independent verification and final selection.
@@ -19,6 +19,9 @@ from agentagon.experiments.budget import BudgetExhausted, BudgetLedger
 from agentagon.experiments.host_bridge import HostBridge, HostWorkPending
 
 GEPA_REVISION = "0632cdb5dcc052e690eab439e1b4a7e3e9cfe407"
+GEPA_VERSION = "0.1.4"
+# Persisted identity stays stable across module renames.
+RUNTIME_VERSION = "agentagon-gepa-bridge-v1"
 ENGINES = {"omni", "gepa", "autoresearch", "meta_harness"}
 
 
@@ -52,7 +55,7 @@ class _AttemptPreservingEngine:
         self.name = delegate.name
 
     def run(self, task, server):
-        from gepa.oa.engine import Result
+        from agentagon.experiments.runtime import Result
 
         try:
             return self.delegate.run(task, server)
@@ -62,9 +65,6 @@ class _AttemptPreservingEngine:
                 best_score=server.best_score,
                 metadata={"measurement_failure": str(exc)},
             )
-
-    def process_result(self, result, output_dir):
-        self.delegate.process_result(result, output_dir)
 
 
 class NativeAutoResearchEngine:
@@ -77,7 +77,7 @@ class NativeAutoResearchEngine:
         self.width = 1
 
     def run(self, task, server):
-        from gepa.oa.engine import Result
+        from agentagon.experiments.runtime import Result
 
         best = task.seed_candidate
         best_score, feedback = server.evaluate(best)
@@ -98,9 +98,6 @@ class NativeAutoResearchEngine:
 
     def _feedback(self, history, round_number, branch):
         return {"history": history, "method": "hypothesis-measure-keep-or-revert"}
-
-    def process_result(self, result, output_dir):
-        pass
 
 
 class NativeMetaHarnessEngine(NativeAutoResearchEngine):
@@ -188,6 +185,8 @@ class OptimizerCoordinator:
             "host_concurrency": host_concurrency,
             "meta_harness": asdict(meta_harness),
             "upstream_revision": GEPA_REVISION,
+            "gepa_version": GEPA_VERSION,
+            "runtime": RUNTIME_VERSION,
         }
         with self.ledger.locked():
             if self.path.exists():
@@ -232,12 +231,8 @@ class OptimizerCoordinator:
         """
         if type(trials_per_evaluation) is not int or trials_per_evaluation < 1:
             raise AuditError("trials per evaluation must be a positive integer")
-        try:
-            from gepa.oa.ensemble import optimize_parallel_with_server
-        except ImportError as exc:
-            raise AuditError(
-                "install the pinned GEPA optimizer dependency before optimizing"
-            ) from exc
+        from agentagon.experiments.runtime import optimize_parallel_with_server
+
         self.ledger.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(
             self.ledger.directory / "optimizer.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
@@ -250,6 +245,13 @@ class OptimizerCoordinator:
             state = self.snapshot()
             if state["state"] == "completed":
                 return self._view(state)
+            if (
+                state["config"].get("gepa_version") != GEPA_VERSION
+                or state["config"].get("runtime") != RUNTIME_VERSION
+            ):
+                raise AuditError(
+                    "optimizer runtime changed; use the original installation to resume this run"
+                )
             semaphore = threading.BoundedSemaphore(state["config"]["host_concurrency"])
             stop_requested = threading.Event()
             config = state["config"]
@@ -293,16 +295,11 @@ class OptimizerCoordinator:
                             )
                             for stage in unfinished
                         ]
-                        try:
-                            # Public upstream composition, with actual host concurrency.
-                            results = optimize_parallel_with_server(
-                                [entry[0] for entry in entries],
-                                [entry[1] for entry in entries],
-                                max_workers=config["host_concurrency"],
-                            )
-                        finally:
-                            for server, _ in entries:
-                                server.stop()
+                        results = optimize_parallel_with_server(
+                            [entry[0] for entry in entries],
+                            [entry[1] for entry in entries],
+                            max_workers=config["host_concurrency"],
+                        )
                     for stage, result in zip(unfinished, results, strict=True):
                         if not math.isfinite(result.best_score):
                             stage["failure"] = result.metadata.get(
@@ -354,10 +351,12 @@ class OptimizerCoordinator:
         trials_per_evaluation,
         stop_requested,
     ):
-        from gepa.oa.budget import BudgetTracker
-        from gepa.oa.config import OptimizeAnythingConfig
-        from gepa.oa.eval_server import EvalServer
-        from gepa.oa.task import Task
+        from agentagon.experiments.runtime import (
+            BudgetTracker,
+            EvalServer,
+            OptimizeAnythingConfig,
+            Task,
+        )
 
         counters = {"proposal": 0, "evaluation": 0}
         route = config["meta_harness"] if stage["engine"] == "meta_harness" else {}
@@ -478,10 +477,9 @@ class OptimizerCoordinator:
             BudgetTracker(
                 max_evals=stage["max_evals"] // trials_per_evaluation + int(not count_trial)
             ),
-            max_concurrency=1,
         )
         if stage["engine"] == "gepa":
-            from gepa.oa.engines.gepa import GepaEngine
+            from agentagon.experiments.runtime import GepaEngine
 
             def gepa_propose(candidate, reflective_dataset, components_to_update, **kwargs):
                 updated = propose(next(iter(candidate.values())), dict(reflective_dataset))

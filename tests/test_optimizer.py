@@ -140,7 +140,6 @@ def test_host_requests_binding_claim_cancel_and_judging(workspace):
 
 
 def coordinator(workspace, *, concurrency=1, engine="omni"):
-    pytest.importorskip("gepa.oa.ensemble")
     ledger = BudgetLedger(workspace, RUN)
     ledger.create(40, 300)
     # Fake baseline and release its unused preparation budget.
@@ -245,6 +244,19 @@ def test_real_gepa_host_pending_restart_never_repeats_work(workspace):
         len(result["budget"]["operations"])
         == len(evaluations) + len(optimizer.bridge.snapshot()["requests"]) + 1
     )
+
+
+def test_resume_rejects_changed_runtime_without_executing_or_rewriting_evidence(workspace):
+    optimizer = coordinator(workspace, engine="gepa")
+    state = optimizer.snapshot()
+    state["config"].pop("runtime")
+    workspace.write(optimizer.path, state)
+    before = optimizer.ledger.snapshot()
+    with pytest.raises(AuditError, match="original installation"):
+        optimizer.advance(lambda *args, **kwargs: pytest.fail("unexpected evaluation"))
+    assert optimizer.snapshot() == state
+    assert optimizer.ledger.snapshot() == before
+    assert not optimizer.bridge.pending()
 
 
 def test_callback_trial_cost_bounds_search_without_spending_verification(workspace):

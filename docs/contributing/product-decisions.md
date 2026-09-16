@@ -8,6 +8,8 @@ These decisions explain the workflow boundaries contributors should preserve. Co
 
 `ag:init` onboards an application, agrees on behaviors/scoring/limits, prepares reusable evals and establishes a baseline. `ag:fix` improves the saved goal or named issue through measurement, independent verification and draft delivery. `ag:dashboard` inspects history, explicitly reruns baselines and manages existing settings. Audit and Eval remain independently discoverable deep dives. Setup, review and delivery are shared supporting procedures.
 
+Init starts with focused discovery sufficient to recommend a useful measurement; a full audit is not a prerequisite for that recommendation. Its conversation leads with the developer outcome, material limits and next decision, while detailed definitions and evidence remain in saved records. Requested full audits retain their complete rubric and evidence requirements. Deterministic checks must not be presented as evidence of task or answer quality beyond what they actually measure. See the [Init procedure](../../skills/init/SKILL.md).
+
 Audit defaults to the current application broadly. A named agent resolves to explicit paths. Changes-only scope includes the captured uncommitted diff; related code can explain a change but cannot expand the finding scope. A missing finding in a narrow audit cannot resolve an existing issue.
 
 Changes-only audits default to code without traces. Full audits accept dirty and non-Git directories and retain uncertainty about trace revision alignment. Existing-eval assessments save content-pinned drafts independently of execution readiness. Running and freezing a benchmark still requires clean committed source, trustworthy expectations, authorized limits, sensitivity checks and independent review. Missing execution prerequisites do not block the assessment.
@@ -72,7 +74,7 @@ Recent traces form a separate population from fixed benchmark cases. Refresh onl
 
 ## Optimizer proposals do not authorize execution
 
-Omni uses real upstream GEPA composition with Agentagon native-host AutoResearch and Meta-Harness adapters. Host/model overrides affect authoring, independently of judge settings. One durable request/reply bridge binds proposals, grading and reviews to role, source, evaluator and scope; unavailable host work stays pending. The finite coordinator resumes recorded work without silently switching hosts.
+Omni uses Agentagon's [optimizer runtime](../../src/agentagon/experiments/runtime.py) to compose GEPA search with native-host AutoResearch and Meta-Harness adapters. Host/model overrides affect authoring, independently of judge settings. One durable request/reply bridge binds proposals, grading and reviews to role, source, evaluator and scope; unavailable host work stays pending. The finite coordinator resumes recorded work without silently switching hosts.
 
 Agentagon owns attempt history, trial admission, metric validity, gates, independent review and selection. Starting Fix allocations are 20% preparation/baseline, 60% optimization and 20% final verification. Check minimum feasibility first, move unused preparation capacity to optimization and protect verification capacity. Every actual execution, retry and final trial counts; host work counts against applicable time/cost limits. Never invent subscription prices or expand the overall limit automatically.
 

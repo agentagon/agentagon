@@ -12,6 +12,13 @@ from pathlib import Path
 import agentagon
 from agentagon.core.records import catalog, resource_path
 from agentagon.dashboard import ASSETS
+from agentagon.experiments.runtime import (
+    BudgetTracker,
+    EvalServer,
+    GepaEngine,
+    OptimizeAnythingConfig,
+    Task,
+)
 from agentagon.installation import SKILLS
 from agentagon.usage import track
 
@@ -43,6 +50,29 @@ for suffix in ("py", "cjs"):
 for name, _ in ASSETS.values():
     assert files("agentagon").joinpath("dashboard_assets", name).read_bytes()
 assert callable(track)
+with tempfile.TemporaryDirectory(prefix="agentagon-gepa-check-") as directory:
+    server = EvalServer(
+        Task("installed-wheel", "0", "increase score"),
+        lambda candidate, example, **kwargs: (float(candidate), {}),
+        BudgetTracker(4),
+    )
+    engine = GepaEngine(
+        OptimizeAnythingConfig(
+            run_dir=directory,
+            engine_config={
+                "engine": {"parallel": False, "use_cloudpickle": False, "seed": 0},
+                "reflection": {
+                    "reflection_lm": None,
+                    "custom_candidate_proposer": lambda candidate, data, keys, **kwargs: {
+                        key: "1" for key in keys
+                    },
+                },
+            },
+        )
+    )
+    result = engine.run(server.task, server)
+    assert result.best_candidate == "1" and result.best_score == 1.0
+    assert server.budget.used <= 4
 with tempfile.TemporaryDirectory(prefix="agentagon-telemetry-check-") as directory:
     result = subprocess.run(
         [
@@ -67,3 +97,4 @@ with tempfile.TemporaryDirectory(prefix="agentagon-telemetry-check-") as directo
     assert json.loads(result.stdout) == {"status": "disabled"}
     assert not list(Path(directory).iterdir())
 print("Installed package, plugin resources, contracts, helpers and dashboard assets are readable.")
+print("Installed GEPA optimizer completes a bounded offline search.")

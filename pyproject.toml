@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentagon"
-version = "0.1.2"
+version = "0.1.3"
 description = "Inspect and improve AI agents with measured fixes and custom scores."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -15,7 +15,7 @@ dependencies = [
     "jsonschema>=4.21,<5",
     "referencing>=0.28.4,<1",
     "httpx>=0.28,<1",
-    "gepa @ https://codeload.github.com/gepa-ai/gepa/tar.gz/0632cdb5dcc052e690eab439e1b4a7e3e9cfe407#sha256=1ea34ad34724b65a67cf6531bae6d403726eec3cf7dca7be62c1162c80641e1b",
+    "gepa==0.1.4",
 ]
 
 [project.urls]
