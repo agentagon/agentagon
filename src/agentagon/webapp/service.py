@@ -136,11 +136,14 @@ class Application:
         for name, key in (("audits", "audit_id"), ("runs", "run_id")):
             result[name] = [r for r in result[name] if r.get(key) in identifiers]
         audit_ids = {r["audit_id"] for r in result["audits"]}
-        result["issues"] = [
-            i
-            for i in result["issues"]
-            if set(i.get("audit_ids", [])) & audit_ids or i.get("latest_audit_id") in audit_ids
-        ]
+        scoped_issues = []
+        for issue in result["issues"]:
+            matching_audits = [key for key in issue["audit_ids"] if key in audit_ids]
+            if matching_audits:
+                scoped_issues.append(
+                    {**issue, "audit_ids": matching_audits, "latest_audit_id": matching_audits[-1]}
+                )
+        result["issues"] = scoped_issues
         history = self.catalog.metrics(project_id, agent_id)
         baseline_ids = {
             m["baseline_id"]

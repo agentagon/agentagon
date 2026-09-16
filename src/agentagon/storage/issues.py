@@ -61,6 +61,8 @@ def list_issues(workspace: Workspace) -> list[dict]:
             issues[event["issue_id"]]["history"].append(event)
             issues[event["issue_id"]]["status"] = event["status"]
     for issue in issues.values():
+        issue["audit_ids"] = list(dict.fromkeys(o["audit_id"] for o in issue["occurrences"]))
+        issue["latest_audit_id"] = issue["audit_ids"][-1] if issue["audit_ids"] else None
         traces = {key for occurrence in issue["occurrences"] for key in occurrence["trace_ids"]}
         issue["historical_affected_traces"] = len(traces)
         issue["runtime_prevalence"] = None  # No common denominator across arbitrary audits.

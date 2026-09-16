@@ -72,6 +72,82 @@ def test_agents_and_focuses_do_not_cross_projects_or_agent_boundaries(app, tmp_p
         focus(app, one, suggested)
 
 
+def test_saved_issue_focus_uses_real_occurrences_and_agent_scoped_audits(
+    app, workspace, imported, fixtures
+):
+    from support.audit import finish
+    from support.dashboard import make_audit
+
+    from agentagon.operations import import_traces, start
+    from agentagon.storage.issues import list_issues
+
+    finish(workspace, imported)
+    repeated = start(
+        workspace,
+        mode="traces",
+        source="braintrust",
+        project="demo",
+        start_time="2026-08-10T00:00:00Z",
+        end_time="2026-08-11T00:00:00Z",
+        limit=1,
+        scopes=[],
+        host="test",
+        model="fixture",
+    )["audit_id"]
+    import_traces(workspace, repeated, fixtures / "braintrust.json")
+    finish(workspace, repeated)
+    unrelated = make_audit(workspace)
+    issue = list_issues(workspace)[0]
+    assert issue["audit_ids"] == [imported, repeated]
+    assert issue["latest_audit_id"] == repeated
+    assert {o["audit_id"] for o in issue["occurrences"]} == {imported, repeated}
+
+    saved = app.register(str(workspace.root))
+    support, research, unused = [
+        agent(app, saved, name=name) for name in ("Support", "Research", "Unused")
+    ]
+    for owner, audit_id in ((support, imported), (research, repeated)):
+        job_id = "job_" + uuid.uuid4().hex[:24]
+        app.state.db.put_record(
+            saved["id"],
+            "jobs",
+            job_id,
+            {
+                "id": job_id,
+                "kind": "audit",
+                "state": "completed",
+                "application_agent_id": owner["id"],
+                "workflow_ids": {"audit_id": audit_id},
+            },
+        )
+        projected = app.agent_overview(saved["id"], owner["id"])["issues"]
+        assert len(projected) == 1
+        assert projected[0]["audit_ids"] == [audit_id]
+        assert projected[0]["latest_audit_id"] == audit_id
+        source = {"kind": "issue", "issue_id": issue["issue_id"], "audit_id": audit_id}
+        retained = app.catalog.save_focus(
+            saved["id"], owner["id"], {"goal": "Handle weather timeouts", "source": source}
+        )
+        assert retained["source"] == source
+
+    assert app.agent_overview(saved["id"], unused["id"])["issues"] == []
+    source = {"kind": "issue", "issue_id": issue["issue_id"], "audit_id": repeated}
+    with pytest.raises(AuditError, match="different application agent"):
+        app.catalog.save_focus(
+            saved["id"], support["id"], {"goal": "Handle timeouts", "source": source}
+        )
+    source["audit_id"] = unrelated
+    with pytest.raises(AuditError, match="does not belong to that audit"):
+        app.catalog.save_focus(
+            saved["id"], support["id"], {"goal": "Handle timeouts", "source": source}
+        )
+    source.pop("audit_id")
+    with pytest.raises(AuditError, match="different application agent"):
+        app.catalog.save_focus(
+            saved["id"], unused["id"], {"goal": "Handle timeouts", "source": source}
+        )
+
+
 def test_focused_audit_binds_dirty_local_code_and_missing_baseline_blocks_fix(
     app, tmp_path, monkeypatch
 ):

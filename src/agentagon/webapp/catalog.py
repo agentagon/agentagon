@@ -399,10 +399,11 @@ class Catalog:
             )
             if issue is None:
                 raise AuditError("issue not found in this project")
-            issue_audits = set(issue.get("audit_ids", []))
+            issue_audits = set(issue["audit_ids"])
             if source.get("audit_id") and source["audit_id"] not in issue_audits:
                 raise AuditError("selected issue does not belong to that audit")
-            audit_ids.update(issue_audits)
+            if not source.get("audit_id"):
+                audit_ids.update(issue_audits)
         owners = {
             j["application_agent_id"]
             for j in self.state.db.list_records(project_id, "jobs")
