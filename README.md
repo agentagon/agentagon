@@ -49,10 +49,6 @@ Agentagon helps you decide what an AI agent should improve, define how success w
 
 The browser guides the workflow. Coding agents perform reasoning and author changes; Agentagon owns evaluations, budgets, evidence, comparisons, and review boundaries.
 
-![Agentagon's Goals view with a measurement plan, baseline, and measured improvement workflow](docs/assets/dashboard-example.png)
-
-*Example workspace with synthetic data. Define a goal, agree on measurements, establish a baseline, then compare fixes.*
-
 ## Prerequisites
 
 - **Python 3.12+** with `pip` and `venv`, on macOS or Linux. The implementation uses Unix facilities such as `fcntl`.

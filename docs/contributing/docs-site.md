@@ -83,6 +83,6 @@ The copied logo and causeway images in `docs/assets/` are self-contained; buildi
 
 `docs_theme/partials/header.html` preserves the Material 9.7.7 header behavior and customizes its first title topic for the wordmark and separate Docs label. The logo returns to the site root. Compare this override with upstream when upgrading Material. CI includes changes to `docs_theme/`.
 
-`dashboard-example.png` captures the current web app's Goals view, including measurement readiness, baseline and Fix actions, and the coding-agent panel. It uses synthetic support-agent data through `AppFixture` in `tests/test_webapp_browser.py`, rendered with the shipped dashboard assets in Chromium. When refreshing it, use synthetic evidence only and retain the example-data caption; screenshot scores are illustrative, not product benchmarks.
+The retained `dashboard-example.png` asset captures the bundled `examples/local-audit/demo.py` workspace while awaiting evidence review. Recreate it with that example and a loopback dashboard; any use must retain the unfinished-state caption. Use synthetic evidence only.
 
 Legacy capabilities and local-example routes remain available through contextual links. Moved fix sections retain their old anchors and link to the detailed reference. This configuration adds no analytics integration, external font service, or visitor authentication.
