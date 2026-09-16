@@ -88,10 +88,11 @@ class AppState:
         self.project(project_id)
         with self.locked() as data:
             del data["projects"][project_id]
-            for connection in data["connections"].values():
-                connection["project_ids"] = [
-                    key for key in connection["project_ids"] if key != project_id
-                ]
+            data["connections"] = {
+                key: connection
+                for key, connection in data["connections"].items()
+                if connection["project_id"] != project_id
+            }
         return {"removed": project_id, "evidence_preserved": True}
 
 

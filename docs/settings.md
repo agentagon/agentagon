@@ -2,6 +2,8 @@
 
 Use **ag:setup** to configure how Agentagon works for you and for a particular application. Core code audits need no configuration; save settings when you want reusable execution limits, trace connections, or optional guidance.
 
+For web-app provider connections, select a local project and use **Settings → Connections**. Follow [connection setup](app.md#connect-traces-and-datasets) to discover and select its remote project. The CLI trace defaults below are separate from app connections.
+
 ## Inspect what applies
 
 From your application directory:

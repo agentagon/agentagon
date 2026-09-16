@@ -24,6 +24,7 @@ DEFAULT_ENDPOINTS = {
 MAX_ITEMS = 1000
 MAX_TRACES = 100
 MAX_PAGES = 30
+MAX_WORKSPACES = 100
 MAX_SPANS = 10000
 MAX_RESPONSE_BYTES = 8_000_000
 MAX_TOTAL_BYTES = 20_000_000
@@ -61,6 +62,10 @@ _LANGSMITH_TRACE_FIELDS = [
 
 class ProviderError(AuditError):
     """A provider failure safe to display without its response body or credentials."""
+
+    def __init__(self, message, *, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class _LimitReached(Exception):
@@ -131,6 +136,14 @@ class CredentialStore:
                         "Unable to save credential in the OS credential store"
                     ) from None
         return reference
+
+    def set_auto(self, value):
+        """Prefer an OS credential store, retaining only memory when it is unavailable."""
+        value = _text(value, "credential", maximum=16384)
+        try:
+            return self.set(value, "keyring")
+        except ProviderError:
+            return self.set(value, "session")
 
     def resolve(self, reference):
         if isinstance(reference, str) and reference.startswith("env:"):
@@ -234,11 +247,13 @@ class ProviderClient:
             return redact(value)
         return value
 
-    def _request(self, method, path, **kwargs):
+    def _request(self, method, path, *, workspace_id=None, **kwargs):
         if self._requests >= MAX_REQUESTS or time.monotonic() - self._started > MAX_SECONDS:
             raise _LimitReached
         self._requests += 1
         headers = self._headers()
+        if workspace_id is not None:
+            headers["X-Tenant-Id"] = _text(workspace_id, "workspace ID")
         try:
             with httpx.Client(
                 transport=self.transport, timeout=20, follow_redirects=False, trust_env=False
@@ -254,7 +269,8 @@ class ProviderClient:
                             429: "Provider rate limit reached; retry later",
                         }
                         raise ProviderError(
-                            labels.get(response.status_code, "Provider request failed")
+                            labels.get(response.status_code, "Provider request failed"),
+                            status_code=response.status_code,
                         )
                     content = bytearray()
                     for part in response.iter_bytes():
@@ -286,7 +302,7 @@ class ProviderClient:
             raise ProviderError("Provider returned an invalid record list")
         return rows
 
-    def _catalog(self, resource):
+    def _catalog(self, resource, *, workspace_id=None):
         items = []
         for page in range(MAX_PAGES):
             params = {"limit": PAGE_SIZE}
@@ -305,7 +321,7 @@ class ProviderClient:
                 )
                 key = "data"
                 params["page"] = page + 1
-            result = self._request("GET", path, params=params)
+            result = self._request("GET", path, params=params, workspace_id=workspace_id)
             rows = self._rows(result, key)
             items.extend(rows)
             if len(items) > MAX_ITEMS:
@@ -314,13 +330,62 @@ class ProviderClient:
                 return self._clean(items)
         raise ProviderError("Provider catalog exceeds the pagination limit")
 
+    def _langsmith_projects(self):
+        # This API lists workspaces visible to the key without requiring a tenant ID.
+        path = "/workspaces" if self.endpoint.endswith("/api/v1") else "/api/v1/workspaces"
+        try:
+            workspaces = self._rows(self._request("GET", path, params={"include_deleted": False}))
+        except ProviderError as error:
+            if error.status_code != 403:
+                raise
+            # A restricted single-workspace key can read projects without org discovery.
+            return self._catalog("project")
+        if len(workspaces) > MAX_WORKSPACES:
+            raise ProviderError("Too many LangSmith workspaces; use a workspace-scoped key")
+        projects, seen = [], set()
+        for workspace in workspaces:
+            if workspace.get("is_deleted"):
+                continue
+            workspace_id = _text(workspace.get("id"), "workspace ID")
+            if workspace_id in seen:
+                raise ProviderError("Provider returned duplicate workspaces")
+            seen.add(workspace_id)
+            name = _text(workspace.get("display_name"), "workspace name")
+            for project in self._catalog("project", workspace_id=workspace_id):
+                if project.get("tenant_id") and project["tenant_id"] != workspace_id:
+                    raise ProviderError("Provider returned a project from another workspace")
+                projects.append({**project, "workspace_id": workspace_id, "workspace_name": name})
+                if len(projects) > MAX_ITEMS:
+                    raise ProviderError("Too many LangSmith projects; use a workspace-scoped key")
+        return projects
+
     def test(self):
         self._begin()
         try:
-            projects = self._catalog("project")
+            projects = (
+                self._langsmith_projects()
+                if self.provider == "langsmith"
+                else self._catalog("project")
+            )
         except _LimitReached:
             raise ProviderError("Connection check exceeded its request limit") from None
-        return {"status": "connected", "projects": projects}
+        normalized = []
+        for project in projects:
+            project_id = _text(project.get("id"), "project ID")
+            row = {
+                "id": project_id,
+                "name": _text(project.get("name") or project_id, "project name"),
+            }
+            for key in ("workspace_id", "workspace_name"):
+                if project.get(key):
+                    row[key] = _text(project[key], key.replace("_", " "))
+            # Scoped project reads may provide their tenant even when discovery is restricted.
+            if self.provider == "langsmith" and "workspace_id" not in row:
+                workspace_id = project.get("tenant_id") or self.connection.get("workspace_id")
+                if workspace_id:
+                    row["workspace_id"] = _text(workspace_id, "workspace ID")
+            normalized.append(row)
+        return self._clean({"status": "connected", "projects": normalized})
 
     def datasets(self):
         self._begin()

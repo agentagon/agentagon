@@ -44,17 +44,21 @@ Set coding-agent capacity in Settings. Fix has a separate requested parallelism 
 
 ## Connect traces and datasets
 
-Open **Settings → Connections**, add a named connection and assign it to the projects that may use it. Multiple connections can coexist.
+Select your local project, then open **Settings → Connections**. Each connection belongs to that project. To use the same provider in another checkout, connect it there too.
 
-| Provider | Connection fields |
+1. Choose Braintrust, LangSmith or Langfuse. The API URL is prefilled; edit it for your region or self-hosted service.
+2. Enter the provider credentials and choose **Find projects**.
+3. Select the remote project from the dropdown and choose **Connect**.
+
+| Provider | Credentials |
 |---|---|
-| Braintrust | API key, project ID and optional custom endpoint. |
-| LangSmith | API key, project ID, regional/custom endpoint and workspace ID when the key requires it. |
-| Langfuse | Public key, secret key and regional/custom endpoint. The keys determine project access. |
+| Braintrust | API key. |
+| LangSmith | API key. Agentagon discovers the workspace internally. |
+| Langfuse | Public key and secret key. The keys determine project access. |
 
-**Test connection** checks access to project metadata. Trace or dataset reads can still require additional permissions or a compatible server version. Langfuse trace import uses Observations API v2; older self-hosted deployments need a compatible export or an upgrade.
+**Find projects** checks access to project metadata. If no projects appear, check the credentials, API URL and provider permissions. Trace or dataset reads can still require additional permissions or a compatible server version. Langfuse trace import uses Observations API v2; older self-hosted deployments need a compatible export or an upgrade.
 
-Credentials can come from environment-variable references, session memory or a supported OS credential store. Session credentials expire when the local service stops. To enable OS storage, install `agentagon[credentials]`; combine extras as `agentagon[claude,credentials]` when needed. An unavailable secure backend produces an error. Configuration stores references, and the browser does not receive stored secret values. Environment variables must be available to the process that launched the service.
+Credential storage is automatic: Agentagon prefers a supported OS credential store and falls back to memory for the current service session. The connection indicates when credentials last only until the app stops; reconnect afterward. To enable OS storage, install `agentagon[credentials]`; combine extras as `agentagon[claude,credentials]` when needed. Configuration stores references, never secret values, and the browser does not receive stored credentials.
 
 Choose a connection in the trace or dataset import flow, set the selection, and preview it before saving. Trace selections require a timezone-aware date window and a cap on whole traces. Dataset selections preserve their provider version, structured inputs, reference outputs and source metadata. LangSmith also supports split and metadata filters.
 
@@ -102,10 +106,10 @@ The local service owns running tasks. Closing the browser leaves them running; k
 
 Pause and cancellation retain task history and completed evidence. Resumption uses the recorded managed-agent session when available. An unavailable session or exhausted limit needs attention rather than a silent replacement session or a larger budget.
 
-The app's authoritative metadata is SQLite at `~/.config/agentagon/config.app/app.sqlite3`, or `$XDG_CONFIG_HOME/agentagon/config.app/app.sqlite3`. It stores project registrations, application agents and focuses, named connection references, coding-agent settings, jobs, events and approval state. `AGENTAGON_APP_STATE` overrides the app directory; `AGENTAGON_CONFIG` continues to select the settings file.
+The app's authoritative metadata is SQLite at `~/.config/agentagon/config.app/app.sqlite3`, or `$XDG_CONFIG_HOME/agentagon/config.app/app.sqlite3`. It stores project registrations, application agents and focuses, project connection references, coding-agent settings, jobs, events and approval state. `AGENTAGON_APP_STATE` overrides the app directory; `AGENTAGON_CONFIG` continues to select the settings file.
 
 Each checkout's ignored `.agentagon/` directory contains engine records, immutable imported evidence and artifacts, reports and isolated work areas. Generated task context files are projections, not another task-state authority. Preserve both the app database and project evidence when backing up work. Do not edit saved records directly.
 
-This app state format has no migration or compatibility writer. An earlier development database requires a new `AGENTAGON_APP_STATE` directory; the old files remain untouched. Existing CLI trace settings do not create named app connections; add those connections explicitly in Settings.
+This app state format has no migration or compatibility writer. An earlier development database requires a new `AGENTAGON_APP_STATE` directory; the old files remain untouched. Existing CLI trace settings do not create app connections; connect each project explicitly in Settings.
 
 The web app is a loopback application for one local user. The existing `agentagon dashboard` command remains a separate checkout viewer with read-only defaults and explicitly enabled controls. See [the dashboard guide](dashboard.md) if you use the skill-based workflow.

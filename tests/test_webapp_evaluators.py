@@ -311,11 +311,12 @@ class Braintrust:
         return httpx.Response(200, json={"row_ids": [event["id"] for event in body["events"]]})
 
 
-def publisher():
+def publisher(project):
     provider = Braintrust()
     credentials = CredentialStore()
     connection = {
         "id": "connection_" + "a" * 24,
+        "project_id": project.project_id,
         "provider": "braintrust",
         "project": "remote-project",
         "credentials": {"api_key": credentials.set("provider-secret")},
@@ -324,7 +325,7 @@ def publisher():
 
 
 def test_publication_requires_exact_preview_and_replays_without_network(project):
-    client, provider = publisher()
+    client, provider = publisher(project)
     preview = evaluators.preview_publication(
         project, client.connection, dataset(project)["id"], {"name": "Reviewed cases"}
     )
@@ -349,7 +350,7 @@ def test_publication_requires_exact_preview_and_replays_without_network(project)
 
 
 def test_uncertain_insert_reconciles_without_duplicate_writes_after_restart(project):
-    client, provider = publisher()
+    client, provider = publisher(project)
     record = dataset(
         project,
         [{"id": str(index), "input": index, "expected_present": False} for index in range(105)],
@@ -381,7 +382,7 @@ def test_uncertain_insert_reconciles_without_duplicate_writes_after_restart(proj
 
 
 def test_retry_accepts_provider_null_missing_expectations(project):
-    client, provider = publisher()
+    client, provider = publisher(project)
     record = dataset(project, [{"id": "one", "input": "question", "expected_present": False}])
     preview = evaluators.preview_publication(
         project, client.connection, record["id"], {"name": "Cases"}
@@ -403,7 +404,7 @@ def test_retry_accepts_provider_null_missing_expectations(project):
 
 @pytest.mark.parametrize("response", [[], {"metadata": []}])
 def test_malformed_publication_provider_shapes_are_safe_errors(project, response):
-    client, provider = publisher()
+    client, provider = publisher(project)
     provider.remote = response
     preview = evaluators.preview_publication(
         project, client.connection, dataset(project)["id"], {"name": "Cases"}
@@ -416,7 +417,7 @@ def test_malformed_publication_provider_shapes_are_safe_errors(project, response
 
 
 def test_publication_rejects_changed_destination_and_foreign_dataset(project):
-    client, provider = publisher()
+    client, provider = publisher(project)
     preview = evaluators.preview_publication(
         project, client.connection, dataset(project)["id"], {"name": "Cases"}
     )
@@ -441,7 +442,7 @@ def test_publication_rejects_changed_destination_and_foreign_dataset(project):
 
 
 def test_concurrent_publication_has_one_remote_writer(project):
-    client, provider = publisher()
+    client, provider = publisher(project)
     preview = evaluators.preview_publication(
         project, client.connection, dataset(project)["id"], {"name": "Cases"}
     )
@@ -471,9 +472,24 @@ def test_final_dataset_cannot_be_exported_or_published(project):
     }
     preview["provenance"]["dataset_partition"] = "final_holdout"
     final = snapshots.save(project, project.project_id, preview)
-    client, provider = publisher()
+    client, provider = publisher(project)
     with pytest.raises(AuditError, match="final"):
         evaluators.export_bundle(project, final["id"], "braintrust")
     with pytest.raises(AuditError, match="final"):
         evaluators.preview_publication(project, client.connection, final["id"], {"name": "Final"})
     assert provider.remote is None
+
+
+@pytest.mark.parametrize("different", ["local", "remote"])
+def test_publication_requires_connection_local_and_remote_project(project, different):
+    client, provider = publisher(project)
+    selection = {"name": "Cases"}
+    if different == "local":
+        client.connection["project_id"] = "project_" + "b" * 24
+    else:
+        selection["project"] = "another-remote-project"
+    with pytest.raises(AuditError, match="this project|connected provider project"):
+        evaluators.preview_publication(
+            project, client.connection, dataset(project)["id"], selection
+        )
+    assert provider.writes == 0

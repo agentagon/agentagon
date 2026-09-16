@@ -134,11 +134,11 @@ def test_domain_records_are_scoped_and_stale_revisions_fail(registered, tmp_path
     assert state.db.get_record(project["id"], "focuses", record["id"])["name"] == "Latency"
 
 
-def test_settings_and_assignments_commit_together_and_only_store_references(registered):
+def test_settings_and_connection_owner_commit_together_and_only_store_references(registered):
     state, project = registered
     connection = {
         "id": "connection_one",
-        "project_ids": [project["id"]],
+        "project_id": project["id"],
         "credentials": {"api_key": "env:PROVIDER_KEY"},
     }
     with state.locked() as data:
@@ -152,7 +152,7 @@ def test_settings_and_assignments_commit_together_and_only_store_references(regi
     assert state.read() == saved
     assert b"plaintext-secret" not in state.path.read_bytes()
     state.remove(project["id"])
-    assert state.read()["connections"][connection["id"]]["project_ids"] == []
+    assert state.read()["connections"] == {}
 
 
 def test_settings_cannot_move_registered_checkout(registered):
@@ -172,3 +172,28 @@ def test_database_symlink_rejected_without_touching_target(tmp_path):
     with pytest.raises(AuditError, match="symlink"):
         AppState(directory)
     assert json.loads(target.read_text()) == {"keep": True}
+
+
+@pytest.mark.parametrize("owner", [None, [], "project_" + "0" * 24])
+def test_connections_require_one_registered_project_owner(registered, owner):
+    state, _ = registered
+    with pytest.raises(AuditError, match="one registered project owner"):
+        with state.locked() as data:
+            data["connections"]["connection_one"] = {"id": "connection_one", "project_id": owner}
+    assert state.read()["connections"] == {}
+
+
+def test_unsupported_saved_connection_format_fails_on_read_without_rewriting(registered):
+    state, project = registered
+    payload = json.dumps({"id": "connection_one", "project_ids": [project["id"]]})
+    with state.db.transaction() as transaction:
+        transaction.connection.execute(
+            "INSERT INTO connections(id, payload) VALUES (?, ?)", ("connection_one", payload)
+        )
+    with pytest.raises(AuditError, match="unsupported saved connection format"):
+        AppState(state.directory).read()
+    with state.db.transaction() as transaction:
+        assert (
+            transaction.connection.execute("SELECT payload FROM connections").fetchone()["payload"]
+            == payload
+        )

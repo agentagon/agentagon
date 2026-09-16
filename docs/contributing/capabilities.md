@@ -21,7 +21,7 @@ Entry point: `ag:audit`; CLI `audit changes`, `start`, `prepare`, `submit`, `rep
 
 ## 2. Runtime evidence
 
-The web app imports bounded selections through named provider connections. Coding-agent workflows can also retrieve exports through available provider tools. The CLI plans selection and imports exports; it is not a production trace collector. See [the web app](../app.md), [acquisition](../../skills/audit/references/acquisition.md) and [supported formats](../../skills/audit/references/formats.md).
+The web app imports bounded selections through connections owned by the selected local project. Coding-agent workflows can also retrieve exports through available provider tools. The CLI plans selection and imports exports; it is not a production trace collector. See [the web app](../app.md), [acquisition](../../skills/audit/references/acquisition.md) and [supported formats](../../skills/audit/references/formats.md).
 
 | Capability | Observable behavior and conditions | Implementation / representative tests |
 |---|---|---|

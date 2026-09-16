@@ -102,6 +102,16 @@ class MetadataTransaction:
             row["id"]: json.loads(row["payload"])
             for row in self.connection.execute("SELECT id, payload FROM connections")
         }
+        for connection in connections.values():
+            if (
+                not isinstance(connection, dict)
+                or "project_ids" in connection
+                or not isinstance(connection.get("project_id"), str)
+                or connection["project_id"] not in projects
+            ):
+                raise AuditError(
+                    "unsupported saved connection format: one registered project owner is required"
+                )
         row = self.connection.execute(
             "SELECT payload FROM settings WHERE name = 'agents'"
         ).fetchone()
@@ -142,11 +152,9 @@ class MetadataTransaction:
             if connection.get("id") != connection_id:
                 raise AuditError("connection identity does not match its record")
             _references(connection)
-            assigned = connection.get("project_ids", [])
-            if not isinstance(assigned, list) or any(
-                project not in projects for project in assigned
-            ):
-                raise AuditError("connection assignment requires a registered project")
+            owner = connection.get("project_id")
+            if not isinstance(owner, str) or owner not in projects or "project_ids" in connection:
+                raise AuditError("connection requires one registered project owner")
             self.connection.execute(
                 "INSERT INTO connections(id, payload) VALUES (?, ?)",
                 (connection_id, encoded(connection)),

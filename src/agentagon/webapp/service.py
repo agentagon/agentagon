@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -22,6 +23,9 @@ from agentagon.webapp.jobs import ACTIVE, JobManager, operation_id, public_job
 from agentagon.webapp.providers import DEFAULT_ENDPOINTS, CredentialStore, ProviderClient
 from agentagon.webapp.state import AppState, identifier, private_directory
 
+DISCOVERY_TTL_SECONDS = 600
+MAX_CONNECTION_DISCOVERIES = 12
+
 
 class Application:
     def __init__(self, directory=None, *, execute=None, credentials=None, provider_factory=None):
@@ -33,6 +37,7 @@ class Application:
         self.designs = Designs(self.state, self.catalog)
         self.jobs.verify_result = self.completed_job
         self.previews = {}
+        self.connection_discoveries = {}
         self.lock = threading.RLock()
         self.selected_project_id = None
 
@@ -115,7 +120,8 @@ class Application:
         if not isinstance(selector, dict):
             raise AuditError("agent trace selector must be an object")
         if selector.get("connection_id"):
-            self.connection(selector["connection_id"], project_id)
+            connection = self.connection(selector["connection_id"], project_id)
+            self._selected_connection_project(connection, selector)
         with self.lock:
             return self.catalog.save_agent(project_id, payload, agent_id)
 
@@ -422,7 +428,19 @@ class Application:
                 raise AuditError("pause or cancel this project's tasks before removing it")
             if any(j["state"] in ACTIVE for j in self.jobs.list(project_id)):
                 raise AuditError("pause or cancel this project's tasks before removing it")
-            return self.state.remove(project_id)
+            connections = [
+                c
+                for c in self.state.read()["connections"].values()
+                if c["project_id"] == project_id
+            ]
+            result = self.state.remove(project_id)
+            for discovery_id, draft in list(self.connection_discoveries.items()):
+                if draft["connection"]["project_id"] == project_id:
+                    self._discard_discovery(discovery_id)
+            for connection in connections:
+                for reference in connection["credentials"].values():
+                    self.credentials.delete(reference)
+            return result
 
     def overview(self, project_id):
         from agentagon.experiments import baselines, inspection
@@ -611,6 +629,7 @@ class Application:
         if set(payload) - {"connection_id", "project", "name"}:
             raise AuditError("unsupported dataset publication fields")
         connection = self.connection(payload.get("connection_id"), project_id)
+        self._selected_connection_project(connection, payload)
         return preview_publication(
             self.state.workspace(project_id),
             connection,
@@ -806,160 +825,284 @@ class Application:
                 Config().update(scope, workspace.root, values, tuple(unset))
         return self.settings(project_id)
 
-    def connection(self, connection_id, project_id=None):
+    def connection(self, connection_id, project_id):
+        self.state.project(project_id)
         identifier(connection_id, "connection")
         connection = self.state.read()["connections"].get(connection_id)
-        if not connection:
-            raise AuditError("connection not found")
-        if project_id and project_id not in connection.get("project_ids", []):
-            raise AuditError("assign this connection to the selected project first")
+        if not connection or connection["project_id"] != project_id:
+            raise AuditError("connection not found in this project")
         return connection
 
     def connection_projection(self, connection):
         value = {k: copy.deepcopy(v) for k, v in connection.items() if k != "credentials"}
         value["credential_fields"] = list(connection.get("credentials", {}))
-        value["credential_mode"] = next(
-            iter(connection.get("credentials", {}).values()), "session:"
-        ).split(":", 1)[0]
+        modes = {reference.split(":", 1)[0] for reference in connection["credentials"].values()}
+        value["credential_mode"] = "session" if "session" in modes else next(iter(modes), "session")
         for reference in connection.get("credentials", {}).values():
-            if reference.startswith(("session:", "env:")):
-                try:
-                    self.credentials.resolve(reference)
-                except AuditError:
-                    value["status"] = "needs_credentials"
+            try:
+                self.credentials.resolve(reference)
+            except AuditError:
+                value["status"] = "needs_credentials"
         return value
 
-    def connections(self):
+    def connections(self, project_id):
+        self.state.project(project_id)
         return {
             "connections": [
-                self.connection_projection(c) for c in self.state.read()["connections"].values()
+                self.connection_projection(c)
+                for c in self.state.read()["connections"].values()
+                if c["project_id"] == project_id
             ]
         }
 
-    def save_connection(self, payload):
+    def _discard_discovery(self, discovery_id):
         with self.lock:
-            allowed = {
+            draft = self.connection_discoveries.pop(discovery_id, None)
+            if draft:
+                draft["timer"].cancel()
+                for reference in draft["new_references"]:
+                    self.credentials.delete(reference)
+
+    @staticmethod
+    def _connection_source(connection):
+        return {k: v for k, v in connection.items() if k not in {"status", "last_checked_at"}}
+
+    def discover_connection(self, project_id, payload):
+        with self.lock:
+            self.state.project(project_id)
+            if not isinstance(payload, dict) or set(payload) - {
                 "id",
-                "name",
                 "provider",
                 "endpoint",
-                "project",
-                "workspace_id",
-                "project_ids",
                 "credentials",
-                "credential_mode",
-            }
-            if set(payload) - allowed:
-                raise AuditError("unsupported connection fields")
+            }:
+                raise AuditError("unsupported connection discovery fields")
             provider = payload.get("provider")
             if provider not in DEFAULT_ENDPOINTS:
                 raise AuditError("choose Braintrust, LangSmith, or Langfuse")
-            name = payload.get("name", "")
-            if not isinstance(name, str) or not name.strip() or len(name) > 100:
-                raise AuditError("connection name must contain 1–100 characters")
-            connection_id = payload.get("id") or "connection_" + uuid.uuid4().hex[:24]
-            identifier(connection_id, "connection")
-            previous = self.state.read()["connections"].get(connection_id, {})
-            if previous and previous.get("provider") != provider:
+            previous = self.connection(payload["id"], project_id) if "id" in payload else {}
+            if previous and previous["provider"] != provider:
                 raise AuditError("create a new connection to change providers")
-            project_ids = payload.get("project_ids", previous.get("project_ids", []))
-            if not isinstance(project_ids, list) or len(project_ids) > 100:
-                raise AuditError("project assignments must be a bounded list")
-            for project_id in project_ids:
-                self.state.project(project_id)
-            mode = payload.get("credential_mode", "session")
-            if mode not in {"env", "session", "keyring"}:
-                raise AuditError("choose environment, session, or OS credential storage")
             values = payload.get("credentials", {})
-            allowed_credentials = (
-                {"public_key", "secret_key"} if provider == "langfuse" else {"api_key"}
-            )
-            if not isinstance(values, dict) or set(values) - allowed_credentials:
+            required = {"public_key", "secret_key"} if provider == "langfuse" else {"api_key"}
+            if (
+                not isinstance(values, dict)
+                or set(values) - required
+                or any(
+                    not isinstance(value, str) or len(value) > 16384 for value in values.values()
+                )
+            ):
                 raise AuditError("unsupported credential fields for this provider")
             connection = {
-                "id": connection_id,
-                "name": name.strip(),
+                "id": previous.get("id") or "connection_" + uuid.uuid4().hex[:24],
+                "project_id": project_id,
                 "provider": provider,
-                "endpoint": payload.get("endpoint") or DEFAULT_ENDPOINTS[provider],
-                "project": payload.get("project", ""),
-                "workspace_id": payload.get("workspace_id", ""),
-                "project_ids": list(dict.fromkeys(project_ids)),
+                "endpoint": payload.get("endpoint")
+                or previous.get("endpoint")
+                or DEFAULT_ENDPOINTS[provider],
                 "credentials": dict(previous.get("credentials", {})),
-                "status": "not_tested",
-                "updated_at": now(),
             }
-            for field in ("project", "workspace_id"):
-                if not isinstance(connection[field], str) or len(connection[field]) > 500:
-                    raise AuditError(f"invalid {field}")
-            self.provider_factory(
-                connection, self.credentials
-            )  # Validate endpoint before saving secrets.
-            new_references = []
+            self.provider_factory(connection, self.credentials)  # Validate before storing secrets.
+            for discovery_id, draft in list(self.connection_discoveries.items()):
+                if draft["expires_at"] <= time.monotonic() or (
+                    draft["connection"]["project_id"] == project_id
+                    and draft["connection"]["provider"] == provider
+                ):
+                    self._discard_discovery(discovery_id)
+            while len(self.connection_discoveries) >= MAX_CONNECTION_DISCOVERIES:
+                self._discard_discovery(next(iter(self.connection_discoveries)))
+            references = []
             try:
                 for key, value in values.items():
-                    if not value:
-                        continue
-                    if mode == "env":
-                        if not isinstance(value, str) or not re.fullmatch(
-                            r"[A-Z_][A-Z0-9_]*", value
-                        ):
-                            raise AuditError(
-                                "credential references must be environment-variable names"
-                            )
-                        reference = "env:" + value
-                    else:
-                        reference = self.credentials.set(value, mode)
-                        new_references.append(reference)
-                    connection["credentials"][key] = reference
-                with self.state.locked() as data:
-                    data["connections"][connection_id] = connection
+                    if value.strip():
+                        reference = self.credentials.set(value, "session")
+                        references.append(reference)
+                        connection["credentials"][key] = reference
+                for key in required:
+                    if key not in connection["credentials"]:
+                        raise AuditError("provide the required provider credentials")
+                    self.credentials.resolve(connection["credentials"][key])
             except Exception:
-                for reference in new_references:
+                for reference in references:
                     self.credentials.delete(reference)
                 raise
+            discovery_id = "discovery_" + uuid.uuid4().hex[:24]
+            timer = threading.Timer(DISCOVERY_TTL_SECONDS, self._discard_discovery, (discovery_id,))
+            timer.daemon = True
+            draft = {
+                "connection": connection,
+                "previous": self._connection_source(previous),
+                "new_references": references,
+                "timer": timer,
+                "expires_at": time.monotonic() + DISCOVERY_TTL_SECONDS,
+            }
+            self.connection_discoveries[discovery_id] = draft
+            timer.start()
+        try:
+            result = self.provider_factory(connection, self.credentials).test()
+            projects = result.get("projects")
+            if (
+                result.get("status") != "connected"
+                or not isinstance(projects, list)
+                or not projects
+            ):
+                raise AuditError("no accessible provider projects were found")
+            if len(projects) > 1000:
+                raise AuditError("too many provider projects; use more specific credentials")
+            choices = {}
+            for project in projects:
+                if (
+                    not isinstance(project, dict)
+                    or any(
+                        not isinstance(project.get(key), str)
+                        or not project[key]
+                        or len(project[key]) > 500
+                        for key in ("id", "name")
+                    )
+                    or any(
+                        not isinstance(project.get(key, ""), str) or len(project.get(key, "")) > 500
+                        for key in ("workspace_id", "workspace_name")
+                    )
+                ):
+                    raise AuditError("provider returned an invalid project")
+                choice = {
+                    key: project[key]
+                    for key in ("id", "name", "workspace_id", "workspace_name")
+                    if key in project
+                }
+                selection_id = (
+                    "choice_" + digest([choice.get("workspace_id", ""), choice["id"]])[:24]
+                )
+                choices[selection_id] = {**choice, "selection_id": selection_id}
+            with self.lock:
+                if self.connection_discoveries.get(discovery_id) is not draft:
+                    raise AuditError("connection discovery expired or was replaced; discover again")
+                draft["projects"] = choices
+                return {"discovery_id": discovery_id, "projects": list(choices.values())}
+        except Exception:
+            self._discard_discovery(discovery_id)
+            raise
+
+    def save_connection(self, project_id, payload):
+        with self.lock:
+            self.state.project(project_id)
+            if not isinstance(payload, dict) or set(payload) != {"discovery_id", "project"}:
+                raise AuditError("save a discovered provider project")
+            discovery_id = identifier(payload["discovery_id"], "discovery")
+            draft = self.connection_discoveries.get(discovery_id)
+            if not draft or draft["connection"]["project_id"] != project_id:
+                raise AuditError("connection discovery not found in this project; discover again")
+            if draft["expires_at"] <= time.monotonic():
+                self._discard_discovery(discovery_id)
+                raise AuditError("connection discovery expired; discover again")
+            selected = (
+                draft.get("projects", {}).get(payload["project"])
+                if isinstance(payload["project"], str)
+                else None
+            )
+            if selected is None:
+                raise AuditError("choose a project returned by this discovery")
+            connection = copy.deepcopy(draft["connection"])
+            previous = self.state.read()["connections"].get(connection["id"], {})
+            if "saved_project" in draft:
+                if (
+                    payload["project"] != draft["saved_project"]
+                    or self._connection_source(previous) != draft["saved_source"]
+                ):
+                    raise AuditError("connection changed after saving; discover again")
+                return self.connection_projection(previous)
+            if self._connection_source(previous) != draft["previous"]:
+                self._discard_discovery(discovery_id)
+                raise AuditError("connection changed during discovery; discover again")
+            provider_name = {
+                "braintrust": "Braintrust",
+                "langsmith": "LangSmith",
+                "langfuse": "Langfuse",
+            }[connection["provider"]]
+            connection.update(
+                name=f"{provider_name} · {selected['name']}"[:100],
+                project=selected["id"],
+                project_name=selected["name"],
+                workspace_id=selected.get("workspace_id", ""),
+                status="connected",
+                last_checked_at=now(),
+                updated_at=now(),
+            )
+            references = []
+            try:
+                for key, reference in connection["credentials"].items():
+                    if reference in draft["new_references"]:
+                        replacement = self.credentials.set_auto(self.credentials.resolve(reference))
+                        references.append(replacement)
+                        connection["credentials"][key] = replacement
+                with self.state.locked() as data:
+                    data["connections"][connection["id"]] = connection
+            except Exception:
+                for reference in references:
+                    self.credentials.delete(reference)
+                self._discard_discovery(discovery_id)
+                raise
+            for reference in draft["new_references"]:
+                self.credentials.delete(reference)
+            draft.update(
+                new_references=[],
+                saved_project=payload["project"],
+                saved_source=self._connection_source(connection),
+            )
             for reference in previous.get("credentials", {}).values():
                 if reference not in connection["credentials"].values():
                     self.credentials.delete(reference)
             return self.connection_projection(connection)
 
-    def test_connection(self, connection_id):
-        connection = self.connection(connection_id)
+    def test_connection(self, project_id, connection_id):
+        connection = self.connection(connection_id, project_id)
         try:
             result = self.provider_factory(connection, self.credentials).test()
+            if result.get("status") != "connected" or not any(
+                project.get("id") == connection["project"]
+                and project.get("workspace_id", "") == connection.get("workspace_id", "")
+                for project in result.get("projects", [])
+            ):
+                raise AuditError("the connected provider project is no longer accessible")
         except AuditError:
             self._save_connection_test(connection, {"status": "unavailable"})
             raise
-        self._save_connection_test(
-            connection,
-            {
-                "status": result["status"],
-                "last_checked_at": now(),
-                "projects": result.get("projects", []),
-            },
-        )
-        return {**self.connection_projection(self.connection(connection_id)), **result}
+        self._save_connection_test(connection, {"status": "connected", "last_checked_at": now()})
+        return self.connection_projection(self.connection(connection_id, project_id))
 
     def _save_connection_test(self, connection, changes):
         with self.lock:
-            current = self.connection(connection["id"])
-            ignored = {"status", "last_checked_at", "projects"}
-            if {k: v for k, v in current.items() if k not in ignored} != {
-                k: v for k, v in connection.items() if k not in ignored
-            }:
+            current = self.connection(connection["id"], connection["project_id"])
+            if self._connection_source(current) != self._connection_source(connection):
                 raise AuditError(
                     "connection changed during its check; test the current configuration"
                 )
             with self.state.locked() as data:
                 data["connections"][connection["id"]] = {**current, **changes}
 
-    def disconnect(self, connection_id):
+    def disconnect(self, project_id, connection_id):
         with self.lock:
-            connection = self.connection(connection_id)
-            for ref in connection.get("credentials", {}).values():
-                self.credentials.delete(ref)
+            connection = self.connection(connection_id, project_id)
             with self.state.locked() as data:
                 del data["connections"][connection_id]
+            for discovery_id, draft in list(self.connection_discoveries.items()):
+                if draft["connection"]["id"] == connection_id:
+                    self._discard_discovery(discovery_id)
+            for reference in connection["credentials"].values():
+                self.credentials.delete(reference)
             return {"disconnected": connection_id}
+
+    def connection_datasets(self, project_id, connection_id):
+        return {
+            "datasets": self.provider_factory(
+                self.connection(connection_id, project_id), self.credentials
+            ).datasets()
+        }
+
+    @staticmethod
+    def _selected_connection_project(connection, selection):
+        if "project" in selection and selection["project"] != connection["project"]:
+            raise AuditError("use the connected provider project")
 
     def preview(self, project_id, payload):
         self.state.workspace(project_id)
@@ -969,7 +1112,8 @@ class Application:
         selection = copy.deepcopy(payload.get("selection", {}))
         if not isinstance(selection, dict):
             raise AuditError("selection must be an object")
-        selection.setdefault("project", connection.get("project"))
+        self._selected_connection_project(connection, selection)
+        selection["project"] = connection["project"]
         result = self.provider_factory(connection, self.credentials).preview(
             payload["kind"], selection
         )
@@ -1085,3 +1229,6 @@ class Application:
 
     def close(self):
         self.jobs.close()
+        with self.lock:
+            for discovery_id in list(self.connection_discoveries):
+                self._discard_discovery(discovery_id)

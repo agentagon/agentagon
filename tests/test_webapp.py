@@ -14,7 +14,7 @@ from agentagon.cli.main import main
 from agentagon.core.records import AuditError
 from agentagon.storage.config import Config
 from agentagon.webapp import snapshots
-from agentagon.webapp.providers import CredentialStore
+from agentagon.webapp.providers import CredentialStore, ProviderError
 from agentagon.webapp.server import create_server
 from agentagon.webapp.service import Application
 
@@ -50,10 +50,15 @@ class Provider:
 
 
 @pytest.fixture
-def app(tmp_path):
+def app(tmp_path, monkeypatch):
     application = Application(
         tmp_path / "app-state", execute=lambda *_: {}, provider_factory=Provider
     )
+
+    def unavailable_keyring():
+        raise ProviderError("OS credential storage unavailable")
+
+    monkeypatch.setattr(application.credentials, "_keyring", unavailable_keyring)
     yield application
     application.close()
 
@@ -65,16 +70,21 @@ def project(app, tmp_path, name="project"):
     return app.register(str(root))
 
 
-def connection(app, project_id):
-    return app.save_connection(
+def connection(app, project_id, **changes):
+    discovered = app.discover_connection(
+        project_id,
         {
-            "name": "Production",
             "provider": "braintrust",
-            "project": "remote",
-            "project_ids": [project_id],
             "credentials": {"api_key": "private-test-value"},
-            "credential_mode": "session",
-        }
+            **changes,
+        },
+    )
+    return app.save_connection(
+        project_id,
+        {
+            "discovery_id": discovered["discovery_id"],
+            "project": discovered["projects"][0]["selection_id"],
+        },
     )
 
 
@@ -250,14 +260,17 @@ def test_missing_root_visible_and_removal_preserves_directory(app, tmp_path):
     assert (tmp_path / "moved" / "app.py").exists()
 
 
-def test_connection_secrets_never_persist_and_assignments_are_explicit(app, tmp_path):
+def test_connection_secrets_never_persist_and_one_project_owns_connection(app, tmp_path):
     first, second = project(app, tmp_path), project(app, tmp_path, "other")
     saved = connection(app, first["id"])
     assert "credentials" not in saved
     assert b"private-test-value" not in app.state.path.read_bytes()
-    assert "private-test-value" not in json.dumps(app.connections())
-    assert app.test_connection(saved["id"])["status"] == "connected"
-    with pytest.raises(AuditError, match="assign"):
+    assert "private-test-value" not in json.dumps(app.connections(first["id"]))
+    assert saved["project_id"] == first["id"]
+    assert "project_ids" not in saved
+    assert app.connections(second["id"])["connections"] == []
+    assert app.test_connection(first["id"], saved["id"])["status"] == "connected"
+    with pytest.raises(AuditError, match="not found in this project"):
         app.preview(
             second["id"],
             {"connection_id": saved["id"], "kind": "dataset", "selection": {"dataset_id": "one"}},
@@ -284,7 +297,7 @@ def test_snapshot_import_replay_and_project_isolation(app, tmp_path):
     assert app.overview(first["id"])["datasets"][0]["id"] == saved["id"]
     with pytest.raises(AuditError, match="not found"):
         app.result(second["id"], "dataset", saved["id"])
-    app.disconnect(source["id"])
+    app.disconnect(first["id"], source["id"])
     assert app.overview(first["id"])["datasets"][0]["id"] == saved["id"]
 
 
@@ -293,17 +306,21 @@ def test_import_uses_provider_cleaned_selection_without_echoing_credentials(app,
 
     saved_project = project(app, tmp_path)
     secret = "private-filter-test-value"
-    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=[]))
+
+    def provider_response(request):
+        if request.url.path == "/api/v1/workspaces":
+            return httpx.Response(403)
+        return httpx.Response(
+            200,
+            json=[{"id": "remote", "name": "Remote"}] if request.url.path == "/sessions" else [],
+        )
+
+    transport = httpx.MockTransport(provider_response)
     app.provider_factory = lambda connection, credentials: ProviderClient(
         connection, credentials, transport=transport
     )
-    source = app.save_connection(
-        {
-            "name": "Dataset source",
-            "provider": "langsmith",
-            "project_ids": [saved_project["id"]],
-            "credentials": {"api_key": secret},
-        }
+    source = connection(
+        app, saved_project["id"], provider="langsmith", credentials={"api_key": secret}
     )
     preview = app.preview(
         saved_project["id"],
@@ -368,21 +385,26 @@ def test_delayed_connection_test_preserves_new_configuration(app, tmp_path, chan
 
     app.provider_factory = DelayedProvider
     with ThreadPoolExecutor(max_workers=1) as executor:
-        pending = executor.submit(app.test_connection, source["id"])
+        pending = executor.submit(app.test_connection, saved_project["id"], source["id"])
         try:
             assert entered.wait(5), "connection test did not start"
             if change == "disconnect":
-                app.disconnect(source["id"])
+                app.disconnect(saved_project["id"], source["id"])
             else:
-                app.save_connection(
-                    {
-                        "id": source["id"],
-                        "name": "New connection settings",
-                        "provider": "braintrust",
-                        "project": "new-project",
-                        "project_ids": [saved_project["id"]],
-                        "credentials": {"api_key": "new-private-test-value"},
-                    }
+
+                class NewProvider(Provider):
+                    def test(self):
+                        return {
+                            "status": "connected",
+                            "projects": [{"id": "new-project", "name": "New project"}],
+                        }
+
+                app.provider_factory = NewProvider
+                connection(
+                    app,
+                    saved_project["id"],
+                    id=source["id"],
+                    credentials={"api_key": "new-private-test-value"},
                 )
         finally:
             release.set()
@@ -390,11 +412,11 @@ def test_delayed_connection_test_preserves_new_configuration(app, tmp_path, chan
             pending.result(timeout=5)
 
     if change == "disconnect":
-        assert app.connections()["connections"] == []
+        assert app.connections(saved_project["id"])["connections"] == []
     else:
-        current = app.connection(source["id"])
+        current = app.connection(source["id"], saved_project["id"])
         assert current["project"] == "new-project"
-        assert current["status"] == "not_tested"
+        assert current["status"] == "connected"
         assert "projects" not in current
         assert (
             app.credentials.resolve(current["credentials"]["api_key"]) == "new-private-test-value"
@@ -433,7 +455,7 @@ def test_cli_trace_settings_do_not_create_app_connections(app, tmp_path):
             "traces.api_key_env": "TEST_PROVIDER_KEY",
         },
     )
-    assert app.connections()["connections"] == []
+    assert app.connections(saved["id"])["connections"] == []
     assert Config().effective(workspace.root)["traces"]["source"] == "braintrust"
 
 
@@ -571,3 +593,293 @@ def test_launcher_reuses_verified_service(app, tmp_path, capsys):
         _reuse(app.state, saved["path"], False)
         assert f"/?project={saved['id']}" in capsys.readouterr().out
         assert len(app.projects()["projects"]) == 1
+
+
+def test_discovery_is_ephemeral_binds_workspace_and_replays_save(app, tmp_path):
+    first, second = project(app, tmp_path), project(app, tmp_path, "other")
+
+    class Workspaces(Provider):
+        def test(self):
+            return {
+                "status": "connected",
+                "projects": [
+                    {
+                        "id": "same-id",
+                        "name": "Production",
+                        "workspace_id": "one",
+                        "workspace_name": "One",
+                    },
+                    {
+                        "id": "same-id",
+                        "name": "Staging",
+                        "workspace_id": "two",
+                        "workspace_name": "Two",
+                    },
+                ],
+            }
+
+    app.provider_factory = Workspaces
+    discovered = app.discover_connection(
+        first["id"],
+        {
+            "provider": "langsmith",
+            "endpoint": "https://example.test",
+            "credentials": {"api_key": "ephemeral-secret"},
+        },
+    )
+    assert len({row["selection_id"] for row in discovered["projects"]}) == 2
+    assert app.state.read()["connections"] == {}
+    assert b"ephemeral-secret" not in app.state.path.read_bytes()
+    assert "ephemeral-secret" not in json.dumps(discovered)
+    temporary = next(iter(app.credentials._values))
+    with pytest.raises(AuditError, match="choose a project"):
+        app.save_connection(
+            first["id"], {"discovery_id": discovered["discovery_id"], "project": "invented"}
+        )
+    command = {
+        "discovery_id": discovered["discovery_id"],
+        "project": discovered["projects"][1]["selection_id"],
+    }
+    with pytest.raises(AuditError, match="not found in this project"):
+        app.save_connection(second["id"], command)
+    saved = app.save_connection(first["id"], command)
+    assert (
+        saved["project_id"],
+        saved["project"],
+        saved["workspace_id"],
+        saved["project_name"],
+    ) == (first["id"], "same-id", "two", "Staging")
+    assert saved["name"] == "LangSmith · Staging"
+    assert saved["endpoint"] == "https://example.test"
+    assert temporary not in app.credentials._values
+    assert app.save_connection(first["id"], command) == saved
+    assert len(app.state.read()["connections"]) == 1
+    with pytest.raises(AuditError, match="changed after saving"):
+        app.save_connection(
+            first["id"], {**command, "project": discovered["projects"][0]["selection_id"]}
+        )
+
+
+def test_connection_edit_keeps_blank_credentials_and_cleans_failed_commit(
+    app, tmp_path, monkeypatch
+):
+    saved_project = project(app, tmp_path)
+    saved = connection(app, saved_project["id"], endpoint="https://provider.example")
+    previous = app.connection(saved["id"], saved_project["id"])
+    edited = connection(app, saved_project["id"], id=saved["id"], credentials={"api_key": ""})
+    assert edited["endpoint"] == "https://provider.example"
+    assert (
+        app.connection(saved["id"], saved_project["id"])["credentials"] == previous["credentials"]
+    )
+    discovered = app.discover_connection(
+        saved_project["id"],
+        {
+            "id": saved["id"],
+            "provider": "braintrust",
+            "credentials": {"api_key": "replacement-secret"},
+        },
+    )
+
+    @contextmanager
+    def failed_commit():
+        yield app.state.read()
+        raise OSError("commit failed")
+
+    monkeypatch.setattr(app.state, "locked", failed_commit)
+    with pytest.raises(OSError, match="commit failed"):
+        app.save_connection(
+            saved_project["id"],
+            {
+                "discovery_id": discovered["discovery_id"],
+                "project": discovered["projects"][0]["selection_id"],
+            },
+        )
+    assert app.credentials._values == {previous["credentials"]["api_key"]: "private-test-value"}
+    assert not app.connection_discoveries
+    assert (
+        app.connection(saved["id"], saved_project["id"])["credentials"] == previous["credentials"]
+    )
+
+
+def test_discovery_replacement_failure_and_expiry_clear_temporary_credentials(
+    app, tmp_path, monkeypatch
+):
+    saved = project(app, tmp_path)
+    command = {"provider": "braintrust", "credentials": {"api_key": "temporary-secret"}}
+    initial = app.discover_connection(saved["id"], command)
+    reference = next(iter(app.credentials._values))
+    app.discover_connection(saved["id"], command)
+    assert initial["discovery_id"] not in app.connection_discoveries
+    assert reference not in app.credentials._values
+
+    class Broken(Provider):
+        def test(self):
+            raise AuditError("provider authentication failed")
+
+    app.provider_factory = Broken
+    with pytest.raises(AuditError, match="authentication failed"):
+        app.discover_connection(saved["id"], command)
+    assert not app.connection_discoveries
+    assert not app.credentials._values
+    app.provider_factory = Provider
+    expired = threading.Event()
+    discard = app._discard_discovery
+
+    def observe_expiry(discovery_id):
+        discard(discovery_id)
+        expired.set()
+
+    monkeypatch.setattr(app, "_discard_discovery", observe_expiry)
+    monkeypatch.setattr("agentagon.webapp.service.DISCOVERY_TTL_SECONDS", 0.05)
+    result = app.discover_connection(saved["id"], command)
+    assert expired.wait(2), "discovery timer did not clear expired credentials"
+    assert not app.connection_discoveries
+    assert not app.credentials._values
+    with pytest.raises(AuditError, match="discover again"):
+        app.save_connection(
+            saved["id"],
+            {
+                "discovery_id": result["discovery_id"],
+                "project": result["projects"][0]["selection_id"],
+            },
+        )
+
+
+def test_remove_project_deletes_only_its_connections_and_credentials(app, tmp_path):
+    first, second = project(app, tmp_path), project(app, tmp_path, "other")
+    owned, retained = connection(app, first["id"]), connection(app, second["id"])
+    owned_reference = app.connection(owned["id"], first["id"])["credentials"]["api_key"]
+    retained_reference = app.connection(retained["id"], second["id"])["credentials"]["api_key"]
+    app.discover_connection(
+        first["id"], {"provider": "braintrust", "credentials": {"api_key": "pending-secret"}}
+    )
+    removed = app.remove_project(first["id"])
+    assert removed["evidence_preserved"]
+    assert app.state.read()["connections"].keys() == {retained["id"]}
+    assert all(
+        draft["connection"]["project_id"] == second["id"]
+        for draft in app.connection_discoveries.values()
+    )
+    assert owned_reference not in app.credentials._values
+    assert app.credentials._values == {retained_reference: "private-test-value"}
+
+
+def test_connections_reject_remote_project_overrides_and_cross_project_actions(app, tmp_path):
+    first, second = project(app, tmp_path), project(app, tmp_path, "other")
+    saved = connection(app, first["id"])
+    for operation in (
+        lambda: app.test_connection(second["id"], saved["id"]),
+        lambda: app.connection_datasets(second["id"], saved["id"]),
+        lambda: app.disconnect(second["id"], saved["id"]),
+        lambda: app.discover_connection(
+            second["id"], {"id": saved["id"], "provider": "braintrust"}
+        ),
+        lambda: app.save_application_agent(
+            second["id"], {"trace_selector": {"connection_id": saved["id"]}}
+        ),
+        lambda: app.preview_dataset_publication(
+            second["id"], "unused", {"connection_id": saved["id"], "name": "Cases"}
+        ),
+        lambda: app.publish_dataset(
+            second["id"],
+            "unused",
+            {
+                "connection_id": saved["id"],
+                "preview_id": "unused",
+                "operation_id": str(uuid.uuid4()),
+            },
+        ),
+    ):
+        with pytest.raises(AuditError, match="not found in this project"):
+            operation()
+    for operation in (
+        lambda: app.preview(
+            first["id"],
+            {
+                "connection_id": saved["id"],
+                "kind": "traces",
+                "selection": {"project": "another-remote"},
+            },
+        ),
+        lambda: app.preview_dataset_publication(
+            first["id"],
+            "unused",
+            {"connection_id": saved["id"], "project": "another-remote", "name": "Cases"},
+        ),
+        lambda: app.save_application_agent(
+            first["id"],
+            {"trace_selector": {"connection_id": saved["id"], "project": "another-remote"}},
+        ),
+    ):
+        with pytest.raises(AuditError, match="connected provider project"):
+            operation()
+
+
+def test_http_connections_discover_save_and_remain_project_scoped(app, tmp_path):
+    first, second = project(app, tmp_path), project(app, tmp_path, "other")
+    path = f"/api/projects/{first['id']}/connections"
+    other = f"/api/projects/{second['id']}/connections"
+    with running(app) as (client, _):
+        assert client.get("/api/connections").status_code == 400
+        assert client.post("/api/connections", json={}).status_code == 400
+        discovery = client.post(
+            path + "/discover",
+            json={"provider": "braintrust", "credentials": {"api_key": "secret"}},
+        )
+        assert discovery.status_code == 200
+        discovered = discovery.json()
+        assert client.get(path).json() == {"connections": []}
+        response = client.post(
+            path,
+            json={
+                "discovery_id": discovered["discovery_id"],
+                "project": discovered["projects"][0]["selection_id"],
+            },
+        )
+        assert response.status_code == 200
+        saved = response.json()
+        assert client.get(path).json()["connections"][0]["id"] == saved["id"]
+        assert client.get(other).json() == {"connections": []}
+        for destination, expected in ((path, 200), (other, 400)):
+            assert (
+                client.post(destination + f"/{saved['id']}/test", json={}).status_code == expected
+            )
+            assert client.get(destination + f"/{saved['id']}/datasets").status_code == expected
+        assert client.request("DELETE", other + f"/{saved['id']}", json={}).status_code == 400
+        assert client.request("DELETE", path + f"/{saved['id']}", json={}).status_code == 200
+        assert client.get(path).json() == {"connections": []}
+
+
+def test_discovery_cache_bounds_and_close_remove_only_temporary_credentials(
+    app, tmp_path, monkeypatch
+):
+    monkeypatch.setattr("agentagon.webapp.service.MAX_CONNECTION_DISCOVERIES", 2)
+    projects = [project(app, tmp_path, f"project-{index}") for index in range(3)]
+    discoveries = []
+    for saved in projects:
+        discoveries.append(
+            app.discover_connection(
+                saved["id"],
+                {"provider": "braintrust", "credentials": {"api_key": "pending-secret"}},
+            )
+        )
+    assert discoveries[0]["discovery_id"] not in app.connection_discoveries
+    assert len(app.connection_discoveries) == len(app.credentials._values) == 2
+    app.close()
+    assert not app.connection_discoveries
+    assert not app.credentials._values
+
+
+def test_connection_reports_session_storage_when_one_key_is_temporary(app, monkeypatch):
+    monkeypatch.setattr(app.credentials, "resolve", lambda reference: "resolved")
+    value = app.connection_projection(
+        {
+            "id": "connection_" + "a" * 24,
+            "credentials": {
+                "public_key": "keyring:" + "a" * 32,
+                "secret_key": "session:" + "b" * 32,
+            },
+        }
+    )
+    assert value["credential_mode"] == "session"
+    assert "credentials" not in value

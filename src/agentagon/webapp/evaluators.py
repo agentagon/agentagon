@@ -420,6 +420,7 @@ def _connection(connection):
         raise AuditError("dataset publication currently supports Braintrust only")
     return {
         "id": connection["id"],
+        "project_id": connection["project_id"],
         "provider": "braintrust",
         "project": connection.get("project"),
         "endpoint": validate_endpoint(
@@ -431,6 +432,10 @@ def _connection(connection):
 def preview_publication(workspace, connection, snapshot_id, selection):
     if not isinstance(selection, dict) or set(selection) - {"project", "name"}:
         raise AuditError("publication requires a destination project and dataset name")
+    if connection.get("project_id") != workspace.project_id:
+        raise AuditError("connection not found in this project")
+    if "project" in selection and selection["project"] != connection.get("project"):
+        raise AuditError("use the connected provider project")
     from agentagon.webapp.providers import _text
 
     record = _dataset(workspace, snapshot_id)

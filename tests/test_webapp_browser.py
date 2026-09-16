@@ -77,6 +77,7 @@ class AppFixture:
         self.metrics = {"metrics": [], "guardrails": []}
         self.traces = []
         self.connections = []
+        self.connection_discoveries = {}
         self.runs = []
         self.evaluations = []
         self.baselines = []
@@ -158,29 +159,43 @@ class AppFixture:
                 "agents": self.agents,
                 "settings": self.agent_settings,
             }
-        if path == "/api/connections":
+        parts = path.split("/")
+        project_id = parts[3] if len(parts) > 3 else None
+        if path.endswith("/connections/discover"):
+            self.connection_discoveries["discovery_one"] = {**payload, "project_id": project_id}
+            return {
+                "discovery_id": "discovery_one",
+                "projects": [
+                    {"id": "remote-a", "name": "Production support", "selection_id": "choice-a"},
+                    {"id": "remote-b", "name": "Staging support", "selection_id": "choice-b"},
+                ],
+            }
+        if path.endswith("/connections"):
             if method == "POST":
-                connection = {key: value for key, value in payload.items() if key != "credentials"}
-                connection["id"] = payload.get("id", "connection_one")
+                discovery = self.connection_discoveries[payload["discovery_id"]]
+                remote = "remote-a" if payload["project"] == "choice-a" else "remote-b"
+                name = "Production support" if remote == "remote-a" else "Staging support"
+                connection = {
+                    "id": discovery.get("id", "connection_one"),
+                    "project_id": project_id,
+                    "provider": discovery["provider"],
+                    "endpoint": discovery["endpoint"],
+                    "project": remote,
+                    "project_name": name,
+                    "name": name,
+                    "status": "connected",
+                }
                 self.connections = [
                     item for item in self.connections if item["id"] != connection["id"]
                 ] + [connection]
                 return connection
-            return {"connections": self.connections}
+            return {"connections": [c for c in self.connections if c["project_id"] == project_id]}
         if path.endswith("/datasets"):
             return {"datasets": [{"id": "dataset_remote", "name": "Support examples"}]}
         if path.endswith("/test"):
-            self.connections[0].update(
-                status="connected",
-                last_checked_at="2026-09-16T12:00:00Z",
-                projects=[
-                    {"id": "remote-a", "name": "Production support"},
-                    {"id": "remote-b", "name": "Staging support"},
-                ],
-            )
-            return self.connections[0]
-        parts = path.split("/")
-        project_id = parts[3] if len(parts) > 3 else None
+            connection = next(c for c in self.connections if c["id"] == parts[-2])
+            connection.update(status="connected", last_checked_at="2026-09-16T12:00:00Z")
+            return connection
         if "/application-agents" in path:
             agents = self.application_agents.setdefault(project_id, [])
             if path.endswith("/discover"):
@@ -445,13 +460,13 @@ def test_dataset_preview_requires_explicit_save_and_renders_provider_text_safely
             "name": "Braintrust staging",
             "provider": "braintrust",
             "project": "support",
-            "project_ids": ["project_alpha"],
+            "project_id": "project_alpha",
         }
     ]
     page.goto("http://127.0.0.1:8765/?agent=agent_support&view=eval&tab=datasets")
     page.get_by_role("button", name="Import dataset", exact=True).click()
     page.get_by_label("Dataset", exact=True).select_option("dataset_remote")
-    playwright.expect(page.get_by_label("Provider project", exact=True)).to_be_disabled()
+    playwright.expect(page.get_by_label("Source project", exact=True)).not_to_be_editable()
     page.get_by_role("button", name="Preview import", exact=True).click()
     playwright.expect(page.get_by_role("heading", name="Review your import")).to_be_visible()
     playwright.expect(
@@ -493,15 +508,20 @@ def test_navigation_mobile_layout_and_provider_credentials(webapp_page, width):
     page.get_by_role("button", name="Settings", exact=True).click()
     page.get_by_role("button", name="Add connection", exact=True).click()
     page.get_by_label("Provider", exact=True).select_option("langfuse")
-    page.get_by_label("Connection name").fill("Langfuse production")
+    playwright.expect(page.get_by_label("API URL", exact=True)).to_have_value(
+        "https://cloud.langfuse.com"
+    )
     page.get_by_label("Public key", exact=True).fill("pk-test")
     page.get_by_label("Secret key", exact=True).fill("sk-test")
-    page.get_by_role("button", name="Save connection", exact=True).click()
-    playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
+    page.get_by_role("button", name="Find projects", exact=True).click()
+    page.get_by_label("Source project", exact=True).select_option(label="Production support")
     request = fixture.mutations[-1]
+    assert request["path"] == "/api/projects/project_alpha/connections/discover"
     assert request["payload"]["provider"] == "langfuse"
-    assert request["payload"]["credential_mode"] == "keyring"
+    assert "credential_mode" not in request["payload"]
     assert request["payload"]["credentials"] == {"public_key": "pk-test", "secret_key": "sk-test"}
+    page.get_by_role("button", name="Connect", exact=True).click()
+    playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
     assert "sk-test" not in page.locator("body").inner_text()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     assert errors == []
@@ -720,28 +740,182 @@ def test_selected_task_reload_and_grouped_answers_remain_distinct(webapp_page):
     ]
 
 
-def test_connection_check_exposes_project_picker_and_check_time(webapp_page):
+def test_connection_discovery_editing_and_project_isolation(webapp_page, tmp_path):
+    page, fixture = webapp_page
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=settings")
+    page.get_by_role("button", name="Add connection", exact=True).click()
+    dialog = page.get_by_role("dialog")
+    for removed in ["Connection name", "Store credentials", "Provider workspace ID"]:
+        playwright.expect(dialog.get_by_label(removed, exact=True)).to_have_count(0)
+    playwright.expect(dialog.get_by_text("Available to projects", exact=True)).to_have_count(0)
+    playwright.expect(dialog.get_by_label("API URL", exact=True)).to_have_value(
+        "https://api.braintrust.dev"
+    )
+    dialog.get_by_label("API key", exact=True).fill("test-private-key")
+    dialog.get_by_label("API URL", exact=True).fill("https://braintrust.example.test")
+    dialog.get_by_role("button", name="Find projects", exact=True).click()
+    picker = dialog.get_by_label("Source project", exact=True)
+    playwright.expect(picker).to_be_focused()
+    picker.select_option(label="Staging support")
+    assert fixture.connections == []
+    dialog.get_by_label("API URL", exact=True).fill("https://api.braintrust.dev")
+    playwright.expect(picker).not_to_be_visible()
+    dialog.get_by_role("button", name="Find projects", exact=True).click()
+    picker.select_option(label="Staging support")
+    page.screenshot(path=tmp_path / "connection-project-picker.png")
+    dialog.get_by_role("button", name="Connect", exact=True).click()
+    playwright.expect(dialog).not_to_be_visible()
+    assert fixture.mutations[-1]["payload"] == {
+        "discovery_id": "discovery_one",
+        "project": "choice-b",
+    }
+    assert fixture.connections[0]["project_id"] == "project_alpha"
+    assert fixture.connections[0]["project"] == "remote-b"
+    page.get_by_role("button", name="Test", exact=True).click()
+    playwright.expect(page.get_by_text("Last checked", exact=False)).to_be_visible()
+    page.get_by_role("button", name="Edit", exact=True).click()
+    playwright.expect(dialog.get_by_label("API key", exact=True)).to_have_value("")
+    dialog.get_by_role("button", name="Find projects", exact=True).click()
+    playwright.expect(picker).to_have_value("choice-b")
+    assert fixture.mutations[-1]["payload"]["credentials"] == {}
+    assert fixture.mutations[-1]["payload"]["id"] == "connection_one"
+    dialog.get_by_role("button", name="Save connection", exact=True).click()
+    playwright.expect(dialog).not_to_be_visible()
+    page.get_by_label("Project", exact=True).select_option("project_beta")
+    playwright.expect(page.get_by_role("button", name="Edit", exact=True)).to_have_count(0)
+    page.get_by_label("Project", exact=True).select_option("project_alpha")
+    playwright.expect(page.get_by_role("button", name="Edit", exact=True)).to_be_visible()
+
+
+def test_connection_discovery_failure_and_empty_projects_are_actionable(webapp_page):
+    page, fixture = webapp_page
+    page.goto("http://127.0.0.1:8765/?view=settings")
+    page.get_by_role("button", name="Add connection", exact=True).click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Provider", exact=True).select_option("langsmith")
+    playwright.expect(dialog.get_by_label("API URL", exact=True)).to_have_value(
+        "https://api.smith.langchain.com"
+    )
+    dialog.get_by_label("API key", exact=True).fill("invalid-key")
+    page.route(
+        "**/connections/discover",
+        lambda route: route.fulfill(
+            status=400, json={"error": "Authentication failed. Check the API key."}
+        ),
+    )
+    dialog.get_by_role("button", name="Find projects", exact=True).click()
+    playwright.expect(dialog.get_by_role("alert")).to_contain_text("Check the API key")
+    assert fixture.connections == []
+    page.unroute("**/connections/discover")
+    page.route(
+        "**/connections/discover",
+        lambda route: route.fulfill(json={"discovery_id": "empty", "projects": []}),
+    )
+    dialog.get_by_role("button", name="Find projects", exact=True).click()
+    playwright.expect(dialog.get_by_role("status")).to_contain_text("No projects found")
+    playwright.expect(
+        dialog.get_by_role("button", name="Find projects", exact=True)
+    ).to_be_enabled()
+    assert fixture.connections == []
+
+
+def test_connection_save_retries_same_discovery_after_lost_response(webapp_page):
+    page, fixture = webapp_page
+    page.goto("http://127.0.0.1:8765/?view=settings")
+    page.get_by_role("button", name="Add connection", exact=True).click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("API key", exact=True).fill("private-test-key")
+    dialog.get_by_role("button", name="Find projects", exact=True).click()
+    dialog.get_by_label("Source project", exact=True).select_option("choice-a")
+    attempts = []
+
+    def save(route):
+        if route.request.method != "POST":
+            route.fallback()
+            return
+        payload = route.request.post_data_json
+        attempts.append(payload)
+        result = fixture.respond("/api/projects/project_alpha/connections", "POST", payload)
+        if len(attempts) == 1:
+            route.abort()
+        else:
+            route.fulfill(json=result)
+
+    page.route("**/api/projects/project_alpha/connections", save)
+    dialog.get_by_role("button", name="Connect", exact=True).click()
+    playwright.expect(dialog.get_by_role("alert")).not_to_be_empty()
+    dialog.get_by_role("button", name="Connect", exact=True).click()
+    playwright.expect(dialog).not_to_be_visible()
+    assert len(attempts) == 2 and attempts[0] == attempts[1]
+    assert len(fixture.connections) == 1
+
+
+def test_stale_connection_refresh_and_import_dialog_do_not_follow_project_switch(webapp_page):
+    page, fixture = webapp_page
+    stale = {
+        "id": "old",
+        "project_id": "project_alpha",
+        "provider": "braintrust",
+        "name": "Old source",
+        "project": "remote-a",
+    }
+    fixture.connections = [stale]
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=eval")
+    playwright.expect(page.get_by_role("heading", name="Eval", exact=True)).to_be_visible()
+    pending = []
+
+    def delay(route):
+        if not pending:
+            pending.append(route)
+        else:
+            route.fallback()
+
+    page.route("**/api/projects/project_alpha/connections", delay)
+    with page.expect_request("**/api/projects/project_alpha/connections"):
+        page.get_by_role("button", name="Import dataset", exact=True).click()
+    page.get_by_label("Project", exact=True).select_option("project_beta")
+    playwright.expect(page.locator("#project-name")).to_have_text("Research agent")
+    fixture.connections = [{**stale, "name": "Fresh source"}]
+    page.get_by_label("Project", exact=True).select_option("project_alpha")
+    page.get_by_role("button", name="Settings", exact=True).click()
+    playwright.expect(page.get_by_role("heading", name="Fresh source", exact=True)).to_be_visible()
+    pending[0].fulfill(json={"connections": [stale]})
+    page.wait_for_load_state("networkidle")
+    playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
+    playwright.expect(page.get_by_role("heading", name="Fresh source", exact=True)).to_be_visible()
+    playwright.expect(page.get_by_role("heading", name="Old source", exact=True)).to_have_count(0)
+
+
+def test_stale_import_preview_does_not_replace_new_dialog(webapp_page):
     page, fixture = webapp_page
     fixture.connections = [
         {
-            "id": "connection_one",
-            "name": "Braintrust",
+            "id": "source",
+            "project_id": "project_alpha",
             "provider": "braintrust",
-            "project_ids": ["project_alpha"],
-            "credential_mode": "session",
+            "name": "Production",
+            "project": "remote-a",
         }
     ]
-    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=settings")
-    page.get_by_role("button", name="Test", exact=True).click()
-    playwright.expect(page.get_by_text("Last checked", exact=False)).to_be_visible()
-    picker = page.get_by_label("Provider project", exact=True)
-    playwright.expect(picker).to_have_count(1)
-    picker.select_option(label="Staging support")
-    page.get_by_role("button", name="Use selected project", exact=True).click()
-    playwright.expect(page.locator("#notice")).to_have_text(
-        "Provider project saved for this connection."
-    )
-    assert fixture.mutations[-1]["payload"]["project"] == "remote-b"
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=eval")
+    page.get_by_role("button", name="Import dataset", exact=True).click()
+    page.get_by_label("Dataset", exact=True).select_option("dataset_remote")
+    pending = []
+    page.route("**/imports/preview", lambda route: pending.append(route))
+    with page.expect_request("**/imports/preview"):
+        page.get_by_role("button", name="Preview import", exact=True).click()
+    page.get_by_role("button", name="Close dialog", exact=True).click()
+    page.get_by_label("Project", exact=True).select_option("project_beta")
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.get_by_role("button", name="Add connection", exact=True).click()
+    pending[0].fulfill(json={"preview_id": "stale", "items": []})
+    page.wait_for_load_state("networkidle")
+    playwright.expect(
+        page.get_by_role("heading", name="Connect a source", exact=True)
+    ).to_be_visible()
+    playwright.expect(
+        page.get_by_role("button", name="Save local snapshot", exact=True)
+    ).to_have_count(0)
 
 
 def test_agent_authentication_and_cross_agent_model_selection(webapp_page):
@@ -1184,11 +1358,10 @@ def test_real_service_browser_project_settings_import_and_scoped_approval(tmp_pa
             assert accepted["scoring"] == {"mode": "primary", "primary": "metric_1"}
             page.get_by_role("button", name="Settings", exact=True).click()
             page.get_by_role("button", name="Add connection", exact=True).click()
-            page.get_by_label("Connection name").fill("Test evidence")
-            page.get_by_label("Provider project", exact=True).fill("remote")
             page.get_by_label("API key", exact=True).fill("private-test-value")
-            page.get_by_label("Store credentials", exact=True).select_option("session")
-            page.get_by_role("button", name="Save connection", exact=True).click()
+            page.get_by_role("button", name="Find projects", exact=True).click()
+            page.get_by_label("Source project", exact=True).select_option(label="Remote")
+            page.get_by_role("button", name="Connect", exact=True).click()
             playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
             page.get_by_role("button", name="Execution", exact=True).click()
             page.get_by_role("button", name="New profile", exact=True).click()
@@ -1535,7 +1708,7 @@ def test_dataset_export_and_publication_require_separate_reviewed_actions(webapp
             "provider": "braintrust",
             "name": "Team Braintrust",
             "project": "Support",
-            "project_ids": ["project_alpha"],
+            "project_id": "project_alpha",
         }
     ]
     publications = []

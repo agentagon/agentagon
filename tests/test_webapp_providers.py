@@ -1,5 +1,6 @@
 import base64
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -91,6 +92,9 @@ def test_os_keyring_and_sanitized_failure():
 )
 def test_connection_authentication(provider, path, header, body):
     def handler(request):
+        if provider == "langsmith" and request.url.path == "/api/v1/workspaces":
+            assert request.headers[header]
+            return httpx.Response(200, json=[{"id": "workspace-1", "display_name": "Team"}])
         assert request.url.path == path
         assert request.headers[header]
         if provider == "langsmith":
@@ -104,7 +108,195 @@ def test_connection_authentication(provider, path, header, body):
         return httpx.Response(200, json=body)
 
     result = client(provider, handler, workspace_id="workspace-1").test()
-    assert result == {"status": "connected", "projects": [{"id": "p"}]}
+    project = {"id": "p", "name": "p"}
+    if provider == "langsmith":
+        project.update(workspace_id="workspace-1", workspace_name="Team")
+    assert result == {"status": "connected", "projects": [project]}
+
+
+def test_automatic_credentials_prefer_keyring_and_fall_back_to_memory(monkeypatch):
+    class Keyring:
+        def set_password(self, service, reference, value):
+            self.reference, self.value = reference, value
+
+        def get_password(self, service, reference):
+            assert reference == self.reference
+            return self.value
+
+    backend = Keyring()
+    saved = CredentialStore(backend).set_auto("secure-value")
+    assert saved.startswith("keyring:")
+    assert CredentialStore(backend).resolve(saved) == "secure-value"
+    assert "secure-value" not in saved
+
+    def unavailable(*args):
+        raise RuntimeError("OS details containing secure-value")
+
+    backend.set_password = unavailable
+    store = CredentialStore(backend)
+    fallback = store.set_auto("secure-value")
+    assert fallback.startswith("session:") and store.resolve(fallback) == "secure-value"
+    with pytest.raises(ProviderError, match="unavailable"):
+        CredentialStore(backend).resolve(fallback)
+    monkeypatch.setattr(providers.importlib, "import_module", unavailable)
+    missing = CredentialStore()
+    reference = missing.set_auto("secure-value")
+    assert reference.startswith("session:") and missing.resolve(reference) == "secure-value"
+
+
+def test_automatic_credentials_never_use_plaintext_keyring_backend(monkeypatch):
+    class Plaintext:
+        __module__ = "keyrings.alt.file"
+
+        def set_password(self, *args):
+            pytest.fail("plaintext storage must never be used")
+
+    monkeypatch.setattr(
+        providers.importlib, "import_module", lambda _: SimpleNamespace(get_keyring=Plaintext)
+    )
+    store = CredentialStore()
+    reference = store.set_auto("only-in-memory")
+    assert reference.startswith("session:") and store.resolve(reference) == "only-in-memory"
+
+
+def test_langsmith_discovers_all_workspace_projects_and_preserves_scope(monkeypatch):
+    monkeypatch.setattr(providers, "PAGE_SIZE", 2)
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.url.host == "api.smith.langchain.com"
+        assert request.headers["x-api-key"] == "private-api_key-value"
+        if request.url.path == "/api/v1/workspaces":
+            assert "x-tenant-id" not in request.headers
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "team-a",
+                        "display_name": "Alpha",
+                        "data_plane_url": "https://untrusted.example",
+                    },
+                    {"id": "team-b", "display_name": "Beta"},
+                    {"id": "deleted", "display_name": "Old", "is_deleted": True},
+                ],
+            )
+        workspace = request.headers["x-tenant-id"]
+        if request.url.path == "/datasets":
+            assert workspace == "team-b"
+            return httpx.Response(200, json=[])
+        assert request.url.path == "/sessions"
+        rows = [{"id": "shared-id", "name": "Customer support", "extra": "omit this"}]
+        if workspace == "team-a":
+            rows += [{"id": "other", "name": "Other"}, {"id": "third", "name": "Third"}]
+        offset = int(request.url.params["offset"])
+        return httpx.Response(200, json=rows[offset : offset + 2])
+
+    provider = client("langsmith", handler)
+    result = provider.test()
+    assert result["status"] == "connected"
+    assert [(p["workspace_id"], p["id"]) for p in result["projects"]] == [
+        ("team-a", "shared-id"),
+        ("team-a", "other"),
+        ("team-a", "third"),
+        ("team-b", "shared-id"),
+    ]
+    assert {p["workspace_name"] for p in result["projects"]} == {"Alpha", "Beta"}
+    assert all(
+        set(p) == {"id", "name", "workspace_id", "workspace_name"} for p in result["projects"]
+    )
+    assert "workspace_id" not in provider.connection
+    bound = ProviderClient(
+        {**provider.connection, "workspace_id": "team-b"}, provider.credentials, provider.transport
+    )
+    assert bound.datasets() == []
+    assert len(calls) == 5
+
+
+def test_langsmith_scoped_key_can_discover_projects_without_workspace_listing():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path == "/api/v1/workspaces":
+            return httpx.Response(403, text="private-api_key-value")
+        assert request.url.path == "/sessions"
+        return httpx.Response(
+            200, json=[{"id": "project", "name": "Scoped", "tenant_id": "workspace"}]
+        )
+
+    assert client("langsmith", handler).test()["projects"] == [
+        {"id": "project", "name": "Scoped", "workspace_id": "workspace"}
+    ]
+    assert calls == ["/api/v1/workspaces", "/sessions"]
+
+
+@pytest.mark.parametrize("status", [401, 404, 429, 500])
+def test_langsmith_discovery_failure_is_safe_and_does_not_guess_endpoints(status):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(status, text="private-api_key-value")
+
+    with pytest.raises(ProviderError) as error:
+        client("langsmith", handler).test()
+    assert "private-api_key-value" not in str(error.value) and len(calls) == 1
+
+
+@pytest.mark.parametrize("bound", ["MAX_WORKSPACES", "MAX_ITEMS", "MAX_REQUESTS"])
+def test_langsmith_discovery_has_shared_workspace_project_and_request_bounds(monkeypatch, bound):
+    monkeypatch.setattr(providers, bound, 1)
+
+    def handler(request):
+        if request.url.path == "/api/v1/workspaces":
+            return httpx.Response(
+                200, json=[{"id": "a", "display_name": "A"}, {"id": "b", "display_name": "B"}]
+            )
+        return httpx.Response(200, json=[{"id": request.headers["x-tenant-id"], "name": "Project"}])
+
+    with pytest.raises(ProviderError, match="Too many|request limit"):
+        client("langsmith", handler).test()
+
+
+def test_langsmith_discovery_keeps_custom_api_prefix_and_redacts_names():
+    def handler(request):
+        assert request.url.host == "local.example"
+        if request.url.path == "/api/v1/workspaces":
+            return httpx.Response(
+                200, json=[{"id": "workspace", "display_name": "private-api_key-value"}]
+            )
+        assert request.url.path == "/api/v1/sessions"
+        assert request.headers["x-tenant-id"] == "workspace"
+        return httpx.Response(200, json=[{"id": "project", "name": "private-api_key-value"}])
+
+    result = client("langsmith", handler, endpoint="https://local.example/api/v1").test()
+    assert "private-api_key-value" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "workspaces,project,reason",
+    [
+        ({"unexpected": []}, {}, "record list"),
+        ([{"id": "bad\nheader", "display_name": "Team"}], {}, "workspace ID"),
+        ([{"id": "team", "display_name": "Team"}] * 2, {"id": "p"}, "duplicate"),
+        (
+            [{"id": "team", "display_name": "Team"}],
+            {"id": "p", "tenant_id": "other"},
+            "another workspace",
+        ),
+    ],
+)
+def test_langsmith_discovery_rejects_invalid_workspace_and_project_bindings(
+    workspaces, project, reason
+):
+    def handler(request):
+        if request.url.path == "/api/v1/workspaces":
+            return httpx.Response(200, json=workspaces)
+        return httpx.Response(200, json=[project])
+
+    with pytest.raises(ProviderError, match=reason):
+        client("langsmith", handler).test()
 
 
 @pytest.mark.parametrize("status", [301, 401, 403, 404, 429, 500])

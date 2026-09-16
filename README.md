@@ -54,7 +54,7 @@ Optional Agentagon Intelligence is available through live `/v1/audit`, `/v1/eval
 Run `agentagon` from **your AI agent's code directory**. `agentagon app` is an alias; the project selector lets you add and switch local directories.
 
 1. In **Settings → Coding agents**, select Codex and a model from its installed catalog, or configure Claude API-key access and its model.
-2. Optionally add Braintrust, LangSmith or Langfuse under **Settings → Connections**. Preview and import selected traces or a dataset.
+2. Optionally connect Braintrust, LangSmith or Langfuse under **Settings → Connections** for this project. Enter credentials, choose **Find projects**, select a remote project and connect. Preview selected traces or a dataset before importing.
 3. In **Agents**, discover and confirm application agents or add one manually. Select an agent and add a focus describing what matters.
 4. Use **Audit** to investigate that focus, **Eval** to prepare a trusted benchmark, **Run baseline** to measure it, and **Fix** to compare improvements. Existing compatible evidence can be reused.
 
@@ -88,12 +88,12 @@ agentagon setup
 | `--workspace PATH` before the subcommand | Select the application directory; defaults to `.` |
 | `AGENTAGON_CONFIG` | Override the configuration file path |
 | `$XDG_CONFIG_HOME/agentagon/config.json` | Default settings file; falls back to `~/.config/agentagon/config.json` |
-| Sibling `config.app/app.sqlite3`; `AGENTAGON_APP_STATE` overrides its directory | Authoritative app metadata: projects, agents, focuses, named connections, settings, jobs and approvals |
+| Sibling `config.app/app.sqlite3`; `AGENTAGON_APP_STATE` overrides its directory | Authoritative app metadata: projects, agents, focuses, project connections, settings, jobs and approvals |
 | `.agentagon/` in the application directory | Engine records, immutable evidence, reports and work areas; initialization excludes it from Git |
 
-Project overrides take precedence over user defaults. Credentials use environment references, session memory or an optional OS credential store; secret values are not saved in configuration. Use [web-app settings](https://github.com/agentagon/agentagon/blob/main/docs/app.md) for connections and agents, [execution profiles](https://github.com/agentagon/agentagon/blob/main/docs/fix.md#configure-execution-once) for evaluations and fixes, and [Intelligence setup](https://github.com/agentagon/agentagon/blob/main/docs/intelligence.md) for optional guidance.
+Project overrides take precedence over user defaults. App provider connections automatically use an OS credential store when available, with session memory as the fallback. CLI and execution settings use credential references; secret values are not saved in configuration. Use [web-app settings](https://github.com/agentagon/agentagon/blob/main/docs/app.md) for connections and agents, [execution profiles](https://github.com/agentagon/agentagon/blob/main/docs/fix.md#configure-execution-once) for evaluations and fixes, and [Intelligence setup](https://github.com/agentagon/agentagon/blob/main/docs/intelligence.md) for optional guidance.
 
-The app is hosted locally on loopback; hosted/team access is deferred. Evidence is stored locally, while your coding host and configured services determine where model processing occurs. There is no legacy app-state migration; named app connections are configured explicitly.
+The app is hosted locally on loopback; hosted/team access is deferred. Evidence is stored locally, while your coding host and configured services determine where model processing occurs. There is no legacy app-state migration; connect each local project's providers explicitly.
 
 ## Development and contributing
 

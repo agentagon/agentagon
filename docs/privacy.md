@@ -11,7 +11,7 @@ Agentagon saves evidence locally, but the location of storage and the location o
 | Candidate application edits | Authored in isolated local worktrees. Local execution is not a machine or network sandbox. |
 | Evaluation commands | Run on the configured local, SSH, or E2B runner. Commands and applications may contact their configured services. |
 | Remote execution inputs | Declared frozen inputs are transferred to the configured destination. Choose the permitted code and data before authorizing a remote run. |
-| Provider trace retrieval | Your coding agent retrieves selected traces using available provider access. |
+| Provider trace retrieval | The local web app retrieves explicit selections through a project connection. Coding-agent workflows can also retrieve selected exports through available provider access. |
 | Optional Intelligence | Receives separately prepared, redacted workflow fields when configured and used: context/focus for audits, context/goal for evaluations, and context/focus for fixes. Raw code, traces, saved goals and protected evaluation material are not automatically uploaded. |
 | Anonymous product telemetry | Enabled by default; sends allowed skill/Intelligence usage fields to the analytics service. It can be disabled. |
 | GitHub publication | Pushes the selected branch and creates a draft PR only when publication is authorized. |
@@ -20,7 +20,7 @@ Agentagon saves evidence locally, but the location of storage and the location o
 
 `.agentagon/` is private workflow state and is excluded from Git locally when initialized in a repository. Use supported CLI commands to manage records. Do not commit this directory or rewrite immutable evidence to alter a result.
 
-Settings are saved separately in your user configuration file, with project overrides. Credentials are stored as **environment-variable references**, not secret values. Put actual keys in your environment or a credential store, and make them available only to the intended processes.
+CLI settings use your user configuration file, with project overrides and environment-variable references for credentials. Web-app connections belong to one local project and retain credential references in the app database. Provider credentials automatically use a supported OS credential store when available, or session memory until the service stops. Secret values are not written to configuration or returned to the browser. See [connection setup](app.md#connect-traces-and-datasets).
 
 Retained trace and task data use recognized-secret redaction. Pattern redaction is additional protection, not a guarantee that personal, proprietary, or sensitive content has been removed. Decide what your host and services may inspect before supplying it.
 

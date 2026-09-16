@@ -172,22 +172,18 @@ def create_server(application, port=0):
                 return {"application": "agentagon", "version": 1}
             if parts == ["api", "projects"]:
                 return application.projects()
-            if parts == ["api", "connections"]:
-                return application.connections()
             if parts == ["api", "agents"]:
                 return application.agents()
             if parts == ["api", "agents", "codex", "models"]:
                 return application.codex_models()
-            if len(parts) == 4 and parts[:2] == ["api", "connections"] and parts[3] == "datasets":
-                connection = application.connection(parts[2])
-                return {
-                    "datasets": application.provider_factory(
-                        connection, application.credentials
-                    ).datasets()
-                }
             if len(parts) >= 4 and parts[:2] == ["api", "projects"]:
                 project_id, resource = parts[2:4]
                 application.state.project(project_id)
+                if resource == "connections":
+                    if len(parts) == 4:
+                        return application.connections(project_id)
+                    if len(parts) == 6 and parts[5] == "datasets":
+                        return application.connection_datasets(project_id, parts[4])
                 if resource == "application-agents":
                     if len(parts) == 8 and parts[5] == "focuses" and parts[7] == "design":
                         return application.measurement_design(project_id, parts[4], parts[6])
@@ -270,8 +266,8 @@ def create_server(application, port=0):
         def _delete(self, parts):
             if len(parts) == 3 and parts[:2] == ["api", "projects"]:
                 return application.remove_project(parts[2])
-            if len(parts) == 3 and parts[:2] == ["api", "connections"]:
-                return application.disconnect(parts[2])
+            if len(parts) == 5 and parts[:2] == ["api", "projects"] and parts[3] == "connections":
+                return application.disconnect(parts[2], parts[4])
             raise AuditError("operation not found")
 
         def _post(self, parts, body):
@@ -279,15 +275,18 @@ def create_server(application, port=0):
                 return application.register(body.get("path"))
             if parts == ["api", "projects", "clone"]:
                 return application.clone_project(body)
-            if parts == ["api", "connections"]:
-                return application.save_connection(body)
             if parts == ["api", "agents"]:
                 return application.save_agents(body)
-            if len(parts) == 4 and parts[:2] == ["api", "connections"] and parts[3] == "test":
-                return application.test_connection(parts[2])
             if len(parts) >= 4 and parts[:2] == ["api", "projects"]:
                 project_id, resource = parts[2:4]
                 application.state.project(project_id)
+                if resource == "connections":
+                    if len(parts) == 4:
+                        return application.save_connection(project_id, body)
+                    if len(parts) == 5 and parts[4] == "discover":
+                        return application.discover_connection(project_id, body)
+                    if len(parts) == 6 and parts[5] == "test":
+                        return application.test_connection(project_id, parts[4])
                 if resource == "application-agents":
                     if len(parts) in {8, 9} and parts[5] == "focuses" and parts[7] == "design":
                         if len(parts) == 8:
