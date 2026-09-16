@@ -1,12 +1,57 @@
-# Agentagon
+<p align="center">
+  <a href="https://agentagon.ai">
+    <img src="docs/assets/logo.png" alt="Agentagon" width="96" />
+  </a>
+</p>
 
-**Improve your AI agents.**
+<h1 align="center">Agentagon</h1>
 
-Inspect and improve AI agents with measured fixes and custom scores. Agree on behaviors and scoring, prepare reusable evals to establish a baseline, and compare verified improvements before preparing a draft PR.
+<p align="center">
+  <strong>Turn AI-agent goals and production failures into measured, verified code improvements.</strong>
+</p>
 
-Open the local web app with `agentagon`. Select a project, confirm its application agents and choose what to improve. Connect Codex or Claude and optional trace providers, agree on a goal's measurements, prepare evaluations and compare measured fixes. Python captures evidence, runs checks and saves reports; managed coding-agent sessions supply reasoning, reviews and candidate edits. Skills remain optional.
+<p align="center">
+  A local web app that connects your code, coding agent, traces, and evaluations—then establishes a baseline and compares fixes before you ship.
+</p>
 
-[Open the web app](https://github.com/agentagon/agentagon/blob/main/docs/app.md), [prepare evaluations](https://github.com/agentagon/agentagon/blob/main/docs/eval.md), or [compare measured fixes](https://github.com/agentagon/agentagon/blob/main/docs/fix.md).
+<p align="center">
+  <a href="https://agentagon.ai/docs/"><strong>Docs</strong></a> ·
+  <a href="#installation"><strong>Install</strong></a> ·
+  <a href="#quick-start"><strong>Quick start</strong></a> ·
+  <a href="https://github.com/agentagon/agentagon/issues/new/choose"><strong>Report a bug</strong></a>
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/agentagon/">
+    <img src="https://img.shields.io/pypi/v/agentagon?logo=pypi&logoColor=white" alt="PyPI version" />
+  </a>
+  <a href="https://github.com/agentagon/agentagon/actions/workflows/tests.yml">
+    <img src="https://github.com/agentagon/agentagon/actions/workflows/tests.yml/badge.svg" alt="Tests" />
+  </a>
+  <a href="https://pypi.org/project/agentagon/">
+    <img src="https://img.shields.io/pypi/pyversions/agentagon?logo=python&logoColor=white" alt="Python versions" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 license" />
+  </a>
+</p>
+
+<p align="center">
+  <strong>Local-first · Codex + Claude · Braintrust + LangSmith + Langfuse</strong>
+</p>
+
+<p align="center">
+  If Agentagon looks useful, <a href="https://github.com/agentagon/agentagon"><strong>⭐ star the repository</strong></a>.
+  It helps other agent builders discover the project.
+</p>
+
+Agentagon helps you decide what an AI agent should improve, define how success will be measured, establish a reproducible baseline, and compare verified code changes.
+
+The browser guides the workflow. Coding agents perform reasoning and author changes; Agentagon owns evaluations, budgets, evidence, comparisons, and review boundaries.
+
+![Agentagon's Goals view with a measurement plan, baseline, and measured improvement workflow](docs/assets/dashboard-example.png)
+
+*Example workspace with synthetic data. Define a goal, agree on measurements, establish a baseline, then compare fixes.*
 
 ## Prerequisites
 
