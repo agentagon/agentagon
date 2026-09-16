@@ -14,7 +14,6 @@ from agentagon.experiments.store import load_run
 def _start(
     application, specification, optimizer="gepa", target=None, repetitions=1, max_trials=None
 ):
-    pytest.importorskip("gepa.oa.ensemble")
     specification["scoring"] = definition()
     if target is not None:
         specification["scoring"]["target"] = target
