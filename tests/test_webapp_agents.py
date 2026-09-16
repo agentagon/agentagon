@@ -395,9 +395,9 @@ def test_claude_api_key_approvals_exact_resume_and_redaction(tmp_path, monkeypat
             env={"AGENTAGON_CONFIG": str(config), "AGENTAGON_APP_STATE": str(tmp_path)},
         ),
         events.append,
-        lambda event: {"decision": "decline"}
-        if event["kind"] == "approval"
-        else {"text": "Minimal"},
+        lambda event: (
+            {"decision": "decline"} if event["kind"] == "approval" else {"text": "Minimal"}
+        ),
         threading.Event(),
     )
     options = record["options"]

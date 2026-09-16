@@ -275,9 +275,9 @@ def _run_reflection(
         outcome = (execute or run_agent)(
             request,
             progress,
-            lambda question: {"decision": "decline"}
-            if question.get("kind") == "approval"
-            else ask(question),
+            lambda question: (
+                {"decision": "decline"} if question.get("kind") == "approval" else ask(question)
+            ),
             cancelled,
         )
         session = (
