@@ -2,6 +2,8 @@
 
 Init, Audit, Eval and Fix use this procedure. Read existing code, requirements, evals and permitted traces before proposing definitions. Save accepted intent with validated journey CLI operations; use the returned version and evidence references throughout preparation and execution. Never edit canonical `.agentagon/` records by hand.
 
+The fields below define the saved evaluation, not a checklist for the user's reply. Derive a concrete recommendation from existing requirements and evals. Show the outcome it measures, material tradeoffs and total limits; ask only for unresolved intent or authorization. Keep implementation details in the saved definition and linked evidence unless needed for that decision. Do not silently replace task-quality measurement with narrower deterministic checks because they are easier to run.
+
 ## Agree on observable behavior
 
 Propose a small set of behaviors relevant to the user's goal. For each behavior, record its natural-language intent, evidence, executable check or frozen judge rubric, and whether it is required. For example, “unknown tools produce a validation error and invoke no tool” maps to an assertion over the returned error and recorded calls. Use actual outputs, final state and relevant trajectory/tool evidence. Fewer steps or retries are useful only when the agreed criteria make them useful.

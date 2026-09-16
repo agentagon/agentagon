@@ -1,20 +1,23 @@
-# Define behaviors and scores {#initialize-an-agent}
+# Get a first quality baseline {#initialize-an-agent}
 
-Agree on what better means for your agent, prepare reusable evaluations and establish a scored baseline. Use **ag:init** to inspect your agent and reuse your settings and existing evals; you can complete discovery before execution is ready.
+Use **ag:init** to find a useful first check of your agent, reuse existing evals and measure how it performs. The host recommends what to check and handles the evaluation details within your agreed limits.
 
 ## Start in your application
 
 Choose **ag:init** in Codex, or enter this in Claude Code:
 
 ```text
-/ag:init Inspect this agent and its existing evals. Propose the behaviors,
-scoring and execution budget we should use, then establish a baseline.
-Use existing provider settings and show any missing prerequisites.
+/ag:init Help me understand how well this agent completes its tasks.
+Reuse existing evals and recommend a first baseline with a time and run limit.
 ```
 
-The host inspects code, requirements and available traces. It proposes a small set of relevant behaviors, metrics and limits for you to accept or customize. When suitable evals already exist, it reuses them. When they are absent or unusable, it confirms that finding and the proposed creation and running of missing evals. An explicit request to create evals already authorizes that work.
+The first response explains what the recommended check will tell you, why it fits your agent, and the total limits or missing prerequisite. You can accept or adjust the recommendation; you do not need to design a scoring system. Detailed discovery and evaluation records stay available in the dashboard.
 
-## Agree on what better means
+The host inspects requirements, entry points and existing evals before recommending a measurement. A full audit is not required for this initial recommendation. It reuses suitable evals and confirms creation and execution of missing checks when not already authorized. A local check of tool permissions or output formatting is labeled with that scope; it does not establish answer quality.
+
+## Customize the definition when needed
+
+The host prepares these details from your requirements and existing tests. Review or change them when they affect what you want to measure.
 
 | Definition | Example |
 |---|---|
@@ -36,7 +39,7 @@ Discovery accepts dirty or non-Git directories. Measurement needs clean committe
 
 ## Receive the result
 
-You receive the accepted definition, a reviewed evaluator and a scored baseline when executable. Inspect the evidence in the [results view](dashboard.md). New eval source is delivered as an eval-only draft PR when publication is configured, or a local branch/patch. Application changes follow through [Fix](fix.md).
+The result leads with what was measured, the score and relevant failures, or the blocker and next step when measurement cannot run. Inspect the accepted definition and supporting evidence in the [results view](dashboard.md). New eval source is delivered as an eval-only draft PR when publication is configured, or a local branch/patch. Application changes follow through [Fix](fix.md).
 
 A baseline records source commit and branch, evaluator version, execution settings, score components and evidence status. [Reruns](baselines.md) create new measurements while preserving those definitions. Fixed benchmark results and recent-trace scores describe separate populations.
 
