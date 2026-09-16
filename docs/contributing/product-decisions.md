@@ -6,7 +6,7 @@ These decisions explain the workflow boundaries contributors should preserve. Co
 
 ## The local web app is the primary interface
 
-Bare `agentagon` opens a local web app and registers the current project, reusing a running service when available. `agentagon app` is an explicit alias. Named subcommands and optional skills remain available. The project opens to an application-agent inventory; Audit, Eval and Fix operate within a selected agent and focus, alongside Metrics, Traces and settings. Full-project audits remain available. The project selector does not combine evidence across checkouts.
+Bare `agentagon` opens a local web app and registers the current project, reusing a running service when available. `agentagon app` is an explicit alias. Named subcommands and optional skills remain available. The project opens to an application-agent inventory; Audit, Eval and Fix operate within a selected agent and focus, alongside Metrics, Traces and settings. Full-project audits remain available through the CLI. The project selector does not combine evidence across checkouts.
 
 The local backend owns named provider connections and explicitly started coding-agent sessions. Opening project pages does not launch agents or acquire trace or dataset records; connection tests and import dialogs may query provider catalogs. Codex uses an app-owned app-server session and exposes the installed backend's available models for selection. Claude uses the optional Agent SDK with API-key access and a separate model setting. Neither adapter takes over an unrelated terminal conversation. Workflow procedures are bundled runtime inputs and do not require skill installation.
 

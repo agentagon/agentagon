@@ -52,6 +52,8 @@ Without the browser extra, the regular suite skips these modules. Once the extra
 
 ## Optional integration checks
 
+Web-app provider and coding-agent tests use contract fixtures and simulated hosts. Before a release, separately verify real provider imports and a browser Audit → Eval → Baseline → Fix journey with each supported coding agent under authorized limits. An installed model catalog or passing fixtures does not establish successful live model execution.
+
 The regular suite exercises local execution and simulated integrations. The following environment variables enable tests that touch native hosts or remote services; leave them unset for ordinary local development:
 
 | Variable | Effect |

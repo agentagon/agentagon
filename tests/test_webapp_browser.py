@@ -741,8 +741,51 @@ def test_audit_issue_handoff_retains_issue_and_audit_identity(webapp_page):
     assert options["audit_id"] == "audit_parent"
 
 
+def test_saved_issue_focus_keeps_evidence_identity_and_existing_focuses(webapp_page):
+    page, fixture = webapp_page
+    fixture.issues = [
+        {
+            "issue_id": "issue_one",
+            "latest_audit_id": "audit_parent",
+            "title": "Incorrect tool selection",
+        }
+    ]
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=overview")
+    page.get_by_role("button", name="Add focus", exact=True).click()
+    page.get_by_label("Start from", exact=True).select_option("issue")
+    playwright.expect(page.get_by_role("button", name="Save focus", exact=True)).to_be_disabled()
+    page.get_by_label("Saved issue", exact=True).select_option("issue_one")
+    page.get_by_label("Focus name", exact=True).fill("Choose the correct tool")
+    page.get_by_label("Desired behavior", exact=True).fill("Use the support lookup tool")
+    page.get_by_role("button", name="Save focus", exact=True).click()
+    playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
+    assert fixture.mutations[-1]["payload"]["source"] == {
+        "kind": "issue",
+        "issue_id": "issue_one",
+        "audit_id": "audit_parent",
+    }
+    assert {focus["id"] for focus in fixture.focuses["agent_support"]} == {
+        "focus_correctness",
+        "focus_new",
+    }
+
+    fixture.issues = []
+    page.reload()
+    page.get_by_role("button", name="Add focus", exact=True).click()
+    page.get_by_label("Start from", exact=True).select_option("issue")
+    playwright.expect(
+        page.get_by_text("This agent has no saved issues.", exact=False)
+    ).to_be_visible()
+    playwright.expect(page.get_by_role("button", name="Save focus", exact=True)).to_be_disabled()
+    page.get_by_role("button", name="Start from a goal", exact=True).click()
+    playwright.expect(page.get_by_label("Start from", exact=True)).to_have_value("goal")
+    playwright.expect(page.get_by_role("button", name="Save focus", exact=True)).to_be_enabled()
+
+
 def test_baseline_comparison_preserves_unknowns_and_rejects_incompatibility(webapp_page):
     page, fixture = webapp_page
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
     fixture.baselines = [
         {
             "baseline_id": "baseline_left",
@@ -757,6 +800,13 @@ def test_baseline_comparison_preserves_unknowns_and_rejects_incompatibility(weba
             "state": "completed",
             "branch": "improved",
             "source_revision": "def456",
+        },
+        {
+            "baseline_id": "baseline_other",
+            "evaluation_id": "eval_shared",
+            "state": "completed",
+            "branch": "other",
+            "source_revision": "abc789",
         },
         {
             "baseline_id": "baseline_draft",
@@ -789,7 +839,7 @@ def test_baseline_comparison_preserves_unknowns_and_rejects_incompatibility(weba
     page.goto("http://127.0.0.1:8765/?agent=agent_support&view=eval&tab=baselines")
     page.get_by_role("button", name="Compare", exact=True).first.click()
     playwright.expect(page.get_by_label("Compare with", exact=True)).to_have_value("baseline_right")
-    assert page.get_by_label("Compare with", exact=True).locator("option").count() == 1
+    assert page.get_by_label("Compare with", exact=True).locator("option").count() == 2
     with page.expect_response("**/baselines/baseline_left/compare/baseline_right"):
         page.get_by_role("button", name="Compare measurements", exact=True).click()
     table = page.get_by_role("table", name="Fixed benchmark comparison", exact=True)
@@ -812,6 +862,9 @@ def test_baseline_comparison_preserves_unknowns_and_rejects_incompatibility(weba
         "evaluator definitions differ"
     )
     playwright.expect(table).to_have_count(0)
+    page.get_by_label("Compare with", exact=True).select_option("baseline_other")
+    playwright.expect(page.get_by_role("dialog").locator(".form-error")).to_be_empty()
+    assert errors == []
     assert fixture.mutations == []
 
 

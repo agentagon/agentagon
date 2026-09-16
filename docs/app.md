@@ -19,7 +19,7 @@ An **application agent** is the workflow you are investigating, such as a suppor
 
 Choose an application agent, then add a focus: correctness, reliability, grounding, safety, security, latency, cost, interaction, or a custom objective. Describe the desired outcome, attach a saved issue, or investigate a bounded selection of recent traces. A focus preserves its goal and measurement history. Its code binding and trace selection determine the investigation scope; the audit rubric still applies within that scope.
 
-The usual sequence is **Focus → Audit → Eval → Baseline → Fix**. Existing reviewed evaluations and baselines can be reused when compatible. A full-project audit remains available without first defining an application agent. Trace-only agents require a code binding before measured fixes.
+The usual sequence is **Focus → Audit → Eval → Baseline → Fix**. Existing reviewed evaluations and baselines can be reused when compatible. Full-project audits are also available through the CLI without first defining an application agent. Trace-only agents require a code binding before measured fixes.
 
 ## Connect a coding agent
 
