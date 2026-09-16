@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentagon"
-version = "0.1.2"
+version = "0.1.3"
 description = "Inspect and improve AI agents with measured fixes and custom scores."
 readme = "README.md"
 requires-python = ">=3.12"
