@@ -13,13 +13,15 @@ The app runs on your computer and binds to loopback. Hosted access and team acco
 
 ## Select an application agent and focus
 
-The project opens to **Agents**. Discover suggestions from code and imported traces, confirm their boundaries, or add an agent manually. Discovery is a bounded scan; review each suggested code scope and trace selector before using it. Separate checkouts, including Git worktrees, remain separate projects.
+The project opens to **Agents**. Discover suggestions from code and imported traces, confirm their boundaries, or add an agent manually. Discovery recognizes supported framework imports and skips documentation, examples, tests, dependencies and generated code. It does not run application code; dynamic factories and unrecognized frameworks may need a manual entry. Review each suggested code scope and trace selector before using it. Separate checkouts, including Git worktrees, remain separate projects.
 
 An **application agent** is the workflow you are investigating, such as a support agent. A **coding agent** is Codex or Claude, which Agentagon uses to perform the work. One project can contain several application agents and shared dependencies.
 
-Choose an application agent, then add a focus: correctness, reliability, grounding, safety, security, latency, cost, interaction, or a custom objective. Describe the desired outcome, attach a saved issue, or investigate a bounded selection of recent traces. A focus preserves its goal and measurement history. Its code binding and trace selection determine the investigation scope; the audit rubric still applies within that scope.
+Choose an application agent, then add a focus: correctness, reliability, grounding, safety, security, latency, cost, interaction, or a custom objective. Describe the desired outcome, attach a saved issue, or use a bounded selection of recent traces. A focus preserves its goal and measurement history. Its code binding and trace selection determine the evidence available for measurement design.
 
-Start with a goal, review its proposed measurements, establish a baseline, then improve and compare candidates. Audit is available when you need a deeper investigation. Existing reviewed evaluations and baselines can be reused when compatible. Full-project audits are also available through the CLI without first defining an application agent. Trace-only agents require a code binding before measured fixes.
+Start in **Goals**, review and accept the **Measurement plan**, prepare an **Eval** and establish a baseline, then use **Fix** to compare improvements. Existing reviewed evaluations and baselines can be reused when compatible. Trace-only agents require a code binding before measured fixes.
+
+This browser journey does not require an audit. The CLI and optional [Audit skill](audit.md) remain available for separate investigations, including full-project audits without an application-agent definition. Existing audits, findings and saved issues remain available as evidence for goals and evaluations.
 
 Request a measurement proposal from the goal view. The coding agent inspects code, existing evals and selected evidence, then proposes behaviors, metrics and an evaluation approach. Edit metric units, aggregation, weights and scaling; choose a primary metric, weighted score or custom evaluator output. Required behaviors remain separate gates. Missing measurements stay unknown. Traces are optional: a proposed behavior can instead require instrumentation or an executable check, with that prerequisite shown explicitly.
 
@@ -73,11 +75,9 @@ A dataset can be exported as a Braintrust or DeepEval starter bundle with its na
 | Agents | Discover, confirm and select application agents in the project. |
 | Goals | Inspect the selected agent's focuses, readiness, recent tasks and results. |
 | Measurement plan | Propose, edit and accept behaviors, scores, evidence and evaluation choices for the selected goal. |
-| Audit | Investigate the selected focus using captured local code, changes, traces or both. Read findings with their evidence and coverage limits. |
 | Eval | Import or select a dataset, agree on expectations and scoring, and prepare a reviewed evaluator. |
 | Fix | Select a saved issue or goal, declare scope and limits, and compare candidates against a frozen evaluator. |
 | Eval → Baseline history | Inspect measurements, compare compatible baselines or explicitly start a rerun. |
-| Audit → Saved issues | Review saved findings and their recorded status. |
 | Metrics | Inspect retained measurements, evaluator versions and accepted guardrails. Missing measurements remain unknown. |
 | Traces | Inspect imported snapshots and their provenance; choose evidence matching the agent. |
 | Settings | Manage connections, coding agents, execution profiles and project settings. |
@@ -101,6 +101,8 @@ Compare each verified candidate's scores, behaviors, checks and changes, select 
 Starting a task authorizes its selected workflow. Publishing, merging and deploying remain separate actions. Optional Intelligence keeps its own request consent and data-handling rules.
 
 ## Keep or resume work
+
+The coding-agent panel shows messages, questions and decisions. A spinner marks running work; tool progress remains in saved task evidence without filling the conversation.
 
 The local service owns running tasks. Closing the browser leaves them running; keep the terminal that launched the service open. Stopping that process interrupts active work. After restarting, inspect the saved task and choose **Resume** explicitly. Reopening the app does not automatically restart model work or expand its budget.
 

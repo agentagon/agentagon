@@ -391,7 +391,7 @@ def webapp_page():
         browser.close()
 
 
-def test_project_switch_and_guided_audit_are_scoped(webapp_page):
+def test_project_switch_and_guided_measurement_are_scoped(webapp_page):
     page, fixture = webapp_page
     page.goto("http://127.0.0.1:8765/?agent=agent_support&view=overview")
     playwright.expect(
@@ -401,17 +401,16 @@ def test_project_switch_and_guided_audit_are_scoped(webapp_page):
     page.get_by_label("Project", exact=True).select_option("project_beta")
     playwright.expect(page.locator("#project-name")).to_have_text("Research agent")
     page.get_by_label("Application agent", exact=True).select_option("agent_research")
-    page.get_by_role("button", name="Investigate", exact=True).click()
+    page.get_by_role("button", name="Propose measurements", exact=True).click()
     page.get_by_label("Goal", exact=True).fill("Investigate duplicate citations")
-    page.get_by_label("Audit scope").select_option("changes")
-    page.get_by_role("dialog").get_by_role("button", name="Start audit", exact=True).click()
+    page.get_by_role("dialog").get_by_role("button", name="Propose plan", exact=True).click()
     playwright.expect(page.locator(".agent-goal")).to_have_text("Investigate duplicate citations")
     request = fixture.mutations[-1]
     assert request["path"] == "/api/projects/project_beta/jobs"
-    assert request["payload"]["options"]["scope"] == "changes"
+    assert request["payload"]["kind"] == "design"
     assert request["payload"]["application_agent_id"] == "agent_research"
     assert request["payload"]["focus_id"] == "focus_research"
-    assert request["payload"]["options"]["mode"] == "code"
+    assert not {"scope", "mode", "code_scopes"} & request["payload"]["options"].keys()
     assert request["token"] == "browser-test-session"
     assert page.evaluate("window.sources[0].closed")
     assert page.evaluate("window.sources.at(-1).url") == "/api/projects/project_beta/events"
@@ -787,6 +786,64 @@ def test_connection_discovery_editing_and_project_isolation(webapp_page, tmp_pat
     playwright.expect(page.get_by_role("button", name="Edit", exact=True)).to_be_visible()
 
 
+def test_connections_only_render_the_selected_project_even_with_mixed_response(webapp_page):
+    page, fixture = webapp_page
+    connections = [
+        {
+            "id": "source_alpha",
+            "project_id": "project_alpha",
+            "name": "Alpha traces",
+            "provider": "braintrust",
+            "project": "remote-a",
+            "status": "connected",
+        },
+        {
+            "id": "source_beta",
+            "project_id": "project_beta",
+            "name": "Beta traces",
+            "provider": "langsmith",
+            "project": "remote-b",
+            "status": "connected",
+        },
+    ]
+    page.route("**/connections", lambda route: route.fulfill(json={"connections": connections}))
+    page.goto("http://127.0.0.1:8765/?view=settings&tab=connections")
+    playwright.expect(page.get_by_role("heading", name="Alpha traces", exact=True)).to_be_visible()
+    playwright.expect(page.get_by_text("Beta traces", exact=True)).to_have_count(0)
+    page.get_by_label("Project", exact=True).select_option("project_beta")
+    playwright.expect(page.get_by_role("heading", name="Beta traces", exact=True)).to_be_visible()
+    playwright.expect(page.get_by_text("Alpha traces", exact=True)).to_have_count(0)
+    assert fixture.mutations == []
+
+
+def test_refresh_loads_connections_after_selected_project_is_removed(webapp_page):
+    page, fixture = webapp_page
+    fixture.connections = [
+        {
+            "id": "source_beta",
+            "project_id": "project_beta",
+            "name": "Beta traces",
+            "provider": "langsmith",
+            "project": "remote-b",
+            "status": "connected",
+        },
+    ]
+    page.goto("http://127.0.0.1:8765/?view=settings&tab=connections")
+    playwright.expect(page.get_by_role("button", name="Add connection", exact=True)).to_be_visible()
+    fixture.projects = fixture.projects[1:]
+    page.route(
+        "**/api/projects",
+        lambda route: route.fulfill(
+            json={"projects": fixture.projects, "selected_project_id": "project_beta"}
+        ),
+    )
+    page.get_by_role("button", name="Refresh workspace", exact=True).click()
+    playwright.expect(page.get_by_label("Project", exact=True)).to_have_value("project_beta")
+    playwright.expect(page.get_by_role("heading", name="Beta traces", exact=True)).to_be_visible()
+    assert page.evaluate("window.sources.at(-1).url") == "/api/projects/project_beta/events"
+    assert fixture.mutations == []
+
+
 def test_connection_discovery_failure_and_empty_projects_are_actionable(webapp_page):
     page, fixture = webapp_page
     page.goto("http://127.0.0.1:8765/?view=settings")
@@ -926,15 +983,15 @@ def test_agent_authentication_and_cross_agent_model_selection(webapp_page):
     ]
     fixture.agent_settings["models"]["codex"] = "codex-saved-model"
     page.goto("http://127.0.0.1:8765/?agent=agent_support&view=overview")
-    page.get_by_role("button", name="Investigate", exact=True).click()
+    page.get_by_role("button", name="Propose measurements", exact=True).click()
     playwright.expect(
-        page.get_by_role("dialog").get_by_role("button", name="Start audit", exact=True)
+        page.get_by_role("dialog").get_by_role("button", name="Propose plan", exact=True)
     ).to_be_disabled()
     playwright.expect(page.get_by_text("Run codex login", exact=False)).to_be_visible()
     page.get_by_role("dialog").get_by_label("Coding agent", exact=True).select_option("claude")
     playwright.expect(page.get_by_label("Model", exact=True)).to_have_value("")
     playwright.expect(
-        page.get_by_role("dialog").get_by_role("button", name="Start audit", exact=True)
+        page.get_by_role("dialog").get_by_role("button", name="Propose plan", exact=True)
     ).to_be_enabled()
     page.get_by_role("button", name="Close dialog", exact=True).click()
     page.get_by_role("button", name="Settings", exact=True).click()
@@ -953,11 +1010,11 @@ def test_task_codex_default_overrides_saved_model(webapp_page):
     page, fixture = webapp_page
     fixture.agent_settings["models"]["codex"] = "codex-saved-model"
     page.goto("http://127.0.0.1:8765/?agent=agent_support&view=overview")
-    page.get_by_role("button", name="Investigate", exact=True).click()
+    page.get_by_role("button", name="Propose measurements", exact=True).click()
     model = page.get_by_role("dialog").get_by_label("Model", exact=True)
     playwright.expect(model).to_have_value("codex-saved-model")
     model.select_option(label="Codex default")
-    page.get_by_role("dialog").get_by_role("button", name="Start audit", exact=True).click()
+    page.get_by_role("dialog").get_by_role("button", name="Propose plan", exact=True).click()
     playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
     request = fixture.mutations[-1]
     assert request["path"] == "/api/projects/project_alpha/jobs"
@@ -966,12 +1023,12 @@ def test_task_codex_default_overrides_saved_model(webapp_page):
     assert fixture.agent_settings["models"]["codex"] == "codex-saved-model"
 
 
-def test_audit_issue_handoff_retains_issue_and_audit_identity(webapp_page):
+def test_saved_finding_handoff_retains_issue_and_audit_identity(webapp_page):
     page, fixture = webapp_page
     fixture.issues = [
         {"issue_id": "issue_one", "audit_id": "audit_parent", "title": "Incorrect tool selection"}
     ]
-    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=audit")
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=overview")
     page.get_by_role("button", name="Create eval", exact=True).click()
     page.get_by_role("button", name="Start eval", exact=True).click()
     playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
@@ -1142,21 +1199,20 @@ def test_agent_discovery_confirmation_focus_and_scoped_launch(webapp_page):
     playwright.expect(page.get_by_label("Current goal", exact=True)).to_have_value("focus_new")
     page.reload()
     playwright.expect(page.get_by_label("Current goal", exact=True)).to_have_value("focus_new")
-    page.get_by_role("button", name="Investigate", exact=True).click()
-    playwright.expect(page.get_by_label("Code paths", exact=True)).to_have_value(
-        "src/router, prompts/routing"
-    )
+    page.get_by_role("button", name="Propose measurements", exact=True).click()
+    playwright.expect(page.get_by_label("Code paths", exact=True)).to_have_count(0)
     playwright.expect(page.get_by_label("Goal", exact=True)).to_have_value(
         "Route simple requests within one second"
     )
     page.get_by_label("Model", exact=True).select_option(label="Saved GPT")
-    page.get_by_role("dialog").get_by_role("button", name="Start audit", exact=True).click()
+    page.get_by_role("dialog").get_by_role("button", name="Propose plan", exact=True).click()
     playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
     job = fixture.mutations[-1]["payload"]
     assert job["application_agent_id"] == "agent_suggested"
     assert job["focus_id"] == "focus_new"
     assert job["model"] == "codex-saved-model"
-    assert job["options"]["code_scopes"] == ["src/router", "prompts/routing"]
+    assert job["kind"] == "design"
+    assert "code_scopes" not in job["options"]
 
 
 def test_recent_trace_focus_requires_retained_evidence(webapp_page):
@@ -1382,11 +1438,13 @@ def test_real_service_browser_project_settings_import_and_scoped_approval(tmp_pa
             assert len(application.overview(second["id"])["datasets"]) == 1
             assert application.overview(first["id"])["datasets"] == []
 
-            page.get_by_role("button", name="Audit", exact=True).click()
-            page.get_by_role("button", name="New audit", exact=True).click()
+            page.get_by_role("button", name="Goals", exact=True).click()
+            page.get_by_role("button", name="Propose measurements", exact=True).click()
             page.get_by_label("Goal", exact=True).fill("Inspect answer behavior")
             page.get_by_label("Model", exact=True).select_option("test-model")
-            page.get_by_role("dialog").get_by_role("button", name="Start audit", exact=True).click()
+            page.get_by_role("dialog").get_by_role(
+                "button", name="Propose plan", exact=True
+            ).click()
             playwright.expect(
                 page.get_by_role("button", name="Approve", exact=True)
             ).to_be_visible()
@@ -1455,20 +1513,25 @@ def test_dataset_split_uses_development_input_and_keeps_final_cases_reserved(web
     playwright.expect(page.get_by_role("button", name="Create eval", exact=True)).to_have_count(0)
 
 
-def test_trace_only_agent_audit_cannot_silently_include_checkout_code(webapp_page):
+def test_trace_only_goal_proposal_uses_saved_trace_context(webapp_page):
     page, fixture = webapp_page
     fixture.application_agents["project_alpha"][0]["code_scopes"] = []
     fixture.traces = [{"id": "snapshot_trace", "name": "Support sample", "kind": "traces"}]
-    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=audit")
-    page.get_by_role("button", name="New audit", exact=True).click()
-    playwright.expect(page.get_by_label("Audit scope", exact=True)).to_have_value("traces")
-    playwright.expect(page.get_by_label("Code paths", exact=True)).not_to_be_visible()
-    page.get_by_label("Trace evidence", exact=True).select_option("snapshot_trace")
-    page.get_by_role("dialog").get_by_role("button", name="Start audit", exact=True).click()
+    fixture.focuses["agent_support"][0]["source"] = {
+        "kind": "recent_traces",
+        "trace_snapshot_id": "snapshot_trace",
+        "count": 100,
+    }
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=overview")
+    playwright.expect(page.get_by_role("button", name="Audit", exact=True)).to_have_count(0)
+    page.get_by_role("button", name="Propose measurements", exact=True).click()
+    playwright.expect(page.get_by_label("Code paths", exact=True)).to_have_count(0)
+    page.get_by_role("dialog").get_by_role("button", name="Propose plan", exact=True).click()
     playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
-    options = fixture.mutations[-1]["payload"]["options"]
-    assert options["scope"] == options["mode"] == "traces"
-    assert options["code_scopes"] == []
+    job = fixture.mutations[-1]["payload"]
+    assert job["kind"] == "design"
+    assert job["options"]["trace_snapshot_id"] == "snapshot_trace"
+    assert "code_scopes" not in job["options"]
 
 
 def measurement_proposal():
@@ -1915,3 +1978,143 @@ def test_each_verified_finalist_keeps_its_own_goal_measurements_and_behaviors(we
     playwright.expect(fourth).to_contain_text("Answers cite retained evidence · required · passed")
     playwright.expect(fourth).to_contain_text("quality · baseline delta · accepted")
     assert fixture.mutations == []
+
+
+def test_agent_panel_filters_activity_before_limiting_messages(webapp_page):
+    page, fixture = webapp_page
+    messages = [
+        {"type": "message", "text": f"Finding {index:02d}: retained evidence."}
+        for index in range(65)
+    ]
+    messages[5]["role"] = "reviewer"
+    progress = [{"type": "progress", "text": f"Running tool {index}"} for index in range(180)]
+    fixture.jobs["project_alpha"] = [
+        {
+            "id": "job_quiet",
+            "project_id": "project_alpha",
+            "kind": "eval",
+            "goal": "Prepare the accepted measurement",
+            "agent": "codex",
+            "state": "running",
+            "events": messages
+            + progress
+            + [
+                {"type": "session", "text": "Native session started"},
+                {"type": "reflection_session", "text": "Reflection session started"},
+            ],
+        }
+    ]
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=overview&job=job_quiet")
+    events = page.locator("#agent-content .event")
+    playwright.expect(events).to_have_count(60)
+    playwright.expect(events.first).to_contain_text("Reviewer · message")
+    playwright.expect(events.first).to_contain_text("Finding 05: retained evidence.")
+    playwright.expect(events.last).to_contain_text("Finding 64: retained evidence.")
+    panel = page.locator("#agent-panel")
+    playwright.expect(panel).not_to_contain_text("Running tool")
+    playwright.expect(panel).not_to_contain_text("session started")
+    # Filtering is presentation only; the source records remain intact.
+    assert fixture.jobs["project_alpha"][0]["events"] == messages + progress + [
+        {"type": "session", "text": "Native session started"},
+        {"type": "reflection_session", "text": "Reflection session started"},
+    ]
+    assert fixture.mutations == []
+
+
+@pytest.mark.parametrize(
+    ("job_state", "label"),
+    [
+        ("running", "running"),
+        ("queued", "waiting"),
+        ("paused", "paused"),
+        ("needs_input", "needs input"),
+        ("interrupted", "interrupted"),
+        ("completed", "completed"),
+        ("completed_with_limits", "completed with limits"),
+        ("failed", "failed"),
+        ("cancelled", "cancelled"),
+    ],
+)
+def test_agent_activity_indicator_matches_task_state(webapp_page, job_state, label):
+    page, fixture = webapp_page
+    page.emulate_media(reduced_motion="no-preference")
+    fixture.jobs["project_alpha"] = [
+        {
+            "id": "job_activity",
+            "project_id": "project_alpha",
+            "kind": "eval",
+            "goal": "Prepare the accepted measurement",
+            "agent": "codex",
+            "state": job_state,
+            "events": [{"type": "progress", "text": "Completed a tool call"}],
+        }
+    ]
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=overview&job=job_activity")
+    activity = page.locator("#agent-activity")
+    playwright.expect(activity).to_have_attribute("role", "status")
+    playwright.expect(activity).to_have_attribute("aria-live", "polite")
+    playwright.expect(activity).to_have_attribute("aria-atomic", "true")
+    playwright.expect(activity).to_have_text(label)
+    spinner = page.locator("#agent-spinner")
+    playwright.expect(spinner).to_have_attribute("aria-hidden", "true")
+    if job_state == "running":
+        playwright.expect(spinner).to_be_visible()
+        assert spinner.evaluate("node => getComputedStyle(node).animationName") == "agent-spin"
+        page.emulate_media(reduced_motion="reduce")
+        assert spinner.evaluate("node => getComputedStyle(node).animationName") == "none"
+        playwright.expect(activity).to_have_text("running")
+    else:
+        playwright.expect(spinner).to_be_hidden()
+        assert spinner.evaluate("node => getComputedStyle(node).animationName") == "none"
+    playwright.expect(page.locator("#agent-content .event")).to_have_count(0)
+
+
+@pytest.mark.parametrize("question_kind", ["question", "approval"])
+def test_agent_decisions_and_failures_remain_visible_without_progress(webapp_page, question_kind):
+    page, fixture = webapp_page
+    job = {
+        "id": "job_decision",
+        "project_id": "project_alpha",
+        "application_agent_id": "agent_support",
+        "kind": "eval",
+        "goal": "Prepare the accepted measurement",
+        "agent": "codex",
+        "state": "needs_input",
+        "events": [
+            {"type": "message", "text": "The reference cases need your review."},
+            {"type": "progress", "text": "Running a local command"},
+        ],
+        "question": {
+            "id": "question_retained",
+            "kind": question_kind,
+            "text": "Use the reviewed reference cases?",
+        },
+    }
+    fixture.jobs["project_alpha"] = [job]
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=overview&job=job_decision")
+    panel = page.locator("#agent-panel")
+    playwright.expect(panel).to_contain_text("The reference cases need your review.")
+    playwright.expect(panel).to_contain_text("Use the reviewed reference cases?")
+    playwright.expect(panel).not_to_contain_text("Running a local command")
+    playwright.expect(page.locator("#agent-spinner")).to_be_hidden()
+    action = "Approve" if question_kind == "approval" else "Send answer"
+    playwright.expect(panel.get_by_role("button", name=action, exact=True)).to_be_visible()
+
+    job.update(
+        state="failed",
+        question=None,
+        next_action="Repair the missing evaluator command, then resume.",
+        result={"state": "failed", "reason": "The evaluator could not start."},
+        events=[
+            {"type": "message", "text": "The evaluator command was unavailable."},
+            {"type": "progress", "text": "Checking tool status"},
+        ],
+    )
+    page.evaluate("job => window.sources.at(-1).listeners.update({data: JSON.stringify(job)})", job)
+    playwright.expect(panel).to_contain_text("The evaluator command was unavailable.")
+    playwright.expect(panel).to_contain_text("Repair the missing evaluator command, then resume.")
+    playwright.expect(panel).not_to_contain_text("Checking tool status")
+    playwright.expect(page.locator("#agent-spinner")).to_be_hidden()
+    panel.get_by_text("Task result", exact=True).click()
+    playwright.expect(panel).to_contain_text("The evaluator could not start.")
+    playwright.expect(panel.get_by_role("button", name="Resume task", exact=True)).to_be_visible()

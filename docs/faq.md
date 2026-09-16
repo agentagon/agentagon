@@ -2,7 +2,7 @@
 
 ## Is Agentagon a model or an agent framework?
 
-No. It is a CLI and coding-host plugin for reviewing and improving an existing agent application. Your Codex or Claude Code session provides reasoning and code changes. Agentagon captures evidence, executes declared checks, and retains comparisons.
+No. It is a local web app with CLI commands and optional coding-host skills for improving an existing agent application. Managed Codex or Claude sessions provide reasoning and code changes. Agentagon captures evidence, executes declared checks, and retains comparisons.
 
 It does not replace your application’s agent framework, production runtime, or trace collector.
 
@@ -30,7 +30,7 @@ It can inspect permitted textual prompt files and prompt construction in the sel
 
 ## Do I need production traces?
 
-No. Start with code-only audit or review. Traces can supply runtime evidence when you have compatible exports and permission to inspect them. Selected traces are a sample; they do not automatically establish production-wide rates.
+No. Start with a goal based on requirements, code or existing tests, then agree on its measurement plan. Traces can supply runtime evidence when you have compatible exports or a project connection and permission to inspect them. Selected traces are a sample; they do not automatically establish production-wide rates.
 
 ## Is it fully local or offline?
 
@@ -38,7 +38,7 @@ The bundled synthetic example needs no network after installation. Evidence is s
 
 ## Does it keep running when I close the coding agent?
 
-There is no independent reasoning supervisor. Work requiring the host waits for it. Saved reservations and evidence support resumption. Native continuation hooks depend on the host’s capabilities and trust settings; unsupported callbacks require manual resume.
+The web app owns its managed coding-agent sessions. Closing the browser leaves tasks running while the local service stays open. Stopping the service interrupts work; resume it explicitly after restarting. Optional skill workflows depend on their coding host, and saved evidence supports resumption there. See [task lifecycle](app.md#keep-or-resume-work).
 
 ## Does a verified candidate mean the application is safe to deploy?
 
@@ -62,4 +62,4 @@ You choose among verified alternatives. Agentagon can prepare the selected chang
 
 ## Where should I start?
 
-[Install Agentagon](getting-started/install.md), then follow [Your first audit](getting-started/first-audit.md). If you want to inspect the local evidence format first, use the [synthetic example](getting-started/local-example.md).
+[Install Agentagon](getting-started/install.md), then [open the web app](app.md), select an application agent and define a goal. Review its measurement plan before preparing an evaluation and baseline. [Audit](audit.md) remains available through the CLI and optional skills for separate investigations. To inspect the local evidence format first, use the [synthetic example](getting-started/local-example.md).

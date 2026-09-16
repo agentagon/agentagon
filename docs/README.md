@@ -19,7 +19,7 @@ hide:
 
 Agentagon helps you **inspect and improve AI agents with measured fixes and custom scores**. Agree on behaviors and scoring, prepare reusable evals to establish a baseline, and compare independently verified improvements.
 
-Open the [local web app](app.md) to connect your coding agent and trace providers, inspect behavior, prepare evaluations and compare fixes. Skills and CLI subcommands remain available.
+Open the [local web app](app.md) to connect your coding agent, define a goal, agree on its measurements and compare fixes. Trace providers are optional. Skills and CLI subcommands remain available.
 
 </div>
 
@@ -34,7 +34,8 @@ For a seeded example using an actual model, follow the [ticket-retry demonstrati
 
 1. **Install** Agentagon and run `agentagon` from your AI agent's project directory.
 2. **Configure a coding agent in Settings** and optionally connect Braintrust, LangSmith or Langfuse for traces and datasets.
-3. **Choose Audit, Eval or Fix**, then review evidence, questions and results in the browser.
+3. **Select an application agent and add a goal.** Review and accept its measurement plan, including expected behaviors, scores and required checks.
+4. **Prepare an Eval and run its baseline**, then use **Fix** to compare improvements. Review evidence, questions and results in the browser.
 
 <span id="before-you-begin"></span>
 
@@ -53,12 +54,12 @@ The [web app guide](app.md) covers project switching, connections and task resum
 
 | You want to | Start with | What you get |
 |---|---|---|
-| Inspect agent behavior and find failures | [Audit](audit.md) | Evidence-backed findings from code and execution traces. |
+| Decide what to improve and how to measure it | [Goals and measurement plans](app.md#select-an-application-agent-and-focus) | Accepted behaviors, scores, required checks and evaluation choices. |
 | Improve saved goals or a named issue | [Fix](fix.md) | Bounded optimization, verified winner and alternatives, draft PR or local delivery. |
 | Define behaviors, custom scores and evals | [Eval](eval.md) | Accepted expectations, scoring and limits, reviewed evaluations and reusable benchmarks. |
 | Inspect history, rerun or manage settings | [Web app](app.md) | Project results, baselines, connections and managed coding-agent tasks. |
 
-[Init](init.md) remains available through the optional skills. The existing [dashboard](dashboard.md) remains a checkout viewer with read-only defaults. [Setup](settings.md), independent review and [delivery](delivery.md) support these workflows. [Intelligence](intelligence.md) requires its own consent before outgoing requests unless you explicitly enable full access.
+[Audit](audit.md) remains available through the CLI and optional skills for a separate investigation; it is not a required step in the web-app journey. Existing audits and saved findings remain available as evidence. [Init](init.md) also remains available through the optional skills. The existing [dashboard](dashboard.md) remains a checkout viewer with read-only defaults. [Setup](settings.md), independent review and [delivery](delivery.md) support these workflows. [Intelligence](intelligence.md) requires its own consent before outgoing requests unless you explicitly enable full access.
 
 ## What runs where?
 

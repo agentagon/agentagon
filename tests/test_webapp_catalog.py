@@ -36,7 +36,7 @@ def test_discovery_is_explicit_bounded_and_preserves_confirmed_identity(app, tmp
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root
     (root / "app.py").write_text(
-        'support = Agent(name="Support")\nresearch = Agent(name="Research")\nraise RuntimeError("never execute discovery")\n'
+        'from agents import Agent\nsupport = Agent(name="Support")\nresearch = Agent(name="Research")\nraise RuntimeError("never execute discovery")\n'
     )
     assert app.application_agents(saved["id"]) == {"agents": []}
     discovered = app.catalog.discover(saved["id"])
@@ -351,3 +351,368 @@ def test_focused_request_replay_keeps_original_binding_after_agent_edits(
     with pytest.raises(AuditError, match="different"):
         app.submit_job(saved["id"], {**request, "goal": "Changed request"})
     assert len(app.jobs.list(saved["id"])) == 1
+
+
+@pytest.mark.parametrize(
+    ("filename", "source", "names"),
+    [
+        (
+            "app.py",
+            'from agents import Agent as OpenAIAgent\nprompt = "Do not edit the source"\nagent = OpenAIAgent(name="Support")',
+            ["Support"],
+        ),
+        (
+            "app.py",
+            'import pydantic_ai as ai\nagent = ai.Agent[Dependencies, str]("model", name="Research")',
+            ["Research"],
+        ),
+        (
+            "app.py",
+            "from langchain.agents import create_agent as create\nagent = create()",
+            ["agent"],
+        ),
+        (
+            "app.py",
+            "from langgraph.graph import StateGraph as Graph\ngraph = Graph(dict)\nrouter = graph.compile()",
+            ["router"],
+        ),
+        (
+            "app.py",
+            'import agents\ndef support():\n    agent = agents.Agent(name="Support")\ndef research():\n    agent = agents.Agent(name="Research")',
+            ["Research", "Support"],
+        ),
+        (
+            "app.ts",
+            'import { Agent as OpenAIAgent } from "@openai/agents";\nconst agent = new OpenAIAgent<Context>({name: "Support"});',
+            ["Support"],
+        ),
+        (
+            "app.js",
+            'import * as sdk from "@openai/agents";\nconst agent = new sdk.Agent({name: "Support"});',
+            ["Support"],
+        ),
+        (
+            "app.ts",
+            'import { createReactAgent as create } from "@langchain/langgraph/prebuilt";\nconst agent = create({});',
+            ["agent"],
+        ),
+        (
+            "app.js",
+            'import { StateGraph as Graph } from "@langchain/langgraph";\nconst graph = new Graph({});\nconst router = graph.compile();',
+            ["router"],
+        ),
+        (
+            "app.cjs",
+            'const { Agent: OpenAIAgent } = require("@openai/agents");\nconst agent = new OpenAIAgent({name: "Support"});',
+            ["Support"],
+        ),
+        (
+            "app.cjs",
+            'const sdk = require("@openai/agents");\nconst agent = new sdk.Agent({name: "Support"});',
+            ["Support"],
+        ),
+    ],
+)
+def test_discovery_recognizes_imported_frameworks_and_aliases(
+    app, tmp_path, filename, source, names
+):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    (root / filename).write_text(source + "\nthrow_if_executed()\n")
+    result = app.catalog.discover(saved["id"])
+    assert sorted(agent["name"] for agent in result["agents"]) == names
+    for candidate in result["agents"]:
+        assert candidate["evidence"][0]["kind"] == "code"
+        assert candidate["evidence"][0]["path"] == filename
+        assert candidate["evidence"][0]["line"] >= 2
+        assert candidate["evidence"][0]["call"]
+    assert app.catalog.discover(saved["id"])["agents"] == result["agents"]
+    assert not (root / ".agentagon").exists()
+
+
+@pytest.mark.parametrize(
+    ("filename", "source"),
+    [
+        (
+            "app.py",
+            'agent = Agent(name="Unresolved")\nworkflow = Workflow()\napp = compiler.compile()',
+        ),
+        ("app.py", "from unrelated import Agent, Workflow\nagent = Agent()\nflow = Workflow()"),
+        ("app.py", "from .agents import Agent\nagent = Agent()"),
+        (
+            "app.py",
+            'from agents import Agent\ndef build(Agent):\n    agent = Agent(name="Shadowed")',
+        ),
+        (
+            "app.py",
+            'from agents import Agent\ndef build():\n    from .local import Agent\n    bot = Agent(name="Local utility")',
+        ),
+        ("app.py", "from agents import Agent\nclass Agent:\n    pass\nagent = Agent()"),
+        ("app.py", "import agents as sdk\nsdk = unrelated\nagent = sdk.Agent()"),
+        ("app.py", 'from agents import Agent\n# agent = Agent()\ndoc = "agent = Agent()"'),
+        (
+            "app.ts",
+            'import { Agent, Workflow } from "unrelated";\nconst agent = new Agent();\nconst flow = new Workflow();',
+        ),
+        ("app.ts", 'import { Agent } from "./agents";\nconst agent = new Agent();'),
+        ("app.ts", 'import type { Agent } from "@openai/agents";\nconst agent = new Agent();'),
+        (
+            "app.ts",
+            'import { Agent } from "@openai/agents";\nfunction build(Agent) { const agent = new Agent(); }',
+        ),
+        (
+            "app.ts",
+            'import { Agent } from "@openai/agents";\nconst build = Agent => { const agent = new Agent(); };',
+        ),
+        (
+            "app.js",
+            'import { Agent } from "@openai/agents";\n// const commented = new Agent();\nconst text = "const quoted = new Agent();";\nconst template = `const templated = new Agent();`;\n/* const blocked = new Agent(); */',
+        ),
+        (
+            "app.js",
+            'const text = `import { Agent } from "@openai/agents";`;\nconst agent = new Agent();',
+        ),
+        (
+            "app.js",
+            'import { compile } from "unrelated";\nconst agent = compile();\nconst other = workflow.compile();',
+        ),
+    ],
+)
+def test_discovery_rejects_unrelated_shadowed_and_noncode_calls(app, tmp_path, filename, source):
+    saved = project(app, tmp_path)
+    (app.state.workspace(saved["id"]).root / filename).write_text(source)
+    assert app.catalog.discover(saved["id"])["agents"] == []
+
+
+def test_discovery_excludes_non_application_paths_at_any_depth_and_saved_suggestions(app, tmp_path):
+    from agentagon.core.records import digest
+
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    excluded = [
+        "docs/archive/references/openai/examples/model_providers/litellm_auto.py",
+        "src/docs/agent.py",
+        "src/tests/agent.py",
+        "src/example/agent.py",
+        "src/vendor/agent.py",
+        "src/third_party/agent.py",
+        "src/generated/agent.py",
+        "src/node_modules/agent.js",
+        "src/__tests__/agent.ts",
+        "src/test_agents.py",
+        "src/agents_test.py",
+        "src/agent.test.ts",
+        "src/agent.spec.tsx",
+        "src/example_agent.py",
+        "src/agent_example.py",
+        "src/demoAgent.ts",
+        "src/agent.generated.py",
+        "src/agent.min.js",
+        "src/fixtures/agent.py",
+    ]
+    for relative in excluded:
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('from agents import Agent\nagent = Agent(name="Assistant")')
+    automatic = app.catalog.save_agent(
+        saved["id"],
+        {
+            "name": "Old automatic example",
+            "code_scopes": [excluded[0]],
+            "status": "suggested",
+        },
+        suggestion={
+            "discovery_key": digest(excluded[0]),
+            "evidence": [{"kind": "code", "path": excluded[0]}],
+        },
+    )
+    manual = app.catalog.save_agent(
+        saved["id"], {"name": "Manual example", "code_scopes": [excluded[0]], "status": "suggested"}
+    )
+    confirmed = app.catalog.save_agent(
+        saved["id"],
+        {"name": "Confirmed example", "code_scopes": [excluded[0]]},
+        suggestion={"discovery_key": digest("confirmed")},
+    )
+    assert {item["id"] for item in app.catalog.agents(saved["id"])} == {
+        manual["id"],
+        confirmed["id"],
+    }
+    result = app.catalog.discover(saved["id"])
+    assert {item["id"] for item in result["agents"]} == {manual["id"], confirmed["id"]}
+    assert result["discovered"] == 0
+    assert app.catalog.agent(saved["id"], automatic["id"])["status"] == "suggested"
+    assert "excluded" in " ".join(result["limitations"])
+
+
+def test_discovery_is_bounded_and_skips_generated_symlink_and_local_framework_shadow(
+    app, tmp_path, monkeypatch
+):
+    from agentagon.webapp import discovery
+
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    source = 'from agents import Agent\nagent = Agent(name="Support")'
+    (root / "app.py").write_text(source)
+    (root / "agents.py").write_text("class Agent: pass\n")
+    assert app.catalog.discover(saved["id"])["agents"] == []
+    (root / "agents.py").unlink()
+    (root / "app.py").write_text("# @generated; do not edit\n" + source)
+    outside = tmp_path / "outside.py"
+    outside.write_text(source)
+    (root / "linked.py").symlink_to(outside)
+    (root / "large.py").write_text(" " * (discovery.MAX_FILE_BYTES + 1) + source)
+    assert app.catalog.discover(saved["id"])["agents"] == []
+    (root / "app.py").write_text(source)
+    (root / "second.py").write_text(source)
+    monkeypatch.setattr(discovery, "MAX_FILES", 1)
+    result = app.catalog.discover(saved["id"])
+    assert len(result["agents"]) == 1
+    assert result["scanned_files"] == 1
+    assert any("limit reached" in value for value in result["limitations"])
+    assert not (root / ".agentagon").exists()
+
+
+@pytest.mark.parametrize("bound_code", [True, False])
+def test_discovery_deduplicates_traces_only_with_matching_identity_provenance(
+    app, tmp_path, bound_code
+):
+    saved = project(app, tmp_path)
+    workspace = app.state.workspace(saved["id"])
+    workspace.initialize()
+    (workspace.root / "app.py").write_text(
+        'from agents import Agent\nsupport = Agent(name="Support")'
+    )
+    metadata = {"agent_name": "Support", **({"code_path": "app.py"} if bound_code else {})}
+    for connection in ("a", "a", "b"):
+        snapshots.save(
+            workspace,
+            saved["id"],
+            {
+                "kind": "traces",
+                "connection_id": "connection_" + connection * 24,
+                "selection": {"project": "remote"},
+                "provenance": {"provider": "braintrust"},
+                "completeness": {"complete": True},
+                "items": [{"metadata": metadata}, {"metadata": metadata}],
+            },
+        )
+    first = app.catalog.discover(saved["id"])
+    assert len(first["agents"]) == (2 if bound_code else 3)
+    code = next(item for item in first["agents"] if item["code_scopes"])
+    assert bool(code["trace_selector"]) is bound_code
+    assert {
+        item["trace_selector"]["connection_id"]
+        for item in first["agents"]
+        if item["trace_selector"]
+    } == {"connection_" + "a" * 24, "connection_" + "b" * 24}
+    assert app.catalog.discover(saved["id"])["agents"] == first["agents"]
+
+
+def test_existing_generated_suggestions_are_hidden_without_changing_manual_agents(app, tmp_path):
+    from agentagon.core.records import digest
+
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    (root / "app.py").write_text(
+        '# @generated; do not edit\nfrom agents import Agent\nagent = Agent(name="Generated")'
+    )
+    automated = app.catalog.save_agent(
+        saved["id"],
+        {"name": "Generated", "code_scopes": ["app.py"], "status": "suggested"},
+        suggestion={"discovery_key": digest("generated")},
+    )
+    manual = agent(app, saved, name="Manual", status="suggested")
+    confirmed = app.catalog.save_agent(
+        saved["id"],
+        {"name": "Confirmed", "code_scopes": ["app.py"]},
+        suggestion={"discovery_key": digest("confirmed")},
+    )
+    assert {value["id"] for value in app.catalog.agents(saved["id"])} == {
+        manual["id"],
+        confirmed["id"],
+    }
+    assert {value["id"] for value in app.catalog.discover(saved["id"])["agents"]} == {
+        manual["id"],
+        confirmed["id"],
+    }
+    assert app.catalog.agent(saved["id"], automated["id"])["status"] == "suggested"
+
+
+def test_discovery_bounds_import_reads_before_loading_and_verifies_selected_records(
+    app, tmp_path, monkeypatch
+):
+    from agentagon.webapp import catalog
+
+    saved = project(app, tmp_path)
+    workspace = app.state.workspace(saved["id"])
+    workspace.initialize()
+    for index in range(3):
+        snapshots.save(
+            workspace,
+            saved["id"],
+            {
+                "kind": "dataset",
+                "connection_id": "connection_" + "a" * 24,
+                "selection": {"dataset_id": str(index)},
+                "provenance": {"provider": "braintrust"},
+                "completeness": {"complete": True},
+                "items": [{"input": "case"}],
+            },
+        )
+    loaded = []
+    load = snapshots.load
+
+    def tracked_load(workspace, snapshot_id):
+        loaded.append(snapshot_id)
+        return load(workspace, snapshot_id)
+
+    monkeypatch.setattr(snapshots, "load", tracked_load)
+    monkeypatch.setattr(
+        snapshots, "list_snapshots", lambda _: pytest.fail("must not eagerly load all imports")
+    )
+    monkeypatch.setattr(catalog, "MAX_DISCOVERY_IMPORTS", 2)
+    result = app.catalog.discover(saved["id"])
+    assert len(loaded) == result["coverage"]["import_snapshots"] == 2
+    assert result["coverage"]["trace_snapshots"] == 0
+    assert any("Imported-trace scan limit" in value for value in result["limitations"])
+    loaded.clear()
+    monkeypatch.setattr(catalog, "MAX_DISCOVERY_IMPORT_BYTES", 1)
+    result = app.catalog.discover(saved["id"])
+    assert loaded == []
+    assert any("byte limit" in value for value in result["limitations"])
+
+
+def test_saved_automatic_suggestions_do_not_read_symlinks_or_outside_source(
+    app, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from agentagon.core.records import digest
+
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    outside = tmp_path / "outside.py"
+    outside.write_text('from agents import Agent\nagent = Agent(name="Private")')
+    (root / "linked.py").symlink_to(outside)
+    directory = tmp_path / "outside-directory"
+    directory.mkdir()
+    (directory / "agent.py").write_text(outside.read_text())
+    (root / "linked-directory").symlink_to(directory, target_is_directory=True)
+
+    def refuse_read(*_args, **_kwargs):
+        pytest.fail("ineligible source must not be opened")
+
+    for index, source in enumerate(
+        ("linked.py", "linked-directory/agent.py", "../outside.py", "missing.py")
+    ):
+        candidate = agent(app, saved, name=f"Old suggestion {index}", status="suggested")
+        app.state.db.put_record(
+            saved["id"],
+            "application_agents",
+            candidate["id"],
+            {**candidate, "discovery_key": digest(source), "code_scopes": [source]},
+        )
+    # Missing sources fail stat before open; no outside content may be read.
+    monkeypatch.setattr(Path, "open", refuse_read)
+    assert app.catalog.agents(saved["id"]) == []

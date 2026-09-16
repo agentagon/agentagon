@@ -1,17 +1,14 @@
 """Confirmed application agents, versioned focuses and retained measurement suites."""
 
-import ast
 import copy
 import math
-import os
-import re
 import uuid
 from pathlib import Path
 
 from agentagon.core.records import AuditError, digest, now
 from agentagon.experiments.spec import path as relative_path
-from agentagon.webapp import snapshots
-from agentagon.webapp.state import identifier
+from agentagon.webapp import discovery, snapshots
+from agentagon.webapp.state import identifier, private_directory
 
 FOCUSES = {
     "correctness": "Task success and correctness",
@@ -25,14 +22,8 @@ FOCUSES = {
     "custom": "Custom objective",
 }
 EXCLUDED = {".git", ".agentagon", ".venv", "venv", "node_modules", "__pycache__", "dist", "build"}
-AGENT_CALLS = {
-    "Agent",
-    "create_agent",
-    "create_react_agent",
-    "StateGraph",
-    "AgentExecutor",
-    "Workflow",
-}
+MAX_DISCOVERY_IMPORTS = 50
+MAX_DISCOVERY_IMPORT_BYTES = 20_000_000
 
 
 def _id(prefix):
@@ -92,9 +83,25 @@ class Catalog:
         self.state = state
 
     def agents(self, project_id):
-        self.state.project(project_id)
+        root = Path(self.state.project(project_id)["path"])
+        eligibility = {}
+
+        def eligible(path):
+            if path not in eligibility:
+                eligibility[path] = discovery.eligible_suggestion(root, path)
+            return eligibility[path]
+
         return sorted(
-            self.state.db.list_records(project_id, "application_agents"),
+            (
+                agent
+                for agent in self.state.db.list_records(project_id, "application_agents")
+                if not (
+                    agent["status"] == "suggested"
+                    and agent.get("discovery_key")
+                    and agent["code_scopes"]
+                    and not any(eligible(path) for path in agent["code_scopes"])
+                )
+            ),
             key=lambda a: (a["status"] != "confirmed", a["name"].lower()),
         )
 
@@ -164,119 +171,121 @@ class Catalog:
 
     def discover(self, project_id):
         workspace = self.state.workspace(project_id)
-        existing = {a.get("discovery_key"): a for a in self.agents(project_id)}
-        found = []
-        scanned, limited = 0, False
-        for directory, dirs, files in os.walk(workspace.root, followlinks=False):
-            dirs[:] = sorted(
-                d
-                for d in dirs
-                if d not in EXCLUDED
-                and not d.startswith(".")
-                and not (Path(directory) / d).is_symlink()
-            )
-            for filename in sorted(files):
-                file = Path(directory) / filename
-                if file.suffix not in {".py", ".js", ".ts", ".tsx", ".jsx"} or file.is_symlink():
-                    continue
-                scanned += 1
-                if scanned > 1500:
-                    limited = True
-                    break
-                if file.stat().st_size > 500_000:
-                    continue
-                source = file.read_text(errors="replace")
-                relative = file.relative_to(workspace.root).as_posix()
-                candidates = []
-                if file.suffix == ".py":
-                    try:
-                        tree = ast.parse(source)
-                    except (SyntaxError, ValueError):
-                        continue
-                    for node in ast.walk(tree):
-                        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or not isinstance(
-                            node.value, ast.Call
-                        ):
-                            continue
-                        func = node.value.func
-                        call = (
-                            func.id
-                            if isinstance(func, ast.Name)
-                            else func.attr
-                            if isinstance(func, ast.Attribute)
-                            else ""
-                        )
-                        if call not in AGENT_CALLS:
-                            continue
-                        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                        symbol = next((v.id for v in targets if isinstance(v, ast.Name)), "agent")
-                        name = next(
-                            (
-                                k.value.value
-                                for k in node.value.keywords
-                                if k.arg == "name"
-                                and isinstance(k.value, ast.Constant)
-                                and isinstance(k.value.value, str)
-                            ),
-                            symbol,
-                        )
-                        candidates.append((name[:160], symbol, node.lineno, call))
-                else:
-                    pattern = r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:new\s+)?(?:\w+\.)?(Agent|createAgent|createReactAgent|StateGraph|Workflow)\s*\("
-                    for match in re.finditer(pattern, source):
-                        candidates.append(
-                            (match[1], match[1], source[: match.start()].count("\n") + 1, match[2])
-                        )
-                for name, symbol, line, call in candidates:
-                    key = digest({"path": relative, "symbol": symbol})
-                    if key in existing:
-                        found.append(existing[key])
-                        continue
-                    candidate = self.save_agent(
-                        project_id,
-                        {
-                            "name": name,
-                            "description": f"Discovered {call} entrypoint in {relative}. Confirm its code and trace boundaries.",
-                            "code_scopes": [relative],
-                            "status": "suggested",
-                        },
-                        suggestion={
-                            "discovery_key": key,
-                            "confidence": "suggested",
-                            "evidence": [
-                                {"kind": "code", "path": relative, "line": line, "symbol": symbol}
-                            ],
-                        },
+        existing = {
+            a.get("discovery_key"): a for a in self.agents(project_id) if a.get("discovery_key")
+        }
+        found = {}
+        candidates, coverage, limits = discovery.scan(workspace.root)
+        for entry in candidates:
+            key = digest({"path": entry["path"], "symbol": entry["symbol"]})
+            if key not in existing:
+                # A manual code binding already represents this exact file and name.
+                matches = [
+                    a
+                    for a in self.agents(project_id)
+                    if not a.get("discovery_key")
+                    and a["name"] == entry["name"]
+                    and a["code_scopes"] == [entry["path"]]
+                ]
+                if (
+                    len(matches) == 1
+                    and sum(
+                        e["name"] == entry["name"] and e["path"] == entry["path"]
+                        for e in candidates
                     )
-                    existing[key] = candidate
-                    found.append(candidate)
-            if limited:
+                    == 1
+                ):
+                    found[matches[0]["id"]] = matches[0]
+                    continue
+                existing[key] = self.save_agent(
+                    project_id,
+                    {
+                        "name": entry["name"],
+                        "description": f"Discovered {entry['call']} entrypoint in {entry['path']}. Confirm its code and trace boundaries.",
+                        "code_scopes": [entry["path"]],
+                        "status": "suggested",
+                    },
+                    suggestion={
+                        "discovery_key": key,
+                        "confidence": "suggested",
+                        "evidence": [{"kind": "code", **entry}],
+                    },
+                )
+            found[existing[key]["id"]] = existing[key]
+        trace_items = 0
+        trace_snapshots = 0
+        import_count, import_bytes = 0, 0
+        for path in private_directory(workspace, "imports").glob("snapshot_*.json"):
+            if (
+                import_count >= MAX_DISCOVERY_IMPORTS
+                or trace_items >= 5000
+                or len(found) >= discovery.MAX_CANDIDATES
+            ):
+                limits.append("Imported-trace scan limit reached; add remaining agents manually.")
                 break
-        for summary in snapshots.list_snapshots(workspace):
-            if summary["kind"] != "traces":
+            if path.is_symlink():
                 continue
-            record = snapshots.load(workspace, summary["id"])
+            size = path.stat().st_size
+            if import_bytes + size > MAX_DISCOVERY_IMPORT_BYTES:
+                limits.append("Imported-trace byte limit reached; add remaining agents manually.")
+                break
+            import_count += 1
+            import_bytes += size
+            record = snapshots.load(workspace, path.stem)
+            if record["kind"] != "traces":
+                continue
+            trace_snapshots += 1
             for item in record["items"]:
+                if trace_items >= 5000 or len(found) >= discovery.MAX_CANDIDATES:
+                    break
+                trace_items += 1
                 metadata = item.get("metadata", {})
                 if not isinstance(metadata, dict):
                     metadata = {}
                 name = metadata.get("agent_name") or item.get("agent_name")
                 if not isinstance(name, str) or not name.strip():
                     continue
+                name = name.strip()[:160]
                 selector = {
                     "connection_id": record["connection_id"],
-                    "name": name[:160],
-                    "filters": {"agent_name": name[:160]},
+                    "name": name,
+                    "filters": {"agent_name": name},
                 }
-                provider_project = record["selection"].get("project")
-                if provider_project:
-                    selector["project"] = provider_project
+                if record["selection"].get("project"):
+                    selector["project"] = record["selection"]["project"]
                 key = digest(selector)
-                if key not in existing:
-                    existing[key] = self.save_agent(
+                if key in existing:
+                    found[existing[key]["id"]] = existing[key]
+                    continue
+                evidence = {"kind": "traces", "snapshot_id": record["id"]}
+                matches = [
+                    a
+                    for a in self.agents(project_id)
+                    if a["name"] == name
+                    and (
+                        a["trace_selector"] == selector
+                        or (
+                            not a["trace_selector"]
+                            and a["status"] == "suggested"
+                            and a.get("discovery_key")
+                            and metadata.get("code_path") in a["code_scopes"]
+                        )
+                    )
+                ]
+                if len(matches) == 1:
+                    candidate = matches[0]
+                    if candidate["status"] == "suggested" and not candidate["trace_selector"]:
+                        candidate = self.save_agent(
+                            project_id,
+                            {"trace_selector": selector},
+                            candidate["id"],
+                            suggestion={"evidence": [*candidate["evidence"], evidence]},
+                        )
+                else:
+                    candidate = self.save_agent(
                         project_id,
                         {
-                            "name": name[:160],
+                            "name": name,
                             "description": "Discovered in imported traces. Confirm its code binding and trace selector.",
                             "trace_selector": selector,
                             "status": "suggested",
@@ -284,23 +293,33 @@ class Catalog:
                         suggestion={
                             "discovery_key": key,
                             "confidence": "suggested",
-                            "evidence": [{"kind": "traces", "snapshot_id": record["id"]}],
+                            "evidence": [evidence],
                         },
                     )
-                    found.append(existing[key])
+                existing[key] = candidate
+                found[candidate["id"]] = candidate
+        if trace_items >= 5000 and not any("Imported-trace" in limit for limit in limits):
+            limits.append("Imported-trace scan limit reached; add remaining agents manually.")
         return {
             "agents": self.agents(project_id),
-            "discovered": len({a["id"] for a in found}),
-            "scanned_files": min(scanned, 1500),
+            "discovered": len(found),
+            "scanned_files": coverage["scanned_files"],
+            "coverage": {
+                **coverage,
+                "import_snapshots": import_count,
+                "import_bytes": import_bytes,
+                "trace_snapshots": trace_snapshots,
+                "trace_items": trace_items,
+            },
             "limitations": [
-                "Discovery is a bounded code and imported-trace scan; confirm suggestions or add an agent manually.",
+                "Discovery only recognizes supported framework imports and imported trace identities. Confirm suggestions or add an agent manually.",
+                "Documentation, examples, tests, dependencies and generated code are excluded. Dynamic factories, re-exports and ambiguous JavaScript bindings may be missed.",
                 *(
-                    [
-                        "File scan cap reached; narrow the repository or add remaining agents manually."
-                    ]
-                    if limited
+                    ["Some files were too large, unreadable or invalid and were skipped."]
+                    if coverage["excluded_files"] or coverage["unreadable_files"]
                     else []
                 ),
+                *limits,
             ],
         }
 

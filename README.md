@@ -4,9 +4,9 @@
 
 Inspect and improve AI agents with measured fixes and custom scores. Agree on behaviors and scoring, prepare reusable evals to establish a baseline, and compare verified improvements before preparing a draft PR.
 
-Open the local web app with `agentagon`. Select a project, confirm its application agents and choose what to improve. Connect Codex or Claude and optional trace providers, then audit behavior, prepare evaluations and compare measured fixes. Python captures evidence, runs checks and saves reports; managed coding-agent sessions supply reasoning, reviews and candidate edits. Skills remain optional.
+Open the local web app with `agentagon`. Select a project, confirm its application agents and choose what to improve. Connect Codex or Claude and optional trace providers, agree on a goal's measurements, prepare evaluations and compare measured fixes. Python captures evidence, runs checks and saves reports; managed coding-agent sessions supply reasoning, reviews and candidate edits. Skills remain optional.
 
-[Open the web app](https://github.com/agentagon/agentagon/blob/main/docs/app.md), [inspect agent behavior](https://github.com/agentagon/agentagon/blob/main/docs/audit.md), or [compare measured fixes](https://github.com/agentagon/agentagon/blob/main/docs/fix.md).
+[Open the web app](https://github.com/agentagon/agentagon/blob/main/docs/app.md), [prepare evaluations](https://github.com/agentagon/agentagon/blob/main/docs/eval.md), or [compare measured fixes](https://github.com/agentagon/agentagon/blob/main/docs/fix.md).
 
 ## Prerequisites
 
@@ -55,8 +55,8 @@ Run `agentagon` from **your AI agent's code directory**. `agentagon app` is an a
 
 1. In **Settings → Coding agents**, select Codex and a model from its installed catalog, or configure Claude API-key access and its model.
 2. Optionally connect Braintrust, LangSmith or Langfuse under **Settings → Connections** for this project. Enter credentials, choose **Find projects**, select a remote project and connect. Preview selected traces or a dataset before importing.
-3. In **Agents**, discover and confirm application agents or add one manually. Select an agent and add a focus describing what matters.
-4. Use **Audit** to investigate that focus, **Eval** to prepare a trusted benchmark, **Run baseline** to measure it, and **Fix** to compare improvements. Existing compatible evidence can be reused.
+3. In **Agents**, discover and confirm application agents or add one manually. Open **Goals**, add a focus describing what matters, and accept its **Measurement plan**.
+4. Use **Eval** to prepare a trusted benchmark, **Run baseline** to measure it, and **Fix** to compare improvements. Existing compatible evidence can be reused.
 
 Review task progress, questions and permission requests in the browser. Closing the browser leaves tasks running; stopping the local service interrupts them until you explicitly resume. Dataset imports remain drafts until expectations, execution and independent review are ready. See the [web app guide](https://github.com/agentagon/agentagon/blob/main/docs/app.md) for setup and limits, or the [skill quickstart](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/first-audit.md) for the optional host-driven path.
 
@@ -66,12 +66,12 @@ Optional examples: [check your installation offline](https://github.com/agentago
 
 | Goal | Web app and result |
 |---|---|
-| Inspect agent behavior and find failures | [Audit](https://github.com/agentagon/agentagon/blob/main/docs/audit.md): evidence-backed findings from code and execution traces. |
+| Decide what to improve and how to measure it | [Goals and measurement plans](https://github.com/agentagon/agentagon/blob/main/docs/app.md#select-an-application-agent-and-focus): accepted behaviors, scores, required checks and evaluation choices. |
 | Improve a saved goal or named issue | [Fix](https://github.com/agentagon/agentagon/blob/main/docs/fix.md): bounded optimization, verified comparisons and local delivery. |
 | Define behaviors, custom scores and evals | [Eval](https://github.com/agentagon/agentagon/blob/main/docs/eval.md): agreed expectations, reviewed evaluations and reusable benchmarks. |
 | Inspect history, rerun a baseline or manage settings | [Agents, Metrics, Eval and Settings](https://github.com/agentagon/agentagon/blob/main/docs/app.md): agent focuses, retained measurements, explicit reruns and connections. |
 
-The optional `ag` skills and existing CLI commands remain available. Discovery accepts dirty or non-Git directories; measurement requires clean committed inputs and authorized limits. Without a runnable baseline, Fix reports the blocker; an unmeasured application patch requires an explicit request. Publication, merge and deployment remain separate actions.
+The optional `ag` skills and existing CLI commands remain available, including [Audit](https://github.com/agentagon/agentagon/blob/main/docs/audit.md) for a separate investigation. The web-app journey starts from goals; existing audits and saved findings remain available as evidence. Discovery accepts dirty or non-Git directories; measurement requires clean committed inputs and authorized limits. Without a runnable baseline, Fix reports the blocker; an unmeasured application patch requires an explicit request. Publication, merge and deployment remain separate actions.
 
 Intelligence is optional and asks for approval of each outgoing request by default. Set its explicit **full access** mode through Setup to skip prompts while keeping calls visible. See [Intelligence permissions](https://github.com/agentagon/agentagon/blob/main/docs/intelligence.md).
 
