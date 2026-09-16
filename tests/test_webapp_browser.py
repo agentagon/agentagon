@@ -1487,7 +1487,7 @@ def test_native_evaluator_review_and_frozen_scoring_reuse_are_distinct(webapp_pa
     playwright.expect(page.get_by_label("Metric key", exact=True)).to_be_enabled()
 
 
-def test_manual_plan_and_setup_remain_usable_without_traces_on_mobile(webapp_page):
+def test_manual_plan_and_setup_remain_usable_without_traces_on_mobile(webapp_page, tmp_path):
     page, fixture = webapp_page
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto("http://127.0.0.1:8765/")
@@ -1513,15 +1513,15 @@ def test_manual_plan_and_setup_remain_usable_without_traces_on_mobile(webapp_pag
     assert "dataset_snapshot_id" not in payload["evaluation"]
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     page.evaluate("window.scrollTo(0, 0)")
-    page.screenshot(path="/private/tmp/agentagon-goal-mobile.png")
+    page.screenshot(path=tmp_path / "agentagon-goal-mobile.png")
     page.get_by_label("Behavior 1", exact=True).scroll_into_view_if_needed()
-    page.screenshot(path="/private/tmp/agentagon-goal-mobile-editor.png")
+    page.screenshot(path=tmp_path / "agentagon-goal-mobile-editor.png")
     page.set_viewport_size({"width": 1450, "height": 1000})
     page.get_by_role("button", name="Coding agent", exact=True).click()
     page.evaluate("window.scrollTo(0, 0)")
-    page.screenshot(path="/private/tmp/agentagon-goal-desktop.png")
+    page.screenshot(path=tmp_path / "agentagon-goal-desktop.png")
     page.get_by_label("Metric key", exact=True).scroll_into_view_if_needed()
-    page.screenshot(path="/private/tmp/agentagon-goal-desktop-editor.png")
+    page.screenshot(path=tmp_path / "agentagon-goal-desktop-editor.png")
 
 
 def test_dataset_export_and_publication_require_separate_reviewed_actions(webapp_page):
