@@ -8,6 +8,7 @@ import re
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from agentagon.core.records import AuditError, digest, now
@@ -53,6 +54,8 @@ class JobManager:
         self.execute = execute or run_agent
         self.condition = threading.Condition(threading.RLock())
         self.active = {}
+        self.slots = {}
+        self.question_locks = {}
         self.answers = {}
         self.threads = set()
         self.stopping = False
@@ -123,7 +126,7 @@ class JobManager:
         operation = operation_id(payload.get("operation_id"))
         kind = payload.get("kind")
         if kind not in workflows.REFERENCES:
-            raise AuditError("choose audit, eval, fix, or baseline")
+            raise AuditError("choose design, audit, eval, fix, or baseline")
         job_id = "job_" + hashlib.sha256(f"{project_id}:{operation}".encode()).hexdigest()[:24]
         request_binding = digest(payload) if request_binding is None else request_binding
         with self.condition:
@@ -154,6 +157,12 @@ class JobManager:
             "engine",
             "investigation_plan",
             "suite_manifest",
+            "measurement_design",
+            "design_revision",
+            "design_context",
+            "optimization_background",
+            "finalist_count",
+            "host_concurrency",
         }
         if set(options) - allowed:
             raise AuditError("unsupported task options")
@@ -163,12 +172,18 @@ class JobManager:
                 not isinstance(value, str) or not re.fullmatch(r"[a-z_]+_[a-f0-9]{24}", value)
             ):
                 raise AuditError(f"invalid {key}")
-        for key in ("investigation_plan", "suite_manifest"):
+        for key in ("investigation_plan", "suite_manifest", "measurement_design"):
             value = options.get(key)
             if value is not None and (
                 not isinstance(value, dict) or len(json.dumps(value).encode()) > 1_000_000
             ):
                 raise AuditError(f"{key} must be a bounded object")
+        for key, default in (("finalist_count", 3), ("host_concurrency", 1)):
+            value = options.get(key, default)
+            if type(value) is not int or not 1 <= value <= 10:
+                raise AuditError(f"{key} must be an integer between 1 and 10")
+            if kind == "fix":
+                options[key] = value
         for key, default in BUDGET_DEFAULTS.items():
             value = options.get(key, default)
             if type(value) is not int or not 1 <= value <= 86400:
@@ -197,7 +212,7 @@ class JobManager:
         profile = options.get("profile")
         if profile is not None and not isinstance(profile, str):
             raise AuditError("execution profile must be a name")
-        if kind != "audit":
+        if kind not in {"audit", "design"}:
             if not profile and options.get("evaluation_id"):
                 from agentagon.experiments.preparation import load
 
@@ -221,7 +236,7 @@ class JobManager:
         if not settings.get("claude_api_key_ref") and os.environ.get("ANTHROPIC_API_KEY"):
             settings["claude_api_key_ref"] = "env:ANTHROPIC_API_KEY"
         agent = payload.get("agent") or settings["default_agent"]
-        model = payload.get("model") or settings["models"].get(agent, "")
+        model = payload.get("model", settings["models"].get(agent, ""))
         if agent not in {"codex", "claude"} or not isinstance(model, str) or len(model) > 200:
             raise AuditError("invalid coding agent or model")
         with self.condition:
@@ -249,7 +264,7 @@ class JobManager:
                 "workflow_ids": {},
                 "review_tasks": {},
                 "active_review_id": None,
-                "active_reflection": None,
+                "active_reflections": [],
                 "reflection_tasks": {},
                 "frozen_settings": frozen,
                 "execution_profile": execution_profile,
@@ -321,7 +336,8 @@ class JobManager:
         capacity = settings["agents"]["concurrency"]
         active_projects = {project for project, _ in self.active}
         for project_id in settings["projects"]:
-            if len(self.active) >= capacity:
+            available = capacity - sum(self.slots.get(key, 1) for key in self.active)
+            if available <= 0:
                 return
             if project_id in active_projects:
                 continue
@@ -332,9 +348,24 @@ class JobManager:
             if not queued:
                 continue
             job = queued[0]
+            slots = job.get("host_slots") or min(
+                job["options"].get("host_concurrency", 1), capacity
+            )
+            if slots > available:
+                if slots > capacity:
+                    message = (
+                        f"Restore coding-agent capacity to at least {slots} to resume this task."
+                    )
+                    if job["next_action"] != message:
+                        job["next_action"] = message
+                        self._write(job)
+                continue
+            job["host_slots"] = slots
+            self._write(job)
             key = (project_id, job["id"])
             cancel = threading.Event()
             self.active[key] = cancel
+            self.slots[key] = slots
             thread = threading.Thread(target=self._run, args=(*key, cancel), daemon=True)
             self.threads.add(thread)
             thread.start()
@@ -459,7 +490,7 @@ class JobManager:
                     "cwd": str(workspace.root),
                     "session_id": job.get("session_id"),
                     "prompt": workflows.prompt(workspace, job),
-                    "sandbox": "workspace-write",
+                    "sandbox": "read-only" if job["kind"] == "design" else "workspace-write",
                     "timeout_seconds": remaining,
                     "env": {
                         "AGENTAGON_APP_STATE": str(self.state.directory),
@@ -496,6 +527,7 @@ class JobManager:
                         result = self.verify_result(workspace, job, result)
                     job.update(state=state, result=result, next_action=next_action)
                     key = {
+                        "design": "design_id",
                         "audit": "audit_id",
                         "eval": "evaluation_id",
                         "fix": "run_id",
@@ -532,6 +564,8 @@ class JobManager:
                 job.pop("attempt_started_at", None)
                 self._write(job)
                 self.active.pop((project_id, job_id), None)
+                self.slots.pop((project_id, job_id), None)
+                self.question_locks.pop((project_id, job_id), None)
                 self.answers.pop((project_id, job_id), None)
                 self.threads.discard(threading.current_thread())
                 self._dispatch()
@@ -554,7 +588,7 @@ class JobManager:
                     )
                 review_id = job.get("active_review_id")
                 task = job["review_tasks"][review_id] if review_id else None
-                reflection = job.get("active_reflection")
+                reflections = job["active_reflections"]
                 current = {**request, "timeout_seconds": remaining}
                 if task:
                     current.update(
@@ -585,40 +619,11 @@ class JobManager:
                         model=job.get("actual_model") or job["model"],
                         prompt=workflows.prompt(workspace, job),
                     )
-            if reflection:
-                from agentagon.webapp.agents import run_reflection
-
-                reflected = run_reflection(
-                    workspace,
-                    reflection["owner_id"],
-                    reflection["request_id"],
-                    emit=lambda event: self._emit(project_id, job_id, event),
-                    ask=lambda question: self._ask(project_id, job_id, question, cancelled),
-                    cancelled=cancelled,
-                    timeout_seconds=remaining,
-                    execute=self.execute,
-                    api_key=request.get("api_key"),
-                    executable=request.get("executable"),
-                    environment=request.get("env"),
-                    forbidden_session_id=job.get("session_id"),
-                )
-                if reflected["state"] != "completed":
+            if reflections:
+                if not self._reflect_batch(
+                    project_id, job_id, workspace, job, request, cancelled, remaining
+                ):
                     return {"state": "interrupted", "session_id": job.get("session_id")}
-                with self.condition:
-                    job = self._read(project_id, job_id)
-                    reflection_key = reflection["owner_id"] + ":" + reflection["request_id"]
-                    job["reflection_tasks"][reflection_key] = {
-                        **reflection,
-                        "state": "completed",
-                        "session_id": reflected.get("session_id"),
-                    }
-                    job["active_reflection"] = None
-                    job["messages"].append(
-                        "Application-managed reflection "
-                        + reflection["request_id"]
-                        + " is complete. Continue the same workflow using its saved response."
-                    )
-                    self._write(job)
                 continue
             if task:
                 if not task.get("response"):
@@ -694,16 +699,17 @@ class JobManager:
                 job = self._read(project_id, job_id)
                 if cancelled.is_set() or job["state"] != "running":
                     return outcome
-                reflection = workflows.reflection_handoff(workspace, job, outcome.get("text", ""))
-                if reflection is not None:
-                    reflection_key = reflection["owner_id"] + ":" + reflection["request_id"]
-                    if reflection_key in job["reflection_tasks"]:
-                        raise AuditError(
-                            "this reflection is already finished; continue its workflow"
-                        )
-                    job["active_reflection"] = reflection
-                    if reflection.get("run_id"):
-                        job["workflow_ids"]["run_id"] = reflection["run_id"]
+                reflections = workflows.reflection_handoffs(workspace, job, outcome.get("text", ""))
+                if reflections:
+                    for reflection in reflections:
+                        reflection_key = reflection["owner_id"] + ":" + reflection["request_id"]
+                        if reflection_key in job["reflection_tasks"]:
+                            raise AuditError(
+                                "this reflection is already finished; continue its workflow"
+                            )
+                    job["active_reflections"] = reflections
+                    if reflections[0].get("run_id"):
+                        job["workflow_ids"]["run_id"] = reflections[0]["run_id"]
                     self._write(job)
                     continue
                 handoff = workflows.review_handoff(workspace, job, outcome.get("text", ""))
@@ -728,6 +734,65 @@ class JobManager:
                     )
                 job["active_review_id"] = task["id"]
                 self._write(job)
+
+    def _reflect_batch(self, project_id, job_id, workspace, job, request, cancelled, remaining):
+        from agentagon.webapp.agents import run_reflection
+
+        deadline = time.monotonic() + remaining
+
+        def run(reflection):
+            timeout = deadline - time.monotonic()
+            if timeout <= 0 or cancelled.is_set():
+                cancelled.set()
+                return False
+            reflected = run_reflection(
+                workspace,
+                reflection["owner_id"],
+                reflection["request_id"],
+                emit=lambda event: self._emit(project_id, job_id, event),
+                ask=lambda question: self._ask(
+                    project_id,
+                    job_id,
+                    {**question, "request_id": reflection["request_id"]},
+                    cancelled,
+                ),
+                cancelled=cancelled,
+                timeout_seconds=timeout,
+                execute=self.execute,
+                api_key=request.get("api_key"),
+                executable=request.get("executable"),
+                environment=request.get("env"),
+                forbidden_session_id=job.get("session_id"),
+            )
+            if reflected["state"] != "completed":
+                cancelled.set()
+                return False
+            with self.condition:
+                saved = self._read(project_id, job_id)
+                key = reflection["owner_id"] + ":" + reflection["request_id"]
+                saved["reflection_tasks"][key] = {
+                    **reflection,
+                    "state": "completed",
+                    "session_id": reflected.get("session_id"),
+                }
+                saved["active_reflections"] = [
+                    item for item in saved["active_reflections"] if item != reflection
+                ]
+                saved["messages"].append(
+                    f"Application-managed reflection {reflection['request_id']} is complete. Continue using its saved response."
+                )
+                self._write(saved)
+            return True
+
+        with ThreadPoolExecutor(max_workers=job["host_slots"]) as pool:
+            futures = [pool.submit(run, item) for item in job["active_reflections"]]
+            try:
+                return all([future.result() for future in as_completed(futures)])
+            except BaseException:
+                cancelled.set()
+                with self.condition:
+                    self.condition.notify_all()
+                raise
 
     def _emit(self, project_id, job_id, event, *, review_id=None):
         with self.condition:
@@ -774,6 +839,14 @@ class JobManager:
                 workflows.write_context(self.state.workspace(project_id), job)
 
     def _ask(self, project_id, job_id, question, cancelled):
+        with self.condition:
+            lock = self.question_locks.setdefault((project_id, job_id), threading.Lock())
+        # Concurrent native sessions may ask questions, but the browser answers one
+        # exact question at a time. Do not hold the condition while waiting for this lock.
+        with lock:
+            return self._ask_one(project_id, job_id, question, cancelled)
+
+    def _ask_one(self, project_id, job_id, question, cancelled):
         with self.condition:
             job = self._read(project_id, job_id)
             if cancelled.is_set():

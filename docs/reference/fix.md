@@ -346,9 +346,11 @@ Repeated trials and retained inputs help compare candidates, but external models
 Configure the current host before proposing candidates, then advance the same run after servicing its pending host requests:
 
 ```sh
-agentagon fix optimize RUN_ID --intent INTENT_ID --host ACTUAL_HOST --model ACTUAL_MODEL --engine omni --host-concurrency ACTUAL_CAPACITY
+agentagon fix optimize RUN_ID --intent INTENT_ID --host ACTUAL_HOST --model ACTUAL_MODEL --engine omni --host-concurrency ACTUAL_CAPACITY --finalist-count 3 --background-file ACCEPTED_CONTEXT.txt
 agentagon fix optimize-status RUN_ID
 agentagon fix optimize RUN_ID
 ```
 
 Standalone advanced engines are `gepa`, `autoresearch` and `meta_harness`. Explicit Meta-Harness overrides use `--meta-harness-host` and `--meta-harness-model`; judge configuration stays separate. The host follows the [durable request/reply procedure](../../skills/fix/references/native-host.md). Proposals contain source changes; only bounded Agentagon execution and bound grading observations supply scores.
+
+`--finalist-count` accepts one to ten and defaults to three, excluding the baseline. It reserves verification work independently from requested parallelism. `--background-file` is optional accepted evidence analysis, bounded to 128 KiB; configuration freezes its text and any completed approved Intelligence receipts for this run. A suite-bound run must bind the same finalist count before optimizer configuration.

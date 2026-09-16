@@ -192,7 +192,8 @@ def test_context_and_completion_verification_are_preserved(manager_factory):
     assert observed[0][2]["suite_manifest"] == {"version": 1}
 
 
-def test_saved_model_is_selected_per_host(manager_factory):
+@pytest.mark.parametrize("agent", ["codex", "claude"])
+def test_saved_model_is_selected_per_host(manager_factory, agent):
     manager, state, project = manager_factory(lambda *args: pytest.fail("host should not run"))
     manager.stopping = True
     with state.locked() as settings:
@@ -200,10 +201,33 @@ def test_saved_model_is_selected_per_host(manager_factory):
             default_agent="codex",
             models={"codex": "codex-choice", "claude": "claude-choice"},
         )
-    selected = manager.submit(project, payload(agent="claude"))
-    assert selected["model"] == "claude-choice"
-    explicit = manager.submit(project, payload(agent="claude", model="one-off-choice"))
+    selected = manager.submit(project, payload(agent=agent))
+    assert selected["model"] == f"{agent}-choice"
+    explicit = manager.submit(project, payload(agent=agent, model="one-off-choice"))
     assert explicit["model"] == "one-off-choice"
+    host_default = manager.submit(project, payload(agent=agent, model=""))
+    assert host_default["model"] == ""
+    assert state.read()["agents"]["models"][agent] == f"{agent}-choice"
+    with pytest.raises(AuditError, match="invalid coding agent or model"):
+        manager.submit(project, payload(agent=agent, model=None))
+
+
+def test_explicit_codex_default_reaches_managed_session(manager_factory):
+    observed = []
+
+    def host(request, emit, ask, cancelled):
+        observed.append(request["model"])
+        return audit_host(request, emit, ask, cancelled)
+
+    manager, state, project = manager_factory(host)
+    with state.locked() as settings:
+        settings["agents"]["models"]["codex"] = "saved-model"
+    submitted = manager.submit(project, payload(agent="codex", model=""))
+    result = wait_for(manager, project, submitted["id"])
+    assert result["state"] == "completed_with_limits"
+    assert observed == [""]
+    assert result["model"] == ""
+    assert result["actual_model"] == "actual-model"
 
 
 def test_raw_request_replay_preserves_original_frozen_context(manager_factory):
@@ -255,8 +279,10 @@ def test_reflection_uses_same_capacity_then_resumes_saved_author(manager_factory
     monkeypatch.setattr(agents, "run_reflection", reflect)
     monkeypatch.setattr(
         workflows,
-        "reflection_handoff",
-        lambda workspace, job, text: json.loads(text).get("needs_reflection"),
+        "reflection_handoffs",
+        lambda workspace, job, text: (
+            [json.loads(text)["needs_reflection"]] if "needs_reflection" in json.loads(text) else []
+        ),
     )
     submitted = manager.submit(project, payload())
     finished = wait_for(manager, project, submitted["id"])
@@ -264,7 +290,7 @@ def test_reflection_uses_same_capacity_then_resumes_saved_author(manager_factory
     assert len(author_requests) == 2
     assert reflection_requests == [(handoff["owner_id"], handoff["request_id"])]
     assert finished["session_id"] == "author-native"
-    assert finished["active_reflection"] is None
+    assert finished["active_reflections"] == []
     assert next(iter(finished["reflection_tasks"].values()))["session_id"] == "reflection-native"
 
 
@@ -776,7 +802,7 @@ def test_suite_children_preserve_primary_job_identity_across_restart(
                 execution_profile=context["execution_profile"],
             )["run_id"]
             primary = run_id
-            suites.bind(application, run_id, suite_manifest)
+            suites.bind(application, run_id, suite_manifest, finalist_count=1)
             optimize_run.configure(
                 application,
                 run_id,
@@ -814,6 +840,7 @@ def test_suite_children_preserve_primary_job_identity_across_restart(
             "fix",
             options={
                 "engine": "gepa",
+                "finalist_count": 1,
                 "suite_manifest": suite_manifest,
                 "permitted_paths": ["app.json"],
                 "evaluation_id": suite_manifest["members"][-1]["evaluation_id"],
@@ -1000,3 +1027,320 @@ def test_evaluation_requires_actual_separate_review_session(
         forged_job["review_tasks"] = {}
         with pytest.raises(AuditError, match="application-managed reviewer"):
             workflows.validate_result(application, forged_job, {"text": json.dumps(job["result"])})
+
+
+def test_parallel_reflections_reserve_capacity_and_queue_distinct_questions(
+    manager_factory, monkeypatch, tmp_path
+):
+    from agentagon.experiments.budget import BudgetLedger
+    from agentagon.experiments.host_bridge import HostBridge
+
+    author_calls, native_calls, answers = [], [], {}
+    barrier = threading.Barrier(2)
+    first_root = tmp_path / "batched-project"
+
+    def host(request, emit, ask, cancelled):
+        if request.get("response_mode") == "raw-final":
+            name = request["prompt"]
+            native_calls.append(name)
+            emit({"type": "session", "session_id": "native-" + name, "model": "actual-model"})
+            barrier.wait(timeout=3)  # A serial dispatcher cannot fulfill this batch.
+            answers[name] = ask({"kind": "question", "text": name})
+            return {
+                "state": "completed",
+                "session_id": "native-" + name,
+                "raw_final_text": "```\n" + name + "\n```",
+            }
+        emit(
+            {
+                "type": "session",
+                "session_id": request.get("session_id") or "author-" + Path(request["cwd"]).name,
+                "model": "actual-model",
+            }
+        )
+        if Path(request["cwd"]) == first_root:
+            author_calls.append(request["session_id"])
+            if len(author_calls) == 1:
+                from agentagon.storage.workspace import Workspace
+
+                workspace = Workspace(first_root)
+                owner = "run_" + "d" * 24
+                BudgetLedger(workspace, owner).create(20, 100)
+                bridge = HostBridge(workspace, owner)
+                batch = []
+                for index in range(2):
+                    pending = bridge.request(
+                        f"gepa:reflection:{index}",
+                        source="commit",
+                        evaluator="eval",
+                        role="proposal",
+                        scope=["app.py"],
+                        host="codex",
+                        model="actual-model",
+                        payload={
+                            "protocol": "gepa-reflection-v1",
+                            "engine": "gepa",
+                            "stage": "gepa",
+                            "prompt": f"prompt-{index}",
+                        },
+                    )
+                    batch.append({"owner_id": owner, "request_id": pending["request_id"]})
+                return {
+                    "state": "completed",
+                    "session_id": "author-batched-project",
+                    "text": json.dumps({"needs_reflection": batch}),
+                }
+        return {
+            "state": "completed",
+            "session_id": "author-" + Path(request["cwd"]).name,
+            "text": json.dumps(manifest(request)["workflow_ids"]),
+        }
+
+    monkeypatch.setattr(
+        workflows,
+        "reflection_handoffs",
+        lambda workspace, job, text: json.loads(text).get("needs_reflection", []),
+    )
+    manager, state, project = manager_factory(host, first_root)
+    other_root = tmp_path / "queued-project"
+    other_root.mkdir()
+    other = state.register(str(other_root))["id"]
+    with state.locked() as settings:
+        settings["agents"]["concurrency"] = 2
+    submitted = manager.submit(project, payload(options={"host_concurrency": 2}))
+    wait_for(manager, project, submitted["id"], lambda job: job["state"] == "needs_input")
+    queued = manager.submit(other, payload())
+    assert manager.get(other, queued["id"])["state"] == "queued"
+    assert manager.slots[(project, submitted["id"])] == 2
+    seen = set()
+    for _ in range(2):
+        question = wait_for(
+            manager,
+            project,
+            submitted["id"],
+            lambda job: job["state"] == "needs_input" and job["question"]["id"] not in seen,
+        )
+        seen.add(question["question"]["id"])
+        manager.control(
+            project,
+            submitted["id"],
+            "reply",
+            {
+                "operation_id": str(uuid.uuid4()),
+                "question_id": question["question"]["id"],
+                "answer": {"text": question["question"]["text"]},
+            },
+        )
+    finished = wait_for(manager, project, submitted["id"])
+    assert finished["state"] == "completed_with_limits", finished
+    assert sorted(native_calls) == ["prompt-0", "prompt-1"]
+    assert answers == {name: {"text": name} for name in native_calls}
+    assert len(author_calls) == 2 and author_calls[1] == "author-batched-project"
+    assert len(finished["reflection_tasks"]) == 2 and finished["active_reflections"] == []
+    assert wait_for(manager, other, queued["id"])["state"] == "completed_with_limits"
+
+
+def test_reflection_batch_restart_keeps_completed_sibling_and_native_identity(
+    manager_factory, monkeypatch
+):
+    from agentagon.experiments.budget import BudgetLedger
+    from agentagon.experiments.host_bridge import HostBridge
+
+    sessions, author_calls = [], []
+    first_done = threading.Event()
+    interrupted = False
+    batch = []
+
+    def host(request, emit, ask, cancelled):
+        nonlocal interrupted
+        if request.get("response_mode") == "raw-final":
+            name = request["prompt"]
+            sessions.append((name, request["session_id"]))
+            emit({"type": "session", "session_id": "native-" + name, "model": "actual-model"})
+            if name == "first":
+                first_done.set()
+            elif not request["session_id"]:
+                assert first_done.wait(3)
+                ask({"kind": "question", "text": "Pause this batch"})
+                interrupted = True
+                return {"state": "interrupted", "session_id": "native-second"}
+            return {
+                "state": "completed",
+                "session_id": "native-" + name,
+                "raw_final_text": "```\n" + name + "\n```",
+            }
+        author_calls.append(request["session_id"])
+        emit({"type": "session", "session_id": "author", "model": "actual-model"})
+        if len(author_calls) == 1:
+            workspace = state.workspace(project)
+            owner = "run_" + "e" * 24
+            BudgetLedger(workspace, owner).create(20, 100)
+            bridge = HostBridge(workspace, owner)
+            for name in ("first", "second"):
+                pending = bridge.request(
+                    name,
+                    source="source",
+                    evaluator="eval",
+                    role="proposal",
+                    scope=["app.py"],
+                    host="codex",
+                    model="actual-model",
+                    payload={
+                        "protocol": "gepa-reflection-v1",
+                        "engine": "gepa",
+                        "stage": "gepa",
+                        "prompt": name,
+                    },
+                )
+                batch.append({"owner_id": owner, "request_id": pending["request_id"]})
+            return {
+                "state": "completed",
+                "session_id": "author",
+                "text": json.dumps({"needs_reflection": batch}),
+            }
+        return {
+            "state": "completed",
+            "session_id": "author",
+            "text": json.dumps(manifest(request)["workflow_ids"]),
+        }
+
+    manager, state, project = manager_factory(host)
+    with state.locked() as settings:
+        settings["agents"]["concurrency"] = 2
+    monkeypatch.setattr(
+        workflows,
+        "reflection_handoffs",
+        lambda workspace, job, text: json.loads(text).get("needs_reflection", []),
+    )
+    job = manager.submit(project, payload(options={"host_concurrency": 2}))
+    wait_for(
+        manager,
+        project,
+        job["id"],
+        lambda saved: saved["state"] == "needs_input" and len(saved["reflection_tasks"]) == 1,
+    )
+    manager.close()
+    saved = wait_for(manager, project, job["id"])
+    assert interrupted and len(saved["active_reflections"]) == 1
+    with state.locked() as settings:
+        settings["agents"]["concurrency"] = 1
+    resumed = JobManager(AppState(state.directory), manager.credentials, execute=host)
+    try:
+        resumed.control(project, job["id"], "resume", {"operation_id": str(uuid.uuid4())})
+        queued = resumed.get(project, job["id"])
+        assert queued["state"] == "queued" and "at least 2" in queued["next_action"]
+        assert len(sessions) == 2
+        with state.locked() as settings:
+            settings["agents"]["concurrency"] = 2
+        with resumed.condition:
+            resumed._dispatch()
+        final = wait_for(resumed, project, job["id"])
+        assert final["state"] == "completed_with_limits", final
+        assert sessions.count(("first", None)) == 1
+        assert ("second", None) in sessions and ("second", "native-second") in sessions
+        assert len(sessions) == 3 and author_calls == [None, "author"]
+        assert len(final["reflection_tasks"]) == 2 and not final["active_reflections"]
+    finally:
+        resumed.close()
+
+
+def test_managed_gepa_batch_completes_two_real_finalists(
+    manager_factory, application, specification
+):
+    from support.experiments import executions, passing_review
+    from support.optimizer import candidate_text
+    from test_scoring import definition
+
+    from agentagon.experiments import engine
+    from agentagon.experiments.orchestration import DEFAULT_SETTINGS
+
+    profile = Config().profile(application.root, "local")
+    profile["runner"]["independent_capacity"] = True
+    profile["limits"].update(parallel_candidates=2, parallel_trials=2, max_candidates=12)
+    profile["orchestration"] = {**DEFAULT_SETTINGS, "host_capacity": 2, "resource_slots": 2}
+    Config().update_profile("project", "local", profile, application.root)
+    barrier = threading.Barrier(2)
+    native = []
+    native_lock = threading.Lock()
+
+    def host(request, emit, ask, cancelled):
+        if request.get("response_mode") == "raw-final":
+            with native_lock:
+                index = len(native)
+                native.append(request["prompt"])
+            emit({"type": "session", "session_id": f"reflection-{index}", "model": "actual-model"})
+            barrier.wait(timeout=4)
+            proposal = json.loads(
+                candidate_text(
+                    {"payload": {"protocol": "gepa-reflection-v1", "prompt": request["prompt"]}}
+                )
+            )
+            proposal["files"]["app.json"] = json.dumps(
+                {"latency": 80 + index, "quality": 0.9, "variant": f"batch-{index}"}
+            )
+            return {
+                "state": "completed",
+                "session_id": f"reflection-{index}",
+                "raw_final_text": "```\n" + json.dumps(proposal) + "\n```",
+            }
+        context = manifest(request)
+        task = context["review_tasks"].get(context["active_review_id"])
+        session = "reviewer-" + task["id"] if task else "author-native"
+        emit({"type": "session", "session_id": session, "model": "actual-model"})
+        if task:
+            return {
+                "state": "completed",
+                "session_id": session,
+                "text": json.dumps(
+                    {"review": passing_review({"review_template": task["template"]})}
+                ),
+            }
+        context = manifest(request)
+        run_id = context["workflow_ids"].get("run_id")
+        if run_id is None:
+            spec = copy.deepcopy(specification)
+            spec.update(scoring={**definition(), "target": 0.7}, repetitions=1, seeds=[0])
+            run_id = engine.start(
+                application, spec, "local", execution_profile=context["execution_profile"]
+            )["run_id"]
+            optimize_run.configure(
+                application,
+                run_id,
+                host="codex",
+                model="actual-model",
+                optimizer="gepa",
+                finalist_count=2,
+                host_concurrency=context["host_slots"],
+            )
+        progress = optimize_run.advance(application, run_id)
+        result = {"run_id": run_id}
+        if progress["pending"]:
+            pending = progress["pending"][0]
+            result["needs_reflection" if pending["role"] == "proposal" else "needs_review"] = {
+                "owner_id": run_id,
+                "request_id": pending["request_id"],
+            }
+        return {"state": "completed", "session_id": session, "text": json.dumps(result)}
+
+    manager, state, project = manager_factory(host, application.root)
+    with state.locked() as settings:
+        settings["agents"]["concurrency"] = 2
+    submitted = manager.submit(
+        project,
+        payload(
+            "fix",
+            options={
+                "engine": "gepa",
+                "host_concurrency": 2,
+                "finalist_count": 2,
+                "permitted_paths": ["app.json"],
+            },
+        ),
+    )
+    finished = wait_for(manager, project, submitted["id"], timeout=40)
+    assert finished["state"] == "completed", finished
+    assert len(native) == len(finished["reflection_tasks"]) == 2
+    optimized = optimize_run.status(application, finished["workflow_ids"]["run_id"])
+    assert optimized["selection"]["winner"] and len(optimized["selection"]["alternatives"]) == 1
+    assert len(executions()) == 5  # Baseline, two candidates, two independent final measurements.
+    assert len(finished["review_tasks"]) == 5

@@ -11,6 +11,8 @@ Follow the shared [dashboard lifecycle](../dashboard/references/lifecycle.md). I
 
 Use the shared [goals, scoring and authoring procedure](references/authoring.md) to resolve behaviors, executable checks, scoring and judge setup. Reuse suitable existing eval code. An explicit request to create or repair evals authorizes that work; otherwise confirm missing/unusable evals and the proposed creation/running before editing.
 
+The focused [measurement design](../workflows/design-measurement.md), [native evaluation adaptation](../workflows/adapt-evaluation.md) and [independent review](../workflows/review-evaluation.md) procedures define the same outputs used by the web app. Load the procedure for the current step.
+
 Continue through [evaluation preparation](../fix/references/evaluation.md): edit only scoped repository eval files in the returned preparation worktree, validate the baseline and negative controls, check known metric rankings and judge examples, obtain independent review, and freeze. Save intent and evidence through validated CLI operations. Private inputs remain private; intended cases, assertions, judge prompts, scorers and harness source belong in the repository and declared delivery paths.
 
 A dataset, behavior, scorer or judge change creates a new evaluator version. Compare evaluation quality at fixed application source. Never claim application improvement from scores on different evaluators. Missing executable prerequisites leave a precise pending action; a coding-host judge cannot replace an application that cannot run.

@@ -180,7 +180,7 @@ def _sync_bundle(root: Path) -> str:
     """Update only files recorded as ours; preserve unrelated host files and source additions."""
     payload = {}
     # Copy entry points together with their shared references and execution helpers.
-    for name in SKILLS:
+    for name in (*SKILLS, "workflows"):
         source = resource_path(f"skills/{name}")
         for path in sorted(source.rglob("*")):
             relative = path.relative_to(source)

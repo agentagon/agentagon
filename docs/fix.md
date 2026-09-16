@@ -44,7 +44,7 @@ The optimizer proposes candidates. Agentagon enforces the frozen evaluator, perm
 
 The winner is the highest-scoring independently verified candidate that satisfies every required behavior and limit and establishes improvement over baseline. A higher score cannot offset a failed gate. Search stops when a candidate reaches your target and passes final verification, or when the budget ends.
 
-The report compares the winner and next two qualifying alternatives with the baseline: score components, checks, limits and concrete changes. It shows fewer when fewer qualify. You can choose another verified alternative. If none establishes improvement, the baseline is retained.
+Choose one to ten finalists, with three as the default, separately from parallelism. The report compares qualifying finalists with the baseline: score components, checks, limits and concrete changes. Each must pass the retained measurement suite, and the budget reserves that verification work. It shows fewer when fewer qualify. You can choose another verified alternative. If none establishes improvement, the baseline is retained.
 
 Changed datasets do not establish application improvement. A reviewed unmeasured patch never enters the verified candidate frontier or establishes verified issue resolution. See [what verified means](concepts.md#what-verified-means).
 

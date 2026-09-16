@@ -32,7 +32,7 @@ Resume the operation that requested work: `fix optimize RUN_ID`, `baseline run B
 After resolving accepted intent, a frozen scored evaluator and a clean source, start the measured run with `fix start --evaluation EVALUATION_ID --profile NAME`. Configure the current native host before any candidate work:
 
 ```sh
-agentagon fix optimize RUN_ID --host ACTUAL_HOST --model ACTUAL_MODEL --intent INTENT_ID --engine omni --host-concurrency ACTUAL_CAPACITY
+agentagon fix optimize RUN_ID --host ACTUAL_HOST --model ACTUAL_MODEL --intent INTENT_ID --engine omni --host-concurrency ACTUAL_CAPACITY --finalist-count 3
 agentagon fix optimize-status RUN_ID
 ```
 

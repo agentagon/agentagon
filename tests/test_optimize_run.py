@@ -13,7 +13,15 @@ from agentagon.experiments.store import load_run
 
 
 def _start(
-    application, specification, optimizer="gepa", target=None, repetitions=1, max_trials=None
+    application,
+    specification,
+    optimizer="gepa",
+    target=None,
+    repetitions=1,
+    max_trials=None,
+    finalist_count=3,
+    host_concurrency=1,
+    background="",
 ):
     specification["scoring"] = definition()
     if target is not None:
@@ -28,6 +36,9 @@ def _start(
         model="fake-model",
         optimizer=optimizer,
         max_trials=max_trials,
+        finalist_count=finalist_count,
+        host_concurrency=host_concurrency,
+        background=background,
     )
     return started["run_id"]
 
@@ -96,7 +107,9 @@ def test_application_proposal_cannot_touch_evaluator(application, specification)
 def test_repeated_trials_leave_room_for_every_omni_stage(application, specification, max_trials):
     from agentagon.experiments.budget import BudgetLedger
 
-    run_id = _start(application, specification, "omni", repetitions=3, max_trials=max_trials)
+    run_id = _start(
+        application, specification, "omni", repetitions=3, max_trials=max_trials, finalist_count=1
+    )
     assert optimize_run.advance(application, run_id)["state"] == "host_pending"
     stages = []
 
@@ -277,3 +290,234 @@ def test_process_driver_lock_prevents_concurrent_application_advances(applicatio
         with pytest.raises(AuditError, match="already advancing"):
             optimize_run.advance(application, run_id, host_handler=_host)
     assert executions() == []
+
+
+@pytest.mark.parametrize("optimizer", ["omni", "gepa"])
+def test_optimizers_measure_distinct_candidates_concurrently_in_real_worktrees(
+    application, specification, optimizer
+):
+    from pathlib import Path
+
+    from support.experiments import git
+
+    from agentagon.experiments.orchestration import DEFAULT_SETTINGS
+    from agentagon.storage.config import Config
+
+    # The actual benchmark processes rendezvous. A serialized implementation cannot
+    # pass: its first process records timed_out before the second process starts.
+    benchmark = application.root / "benchmark.py"
+    benchmark.write_text(
+        benchmark.read_text()
+        + """
+import time
+if application['variant'] != 'baseline':
+    rendezvous = Path(os.environ['EXECUTION_LOG']).parent / 'rendezvous'
+    rendezvous.mkdir(exist_ok=True)
+    mark = rendezvous / application['variant']
+    if not mark.exists():
+        mark.write_text(str(time.monotonic()))
+        deadline = time.monotonic() + 3
+        while len(list(rendezvous.iterdir())) < 2 and time.monotonic() < deadline:
+            time.sleep(.01)
+        with Path(os.environ['EXECUTION_LOG']).with_suffix('.overlap').open('a') as stream:
+            stream.write(json.dumps({'variant': application['variant'], 'source': str(Path.cwd()),
+                'overlap': len(list(rendezvous.iterdir())) >= 2}) + '\\n')
+"""
+    )
+    git(application.root, "add", "benchmark.py")
+    git(
+        application.root,
+        "-c",
+        "user.name=Tests",
+        "-c",
+        "user.email=tests@localhost",
+        "commit",
+        "-qm",
+        "Add rendezvous",
+    )
+    profile = Config().profile(application.root, "local")
+    profile["runner"]["independent_capacity"] = True
+    profile["limits"].update(parallel_candidates=2, parallel_trials=2, max_candidates=12)
+    profile["orchestration"] = {
+        **DEFAULT_SETTINGS,
+        "host_capacity": 2,
+        "resource_slots": 2,
+        "round_width": 2,
+    }
+    Config().update_profile("project", "local", profile, application.root)
+    run_id = _start(application, specification, optimizer, finalist_count=1, host_concurrency=2)
+
+    def host(request):
+        if request["role"] == "review":
+            return _host(request)
+        proposal = json.loads(candidate_text(request))
+        proposal["files"]["app.json"] = json.dumps(
+            {
+                "quality": 0.9,
+                "latency": 80,
+                "variant": request["request_id"],
+            }
+        )
+        return proposal_response(request, json.dumps(proposal))
+
+    result = optimize_run.advance(application, run_id, host_handler=host)
+    assert result["selection"]["winner"], result
+    import os
+
+    events = [
+        json.loads(line)
+        for line in Path(os.environ["TEST_EXECUTION_LOG"])
+        .with_suffix(".overlap")
+        .read_text()
+        .splitlines()
+    ]
+    assert len(events) >= 2 and all(item["overlap"] for item in events), events
+    assert len({item["source"] for item in events}) == len(events)
+    data = load_run(application, run_id)
+    assert len(executions()) == sum(len(c["trials"]) for c in data["candidates"].values())
+    assert all(c["state"] in {"verified", "duplicate"} for c in data["candidates"].values())
+    count = len(executions())
+    optimize_run.advance(application, run_id, host_handler=host)
+    assert len(executions()) == count
+
+
+def test_finalist_count_and_background_are_frozen_before_execution(application, specification):
+    run_id = _start(
+        application,
+        specification,
+        finalist_count=2,
+        background="Approved trace summary: retry only transient failures.",
+    )
+    state = optimize_run.status(application, run_id)
+    assert state["config"]["finalist_count"] == 2
+    assert state["budget"]["limits"]["verification_trials"] == 2
+    with pytest.raises(AuditError, match="frozen"):
+        optimize_run.configure(
+            application,
+            run_id,
+            host="fake-codex",
+            model="fake-model",
+            optimizer="gepa",
+            finalist_count=1,
+        )
+    with pytest.raises(AuditError, match="128 KiB"):
+        optimize_run.configure(
+            application,
+            run_id,
+            host="fake-codex",
+            model="fake-model",
+            background="x" * (128 * 1024 + 1),
+        )
+    assert not executions()
+
+
+def test_parallel_pending_reviews_resume_without_duplicate_trials(application, specification):
+    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.experiments.orchestration import DEFAULT_SETTINGS
+    from agentagon.storage.config import Config
+
+    profile = Config().profile(application.root, "local")
+    profile["runner"]["independent_capacity"] = True
+    profile["limits"].update(parallel_candidates=2, parallel_trials=2, max_candidates=12)
+    profile["orchestration"] = {**DEFAULT_SETTINGS, "host_capacity": 2, "resource_slots": 2}
+    Config().update_profile("project", "local", profile, application.root)
+    run_id = _start(application, specification, "omni", finalist_count=2, host_concurrency=2)
+    bridge = HostBridge(application, run_id)
+    deferred = False
+    for _ in range(40):
+        state = optimize_run.advance(application, run_id)
+        deferred |= any(v["candidate_id"] is None for v in state["evaluations"].values())
+        if state["state"] == "completed":
+            break
+        assert state["pending"], {
+            "state": state["state"],
+            "optimizer": state.get("optimizer_state"),
+            "running": {
+                k: v for k, v in state["budget"]["operations"].items() if v["status"] == "running"
+            },
+            "evaluations": state["evaluations"],
+        }
+        for request in state["pending"]:
+            reply = _host(request)
+            if request["role"] == "proposal":
+                proposal = json.loads(
+                    reply.get("candidate")
+                    or reply["text"].strip().removeprefix("```\n").removesuffix("\n```")
+                )
+                app = json.loads(proposal["files"]["app.json"])
+                app["variant"] = request["request_id"]
+                proposal["files"]["app.json"] = json.dumps(app)
+                reply = proposal_response(request, json.dumps(proposal))
+            bridge.start(request["request_id"])
+            bridge.reply(
+                request["request_id"],
+                reply,
+                host=request["host"],
+                model=request["model"],
+                binding_digest=request["binding_digest"],
+            )
+    assert state["state"] == "completed" and state["selection"]["winner"], state
+    assert deferred  # Pending reviews consumed both candidate slots, then freed them.
+    data = load_run(application, run_id)
+    attempts = [t["trial_id"] for c in data["candidates"].values() for t in c["trials"]]
+    assert len(attempts) == len(set(attempts)) == len(executions())
+    running = {
+        key: op for key, op in state["budget"]["operations"].items() if op["status"] == "running"
+    }
+    assert not running, json.dumps(running)
+
+
+def test_only_completed_owner_intelligence_is_frozen_into_background(application, specification):
+    from agentagon.core.records import digest
+    from agentagon.experiments.store import save_run
+
+    specification["scoring"] = definition()
+    specification.update(repetitions=1, seeds=[0])
+    run_id = engine.start(application, specification, "local")["run_id"]
+    response = {
+        "knowledge_version": "v1",
+        "suggestions": [
+            {
+                "id": "retry",
+                "title": "Bound retries",
+                "suggestion": "Retry transient failures once.",
+            }
+        ],
+    }
+    request_digest = digest({"approved": "abstract context"})
+    path = application.artifact(
+        {"status": "complete", "request_digest": request_digest, "response": response}
+    )
+    data = load_run(application, run_id)
+    data["intelligence"] = [{"path": path, "status": "complete", "request_digest": request_digest}]
+    save_run(application, data)
+    first = optimize_run.configure(
+        application, run_id, host="fake", model="fake", background="Accepted local evidence"
+    )
+    assert first["config"]["source_background"] == "Accepted local evidence"
+    assert "Retry transient failures once." in first["config"]["background"]
+    assert first["config"]["background_receipts"] == [
+        {"path": path, "request_digest": request_digest}
+    ]
+    # Later receipts do not silently rewrite the configured search context.
+    data = load_run(application, run_id)
+    data["intelligence"].append(
+        {
+            "path": application.artifact(
+                {"status": "complete", "request_digest": "later", "response": response}
+            ),
+            "status": "complete",
+            "request_digest": "later",
+        }
+    )
+    save_run(application, data)
+    assert (
+        optimize_run.configure(
+            application, run_id, host="fake", model="fake", background="Accepted local evidence"
+        )["config"]
+        == first["config"]
+    )
+    data["intelligence"] = []
+    save_run(application, data)
+    with pytest.raises(AuditError, match="not owned"):
+        optimize_run.status(application, run_id)

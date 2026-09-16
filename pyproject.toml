@@ -59,6 +59,7 @@ agentagon = ["dashboard_assets/*"]
 "share/agentagon/skills/fix/references" = ["skills/fix/references/*.md"]
 "share/agentagon/skills/eval/references" = ["skills/eval/references/*.md"]
 "share/agentagon/skills/eval/helpers" = ["skills/eval/helpers/*.py", "skills/eval/helpers/*.cjs"]
+"share/agentagon/skills/workflows" = ["skills/workflows/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

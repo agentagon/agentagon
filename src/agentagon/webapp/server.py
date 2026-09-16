@@ -140,6 +140,17 @@ def create_server(application, port=0):
                     ):
                         self._events(parts[2])
                     elif (
+                        len(parts) == 8
+                        and parts[:2] == ["api", "projects"]
+                        and parts[3] == "datasets"
+                        and parts[5] == "exports"
+                    ):
+                        self._respond(
+                            200,
+                            application.export_artifact(parts[2], parts[4], parts[6], parts[7]),
+                            "text/plain; charset=utf-8",
+                        )
+                    elif (
                         len(parts) == 6
                         and parts[:2] == ["api", "projects"]
                         and parts[3] == "deliveries"
@@ -178,6 +189,8 @@ def create_server(application, port=0):
                 project_id, resource = parts[2:4]
                 application.state.project(project_id)
                 if resource == "application-agents":
+                    if len(parts) == 8 and parts[5] == "focuses" and parts[7] == "design":
+                        return application.measurement_design(project_id, parts[4], parts[6])
                     if len(parts) == 4:
                         return application.application_agents(project_id)
                     if len(parts) == 5:
@@ -276,6 +289,11 @@ def create_server(application, port=0):
                 project_id, resource = parts[2:4]
                 application.state.project(project_id)
                 if resource == "application-agents":
+                    if len(parts) in {8, 9} and parts[5] == "focuses" and parts[7] == "design":
+                        if len(parts) == 8:
+                            return application.designs.save(project_id, parts[4], parts[6], body)
+                        if parts[8] == "accept":
+                            return application.designs.accept(project_id, parts[4], parts[6], body)
                     if len(parts) == 4:
                         return application.save_application_agent(project_id, body)
                     if len(parts) == 5:
@@ -305,6 +323,15 @@ def create_server(application, port=0):
                     if len(parts) == 5 and parts[4] == "preview":
                         return application.preview(project_id, body)
                 if resource == "datasets":
+                    if len(parts) == 6:
+                        if parts[5] == "export":
+                            return application.export_dataset(project_id, parts[4], body)
+                        if parts[5] == "publish-preview":
+                            return application.preview_dataset_publication(
+                                project_id, parts[4], body
+                            )
+                        if parts[5] == "publish":
+                            return application.publish_dataset(project_id, parts[4], body)
                     if len(parts) == 5 and parts[4] == "derive":
                         return application.derive_dataset(project_id, body)
                     if len(parts) == 6 and parts[5] == "split":

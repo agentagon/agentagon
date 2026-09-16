@@ -9,14 +9,25 @@ import sys
 from agentagon.core.records import AuditError, resource_path
 
 REFERENCES = {
+    "design": [
+        "skills/workflows/define-goal.md",
+        "skills/workflows/analyze-evidence.md",
+        "skills/workflows/design-measurement.md",
+        "skills/workflows/adapt-evaluation.md",
+    ],
     "audit": ["skills/audit/references/records.md", "skills/audit/references/analysis.md"],
     "eval": [
+        "skills/workflows/adapt-evaluation.md",
+        "skills/workflows/review-evaluation.md",
         "skills/eval/references/authoring.md",
         "skills/eval/references/preparation.md",
         "skills/fix/references/evaluation.md",
         "skills/fix/references/native-host.md",
     ],
     "fix": [
+        "skills/workflows/prepare-optimization-context.md",
+        "skills/workflows/review-candidate.md",
+        "skills/workflows/prepare-delivery.md",
         "skills/eval/references/authoring.md",
         "skills/fix/references/evaluation.md",
         "skills/fix/references/native-host.md",
@@ -24,7 +35,7 @@ REFERENCES = {
         "skills/fix/references/experiments.md",
         "skills/fix/references/delivery.md",
     ],
-    "baseline": ["skills/fix/references/native-host.md"],
+    "baseline": ["skills/workflows/interpret-baseline.md", "skills/fix/references/native-host.md"],
 }
 
 
@@ -47,7 +58,8 @@ def write_context(workspace, job):
         "execution_profile",
         "review_tasks",
         "active_review_id",
-        "active_reflection",
+        "active_reflections",
+        "host_slots",
         "elapsed_seconds",
         "application_agent_id",
         "focus_id",
@@ -58,6 +70,11 @@ def write_context(workspace, job):
     if job["options"].get("suite_manifest"):
         suite_path = path.with_name(f"{job['id']}-suite.json")
         workspace.write(suite_path, job["options"]["suite_manifest"])
+    if job["options"].get("optimization_background"):
+        background_path = path.with_name(f"{job['id']}-background.txt")
+        workspace.checked(background_path).write_text(
+            job["options"]["optimization_background"], encoding="utf-8"
+        )
     return path
 
 
@@ -69,6 +86,15 @@ def prompt(workspace, job):
     )
     refs = {p: str(resource_path(p)) for p in REFERENCES[job["kind"]]}
     instructions = {
+        "design": (
+            "Propose measurements for this agent and goal using the targeted procedures. "
+            "Inspect code, existing evaluations and the selected immutable evidence read-only. "
+            "Do not run evaluations, change source, accept a proposal, or publish anything. "
+            "Ask only for missing material expectations. Propose grounded behaviors, metrics, "
+            "scoring, hard gates, prerequisites and a native evaluation reuse/create choice. "
+            "Return the full proposal in a `measurement_design` object using the design-measurement "
+            "procedure's schema. The browser lets the user edit and explicitly accept it."
+        ),
         "audit": (
             "Complete the saved audit identified below. Use audit status/prepare/submit/report. "
             "Read each evidence packet and its exact response template, then submit actual "
@@ -94,7 +120,8 @@ def prompt(workspace, job):
             "Omni by default. Service durable host requests and resume the same requests. Authors "
             "and reviewers run in separate application-managed sessions. Only engine execution establishes "
             "measurements. Preserve failed attempts, exact evaluator, gates and user choice. "
-            "Respect permitted_paths. Compare the verified winner and at most two alternatives; "
+            "Respect permitted_paths. Use the accepted finalist_count and host_concurrency; "
+            "compare up to that many independently verified finalists, excluding the baseline; "
             "retain baseline if improvement is not established. Inspect pending host requests even "
             "when optimizer state is verification; final verification reviews require the same "
             "application-managed handoff. Prepare local branch/patch delivery."
@@ -107,12 +134,28 @@ def prompt(workspace, job):
         ),
     }[job["kind"]]
     manifest = write_context(workspace, job)
+    if job["options"].get("measurement_design"):
+        instructions += (
+            " The context contains the explicitly accepted measurement_design. Preserve its "
+            "exact metric directions, scales, weights, required behaviors and scoring mode. "
+            "Use its native evaluation plan and selected dataset, preserving missing labels. "
+            "Do not change accepted scoring to make a candidate pass; request a new design instead."
+        )
+    if job["kind"] == "fix":
+        instructions += (
+            f" Configure optimization with --finalist-count {job['options'].get('finalist_count', 3)} "
+            f"and --host-concurrency {job.get('host_slots', job['options'].get('host_concurrency', 1))}. "
+        )
+        if job["options"].get("optimization_background"):
+            background = manifest.with_name(f"{job['id']}-background.txt")
+            instructions += f"Pass --background-file {shlex.quote(str(background))} unchanged. "
     if job["kind"] == "fix" and job["options"].get("suite_manifest"):
         suite_path = manifest.with_name(f"{job['id']}-suite.json")
         instructions += (
             " This task includes a required regression suite. Immediately after starting the Fix "
             "run, BEFORE configuring or running optimization, bind its exact frozen manifest with "
-            f"`suite bind --run RUN_ID --manifest {shlex.quote(str(suite_path))}`. "
+            f"`suite bind --run RUN_ID --manifest {shlex.quote(str(suite_path))} "
+            f"--finalist-count {job['options'].get('finalist_count', 3)}`. "
             "Do not edit that manifest, omit a focus, or substitute an evaluator. The optimizer "
             "reserves the full-suite verification budget and independently runs every required "
             "evaluator against the same source. Inspect `suite status --run RUN_ID` and advance "
@@ -176,7 +219,7 @@ def result_object(text):
         return {}
     decoder = json.JSONDecoder()
     result, offset = {}, 0
-    text = text[-100_000:]
+    text = text[-256_000:]
     while offset < len(text):
         start = text.find("{", offset)
         if start < 0:
@@ -199,6 +242,7 @@ def result_object(text):
                 "needs_review",
                 "review",
                 "needs_reflection",
+                "measurement_design",
             )
         ):
             result = value
@@ -235,6 +279,8 @@ def reflection_handoff(workspace, job, text):
         request is None
         or request["role"] != "proposal"
         or request["payload"].get("protocol") != "gepa-reflection-v1"
+        or request["source"] != record["origin_revision"]
+        or request["evaluator"] != record["evaluation_digest"]
     ):
         raise AuditError("request is not an upstream GEPA reflection")
     if request["state"] == "cancelled":
@@ -247,6 +293,32 @@ def reflection_handoff(workspace, job, text):
             "reflection must use a dedicated session distinct from the workflow author"
         )
     return {"owner_id": owner, "request_id": request_id, "run_id": run_id}
+
+
+def reflection_handoffs(workspace, job, text):
+    """Collect the exact upstream batch, validating every native request binding."""
+    from agentagon.experiments.host_bridge import HostBridge
+
+    first = reflection_handoff(workspace, job, text)
+    if first is None:
+        return []
+    requests = HostBridge(workspace, first["owner_id"]).snapshot()["requests"]
+    batch = []
+    for request in requests.values():
+        if (
+            request["state"] not in {"pending", "running"}
+            or request["payload"].get("protocol") != "gepa-reflection-v1"
+        ):
+            continue
+        handoff = {**first, "request_id": request["request_id"]}
+        batch.append(
+            reflection_handoff(
+                workspace, job, json.dumps({"run_id": first["run_id"], "needs_reflection": handoff})
+            )
+        )
+    if not batch:
+        raise AuditError("this reflection is already finished; continue its workflow")
+    return batch
 
 
 def review_handoff(workspace, job, text):
@@ -369,8 +441,15 @@ author's identity or another session. A failing or incomplete review must say so
 never repair code or make unsupported passing claims.
 Return only a JSON object {{"summary": "...", "review": <completed template>}}. If evidence is
 unavailable, return {{"needs_input": "the exact missing evidence"}} instead.
+If an accepted measurement design is supplied, verify that the evaluator implements its
+behaviors, scores, cases and native evaluation semantics. Inspect the wrapper's invocation
+of the accepted command, scorer and output mapping; matching metric names alone is insufficient.
+Reject an evaluator that silently replaces the native workflow or treats observed outputs
+as correct labels. Use the focused evaluation-review procedure at
+{resource_path("skills/workflows/review-evaluation.md")}.
 Project: {workspace.root}
 Author session: {job["session_id"]}
+Accepted measurement design: {json.dumps(job["options"].get("measurement_design"), ensure_ascii=False)}
 Review binding: {json.dumps(task, ensure_ascii=False)}
 User guidance: {json.dumps(job.get("messages", []), ensure_ascii=False)}
 """
@@ -506,6 +585,23 @@ def validate_result(workspace, job, output):
     from agentagon.operations import status
 
     raw_result = result_object(output.get("text", ""))
+    if job["kind"] == "design":
+        from agentagon.webapp.designs import validate
+
+        if raw_result.get("needs_input") or not raw_result.get("measurement_design"):
+            question = str(
+                raw_result.get("needs_input") or "Continue to propose measurements for this goal."
+            )
+            return "needs_input", {"needs_input": question}, question
+        proposal = validate(raw_result["measurement_design"])
+        return (
+            "completed",
+            {
+                "summary": str(raw_result.get("summary", "Measurement proposal ready for review.")),
+                "measurement_design": proposal,
+            },
+            None,
+        )
     result = {
         k: v
         for k, v in raw_result.items()
@@ -577,6 +673,16 @@ def validate_result(workspace, job, output):
             optimized = optimize_run.status(workspace, candidate)
             if optimized["config"]["optimizer"] != job["options"].get("engine", "omni"):
                 raise AuditError("fix run uses a different optimizer than requested")
+            if optimized["config"].get("finalist_count") != job["options"].get("finalist_count", 3):
+                raise AuditError("fix run uses a different final candidate count than requested")
+            if optimized["config"]["host_concurrency"] > job.get(
+                "host_slots", job["options"].get("host_concurrency", 1)
+            ):
+                raise AuditError("fix run exceeds its allocated coding-agent capacity")
+            if optimized["config"].get("source_background", "") != job["options"].get(
+                "optimization_background", ""
+            ):
+                raise AuditError("fix run changed the accepted optimization context")
             _validate_limits(job, {"limits": optimized["budget"]["limits"]})
             state = optimized["state"]
             selection = optimized.get("selection")

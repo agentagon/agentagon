@@ -96,14 +96,16 @@ def _definition(workspace, member):
     }
 
 
-def bind(workspace, run_id, manifest):
+def bind(workspace, run_id, manifest, *, finalist_count=3):
     """Freeze the entire accepted suite before any application proposal is made."""
     canonical = _manifest(manifest)
+    if type(finalist_count) is not int or not 1 <= finalist_count <= 10:
+        raise AuditError("finalist_count must be between 1 and 10")
     with _locked(workspace, run_id), run_locked(workspace, run_id):
         data = load_run(workspace, run_id)
         if data.get("suite"):
             existing = status(workspace, run_id)
-            if existing["manifest"] != canonical:
+            if existing["manifest"] != canonical or existing["finalist_count"] != finalist_count:
                 raise AuditError("the run's measurement suite is already frozen")
             return existing
         if data.get("optimizer_configured") or len(data["candidates"]) != 1:
@@ -119,12 +121,14 @@ def bind(workspace, run_id, manifest):
 
         if executable(data["spec"]) != executable(active_spec):
             raise AuditError("primary run must use the active focus's frozen evaluator")
-        reserve = 2 * sum(item["spec"]["repetitions"] for item in definitions.values())
+        reserve = (
+            2 * finalist_count * sum(item["spec"]["repetitions"] for item in definitions.values())
+        )
         ledger = BudgetLedger(workspace, run_id)
         if ledger.path.exists():
             budget = ledger.snapshot()
             remaining = budget["allocations"]["verification"] - ledger.spent(budget, "verification")
-            if remaining < reserve + data["spec"]["repetitions"]:
+            if remaining < reserve + finalist_count * data["spec"]["repetitions"]:
                 raise AuditError(
                     "existing budget cannot protect the complete suite verification reserve"
                 )
@@ -135,11 +139,12 @@ def bind(workspace, run_id, manifest):
             "manifest_digest": digest(canonical),
             "definitions": definitions,
             "verification_trials": reserve,
+            "finalist_count": finalist_count,
             "trial_timeout_seconds": data["limits"]["trial_timeout_seconds"],
             "reference_source_revision": data["origin_revision"],
             "state": "bound",
-            "binding": None,
-            "measurements": {},
+            "active_candidate_id": None,
+            "finalists": {},
             "created_at": now(),
         }
         immutable = {
@@ -149,6 +154,7 @@ def bind(workspace, run_id, manifest):
                 "definitions",
                 "reference_source_revision",
                 "verification_trials",
+                "finalist_count",
                 "trial_timeout_seconds",
             )
         }
@@ -159,12 +165,26 @@ def bind(workspace, run_id, manifest):
             "manifest_digest": state["manifest_digest"],
             "definition_artifact": artifact,
             "verification_trials": reserve,
+            "finalist_count": finalist_count,
         }
         save_run(workspace, data)
         return state
 
 
-def status(workspace, run_id):
+FINALIST_FIELDS = (
+    "binding",
+    "state",
+    "measurements",
+    "runtime_trial_timeout_seconds",
+    "execution_binding_artifact",
+    "result",
+    "result_artifact",
+    "next_action",
+    "completed_at",
+)
+
+
+def _load(workspace, run_id):
     path = _path(workspace, run_id)
     if not path.exists():
         raise AuditError("run has no bound measurement suite")
@@ -177,24 +197,57 @@ def status(workspace, run_id):
         or any(state[k] != v for k, v in frozen.items())
         or data.get("suite")
         != {
-            "manifest_digest": state["manifest_digest"],
-            "definition_artifact": state["definition_artifact"],
-            "verification_trials": state["verification_trials"],
+            k: state[k]
+            for k in (
+                "manifest_digest",
+                "definition_artifact",
+                "verification_trials",
+                "finalist_count",
+            )
         }
+        or len(state["finalists"]) > state["finalist_count"]
     ):
         raise AuditError("bound suite identity changed")
-    if state.get("result_artifact") and workspace.read_artifact(
-        state["result_artifact"]
-    ) != state.get("result"):
-        raise AuditError("retained suite result changed")
-    if state.get("execution_binding_artifact") and workspace.read_artifact(
-        state["execution_binding_artifact"]
-    ) != {
-        "binding": state["binding"],
-        "trial_timeout_seconds": state["runtime_trial_timeout_seconds"],
-    }:
-        raise AuditError("suite finalist or execution limits changed")
+    for candidate_id, finalist in state["finalists"].items():
+        if finalist["binding"]["candidate_id"] != candidate_id:
+            raise AuditError("suite finalist identity changed")
+        if finalist.get("result_artifact") and workspace.read_artifact(
+            finalist["result_artifact"]
+        ) != finalist.get("result"):
+            raise AuditError("retained suite result changed")
+        if workspace.read_artifact(finalist["execution_binding_artifact"]) != {
+            "binding": finalist["binding"],
+            "trial_timeout_seconds": finalist["runtime_trial_timeout_seconds"],
+        }:
+            raise AuditError("suite finalist or execution limits changed")
     return state
+
+
+def _view(state, candidate_id):
+    return {**state, **state["finalists"][candidate_id]}
+
+
+def _save_finalist(workspace, state):
+    stored = _load(workspace, state["run_id"])
+    candidate_id = state["binding"]["candidate_id"]
+    stored["active_candidate_id"] = candidate_id
+    stored["finalists"][candidate_id] = {k: state[k] for k in FINALIST_FIELDS if k in state}
+    workspace.write(_path(workspace, state["run_id"]), stored)
+
+
+def status(workspace, run_id):
+    state = _load(workspace, run_id)
+    chosen = (load_run(workspace, run_id).get("selected") or {}).get("candidate_id")
+    chosen = chosen or state["active_candidate_id"]
+    result = _view(state, chosen) if chosen else {**state, "binding": None}
+    # Review authorization and application completion must see every child, including
+    # unsuccessful finalists. Individual result verification uses its own view.
+    result["measurements"] = {
+        f"{candidate_id}:{key}": entry
+        for candidate_id, finalist in state["finalists"].items()
+        for key, entry in finalist["measurements"].items()
+    }
+    return result
 
 
 def _measurement(workspace, state, member, role, host, host_handler):
@@ -206,7 +259,13 @@ def _measurement(workspace, state, member, role, host, host_handler):
         else state["binding"]["source_revision"]
     )
     child_id = identifier(
-        "run", primary, state["manifest_digest"], member["focus_id"], role, source
+        "run",
+        primary,
+        state["binding"]["candidate_id"],
+        state["manifest_digest"],
+        member["focus_id"],
+        role,
+        source,
     )
     key = member["focus_id"] + ":" + role
     entry = state["measurements"].setdefault(
@@ -214,7 +273,7 @@ def _measurement(workspace, state, member, role, host, host_handler):
     )
     if entry["execution_run_id"] != child_id:
         raise AuditError("suite measurement identity changed")
-    workspace.write(_path(workspace, primary), state)
+    _save_finalist(workspace, state)
     started = engine.start(
         workspace,
         definition["spec"],
@@ -277,7 +336,7 @@ def _measurement(workspace, state, member, role, host, host_handler):
             entry["host_request_id"] = request["request_id"]
     entry["state"] = result["candidate"]["state"]
     entry["candidate_id"] = started["candidate_id"]
-    workspace.write(_path(workspace, primary), state)
+    _save_finalist(workspace, state)
     return entry
 
 
@@ -400,56 +459,66 @@ def _result(workspace, state):
 
 def advance(workspace, run_id, *, candidate_id=None, host_handler=None):
     with _locked(workspace, run_id):
-        state = status(workspace, run_id)
+        stored = _load(workspace, run_id)
         data = load_run(workspace, run_id)
         candidate_id = (
             candidate_id
+            or stored["active_candidate_id"]
             or (data.get("selected") or {}).get("candidate_id")
-            or (state.get("binding") or {}).get("candidate_id")
         )
         if candidate_id not in data["candidates"] or candidate_id == data["baseline_id"]:
             raise AuditError("suite verification requires an independently reviewed finalist")
         candidate = data["candidates"][candidate_id]
         engine._verified_evidence(workspace, data, candidate)
+        if not candidate.get("verification_of"):
+            raise AuditError("suite requires fresh primary final verification")
         binding = {
             "run_id": run_id,
-            "manifest_digest": state["manifest_digest"],
+            "manifest_digest": stored["manifest_digest"],
             "candidate_id": candidate_id,
             "source_revision": candidate["source_revision"],
             "source_digest": candidate["source_digest"],
         }
-        if state["binding"] is not None and state["binding"] != binding:
-            raise AuditError(
-                "suite final verification is already bound to another candidate; create a new run"
-            )
-        state["binding"] = binding
-        if state["state"] in {"completed", "failed"}:
-            return state
         config_path = BudgetLedger(workspace, run_id).directory / "application-optimizer.json"
         if not config_path.exists():
             raise AuditError(
                 "configure the shared optimizer budget and host before running the suite"
             )
-        host = load_json(config_path)["config"]
-        if "execution_binding_artifact" not in state:
-            state["runtime_trial_timeout_seconds"] = min(
-                state["trial_timeout_seconds"], data["limits"]["trial_timeout_seconds"]
-            )
-            state["execution_binding_artifact"] = workspace.artifact(
-                {
-                    "binding": binding,
-                    "trial_timeout_seconds": state["runtime_trial_timeout_seconds"],
-                }
-            )
+        from agentagon.experiments import optimize_run
+
+        host = optimize_run.status(workspace, run_id)["config"]
+        if candidate_id not in stored["finalists"]:
+            if len(stored["finalists"]) >= stored["finalist_count"]:
+                raise AuditError("all frozen finalist verification slots have been used")
+            timeout = min(stored["trial_timeout_seconds"], data["limits"]["trial_timeout_seconds"])
+            stored["finalists"][candidate_id] = {
+                "binding": binding,
+                "state": "running",
+                "measurements": {},
+                "runtime_trial_timeout_seconds": timeout,
+                "execution_binding_artifact": workspace.artifact(
+                    {
+                        "binding": binding,
+                        "trial_timeout_seconds": timeout,
+                    }
+                ),
+            }
+            stored["active_candidate_id"] = candidate_id
+            workspace.write(_path(workspace, run_id), stored)
+        state = _view(stored, candidate_id)
+        if state["binding"] != binding:
+            raise AuditError("suite finalist source changed")
+        if state["state"] in {"completed", "failed"}:
+            return state
         state["state"] = "running"
-        workspace.write(_path(workspace, run_id), state)
+        _save_finalist(workspace, state)
         for member in state["manifest"]["members"]:
             for role in ("reference", "finalist"):
                 try:
                     entry = _measurement(workspace, state, member, role, host, host_handler)
                 except AuditError as exc:
                     state.update(state="blocked", next_action=str(exc))
-                    workspace.write(_path(workspace, run_id), state)
+                    _save_finalist(workspace, state)
                     return state
                 if entry["state"] != "verified":
                     state["state"] = (
@@ -462,7 +531,7 @@ def advance(workspace, run_id, *, candidate_id=None, host_handler=None):
                         if state["state"] == "failed"
                         else "Complete bound grading or independent review, then run the suite again."
                     )
-                    workspace.write(_path(workspace, run_id), state)
+                    _save_finalist(workspace, state)
                     return state
         state["result"] = _result(workspace, state)
         state["result_artifact"] = workspace.artifact(state["result"])
@@ -473,22 +542,26 @@ def advance(workspace, run_id, *, candidate_id=None, host_handler=None):
                 "Required checks or guardrails failed. The original baseline is retained."
             )
         state["completed_at"] = now()
-        workspace.write(_path(workspace, run_id), state)
+        _save_finalist(workspace, state)
         return state
 
 
 def verify_completed(workspace, run_id, manifest):
-    """Recheck immutable trial/review evidence and the exact selected source for delivery."""
-    state = status(workspace, run_id)
+    """Recheck the exact selected finalist against every required evaluator."""
+    state = _load(workspace, run_id)
     if state["manifest"] != _manifest(manifest):
         raise AuditError("completed suite differs from the accepted focus manifest")
     selected = load_run(workspace, run_id).get("selected") or {}
-    verify_selection(workspace, run_id, selected.get("candidate_id"))
-    return {"state": "completed", **state["result"], "artifact": state["result_artifact"]}
+    result = verify_selection(workspace, run_id, selected.get("candidate_id"))
+    finalist = state["finalists"][selected["candidate_id"]]
+    return {"state": "completed", **result, "artifact": finalist["result_artifact"]}
 
 
 def verify_selection(workspace, run_id, candidate_id):
-    state = status(workspace, run_id)
+    stored = _load(workspace, run_id)
+    if candidate_id not in stored["finalists"]:
+        raise AuditError("selected candidate differs from the suite's verified source")
+    state = _view(stored, candidate_id)
     if state["state"] != "completed" or not state.get("result", {}).get("passed"):
         raise AuditError("complete suite verification is missing or a required guardrail failed")
     data = load_run(workspace, run_id)
@@ -498,57 +571,66 @@ def verify_selection(workspace, run_id, candidate_id):
         for k in ("candidate_id", "source_revision", "source_digest")
     ):
         raise AuditError("selected candidate differs from the suite's verified source")
+    engine._verified_evidence(workspace, data, candidate)
     if _result(workspace, state) != state["result"]:
         raise AuditError("suite result no longer matches independent execution evidence")
     return state["result"]
 
 
 def verify_outcome(workspace, run_id, manifest):
-    """Validate a retained baseline outcome without calling it a passing suite."""
-    state = status(workspace, run_id)
-    if state["manifest"] != _manifest(manifest):
+    """Validate all terminal finalist attempts, preserving failed evidence."""
+    stored = _load(workspace, run_id)
+    if stored["manifest"] != _manifest(manifest):
         raise AuditError("suite differs from the accepted focus manifest")
     data = load_run(workspace, run_id)
+    outcomes = {}
+    for candidate_id in stored["finalists"]:
+        state = _view(stored, candidate_id)
+        if state["state"] not in {"completed", "failed"}:
+            raise AuditError("required suite measurements or independent reviews are unfinished")
+        candidate = data["candidates"].get(candidate_id)
+        if not candidate or candidate["source_revision"] != state["binding"]["source_revision"]:
+            raise AuditError("suite refers to a changed finalist")
+        engine._verified_evidence(workspace, data, candidate)
+        if state.get("result"):
+            if _result(workspace, state) != state["result"]:
+                raise AuditError("suite no longer matches its retained observations")
+            outcomes[candidate_id] = {
+                "state": state["state"],
+                **state["result"],
+                "artifact": state["result_artifact"],
+            }
+            continue
+        failures = []
+        for entry in state["measurements"].values():
+            child = load_run(workspace, entry["execution_run_id"])
+            measured = child["candidates"][child["baseline_id"]]
+            if (
+                child.get("suite_owner") != run_id
+                or child.get("suite_digest") != state["manifest_digest"]
+            ):
+                raise AuditError("failed execution is not bound to this suite")
+            if measured["state"] in {"failed", "rejected", "cancelled"}:
+                failures.append({"execution_run_id": child["run_id"], "state": measured["state"]})
+        if not failures:
+            raise AuditError("failed suite has no retained failed execution")
+        outcomes[candidate_id] = {"state": "failed", "passed": False, "failures": failures}
     if data.get("selected"):
-        return verify_completed(workspace, run_id, manifest)
-    if state["state"] == "bound" and state["binding"] is None:
+        return {**verify_completed(workspace, run_id, manifest), "finalists": outcomes}
+    if not outcomes:
         return {
             "state": "not_measured",
             "passed": False,
-            "manifest_digest": state["manifest_digest"],
+            "manifest_digest": stored["manifest_digest"],
             "limitations": [
                 "No qualifying finalist; the original baseline is retained. Full-suite improvement is not established."
             ],
+            "finalists": {},
         }
-    if state["state"] != "failed":
-        raise AuditError("required suite measurements or independent reviews are unfinished")
-    candidate = data["candidates"].get(state["binding"]["candidate_id"])
-    if not candidate or candidate["source_revision"] != state["binding"]["source_revision"]:
-        raise AuditError("failed suite refers to a changed finalist")
-    engine._verified_evidence(workspace, data, candidate)
-    if state.get("result"):
-        if _result(workspace, state) != state["result"] or state["result"]["passed"]:
-            raise AuditError("failed suite no longer matches its retained observations")
-        return {"state": "failed", **state["result"], "artifact": state["result_artifact"]}
-    failures = []
-    for entry in state["measurements"].values():
-        child = load_run(workspace, entry["execution_run_id"])
-        measured = child["candidates"][child["baseline_id"]]
-        if (
-            child.get("suite_owner") != run_id
-            or child.get("suite_digest") != state["manifest_digest"]
-        ):
-            raise AuditError("failed execution is not bound to this suite")
-        if measured["state"] in {"failed", "rejected", "cancelled"}:
-            failures.append({"execution_run_id": child["run_id"], "state": measured["state"]})
-    if not failures:
-        raise AuditError("failed suite has no retained failed execution")
-    return {
-        "state": "failed",
-        "passed": False,
-        "manifest_digest": state["manifest_digest"],
-        "failures": failures,
-    }
+    if any(outcome["state"] == "completed" for outcome in outcomes.values()):
+        raise AuditError("a verified suite finalist still needs selection")
+    latest = outcomes[stored["active_candidate_id"]]
+    return {**latest, "manifest_digest": stored["manifest_digest"], "finalists": outcomes}
 
 
 def review_execution(workspace, owner, request):

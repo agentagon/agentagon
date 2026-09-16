@@ -1,4 +1,4 @@
-"""Bounded, read-only provider imports for the checkout-local web application."""
+"""Bounded provider reads and a separate explicitly invoked dataset publication path."""
 
 import base64
 import importlib
@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 import httpx
 
-from agentagon.core.records import AuditError, now, timestamp_ns
+from agentagon.core.records import AuditError, digest, now, timestamp_ns
 from agentagon.storage.config import validate_endpoint
 from agentagon.telemetry.normalize import redact
 
@@ -328,6 +328,109 @@ class ProviderClient:
             return self._catalog("dataset")
         except _LimitReached:
             raise ProviderError("Dataset list exceeded its request limit") from None
+
+    def publish_dataset(self, destination, events, publication_digest):
+        """Reconcile a uniquely named Braintrust dataset before inserting missing row IDs."""
+        if self.provider != "braintrust":
+            raise ProviderError("Dataset publication supports Braintrust only")
+        if not isinstance(destination, dict) or set(destination) != {"project", "name"}:
+            raise ProviderError("Choose the reviewed dataset destination")
+        project = _text(destination.get("project"), "destination project")
+        name = _text(destination.get("name"), "dataset name")
+        if not isinstance(publication_digest, str) or not re.fullmatch(
+            r"[a-f0-9]{64}", publication_digest
+        ):
+            raise ProviderError("Invalid publication digest")
+        if (
+            not isinstance(events, list)
+            or not 1 <= len(events) <= MAX_ITEMS
+            or any(not isinstance(event, dict) for event in events)
+        ):
+            raise ProviderError("Publish between 1 and 1000 dataset examples")
+        if len(json.dumps(events, allow_nan=False).encode()) > MAX_TOTAL_BYTES:
+            raise ProviderError("Dataset publication exceeds 20 MB")
+        expected = {_text(event.get("id"), "dataset row ID"): event for event in events}
+        if len(expected) != len(events):
+            raise ProviderError("Dataset publication requires unique row IDs")
+        self._begin()
+        try:
+            # Same project/name returns the existing dataset unmodified. The marker
+            # prevents touching a same-name dataset belonging to another publication.
+            remote = self._request(
+                "POST",
+                "/v1/dataset",
+                json={
+                    "project_id": project,
+                    "name": name,
+                    "metadata": {"agentagon_publication": publication_digest},
+                },
+            )
+            if (
+                not isinstance(remote, dict)
+                or remote.get("project_id") != project
+                or remote.get("name") != name
+                or not isinstance(remote.get("metadata"), dict)
+                or remote.get("metadata", {}).get("agentagon_publication") != publication_digest
+            ):
+                raise ProviderError(
+                    "Destination dataset is not owned by this publication; nothing was inserted"
+                )
+            dataset_id = _text(remote.get("id"), "published dataset ID")
+            prefix = "/v1/dataset/" + quote(dataset_id, safe="")
+            rows, complete, _ = self._pages(
+                "POST",
+                prefix + "/fetch",
+                "events",
+                cap=MAX_ITEMS + 1,
+                style="cursor",
+                unique_key="id",
+            )
+            if not complete:
+                raise ProviderError("Cannot reconcile the complete destination dataset")
+            present = {}
+            for row in rows:
+                key = row.get("id")
+                content = {
+                    field: row[field]
+                    for field in ("id", "input", "expected", "metadata")
+                    if field in row
+                }
+                # Optional absent references may be represented as JSON null by fetch.
+                if (
+                    key in expected
+                    and "expected" not in expected[key]
+                    and content.get("expected") is None
+                ):
+                    content.pop("expected", None)
+                if key not in expected or digest(content) != digest(expected[key]):
+                    raise ProviderError(
+                        "Destination dataset changed; no publication rows were overwritten"
+                    )
+                present[key] = content
+            missing = [event for event in events if event["id"] not in present]
+            if missing:
+                inserted = self._request("POST", prefix + "/insert", json={"events": missing})
+                if not isinstance(inserted, dict) or inserted.get("row_ids") != [
+                    event["id"] for event in missing
+                ]:
+                    raise ProviderError(
+                        "Provider insertion receipt is incomplete; retry to reconcile"
+                    )
+            return self._clean(
+                {
+                    "provider": "braintrust",
+                    "project": project,
+                    "dataset_id": dataset_id,
+                    "name": name,
+                    "row_ids": list(expected),
+                    "count": len(events),
+                    "publication_digest": publication_digest,
+                }
+            )
+        except _LimitReached:
+            raise ProviderError(
+                "Dataset publication exceeded its bounded request budget; retry to reconcile"
+            ) from None
 
     def _selection(self, kind, selection):
         if kind not in {"traces", "dataset"} or not isinstance(selection, dict):

@@ -87,6 +87,17 @@ def list_snapshots(workspace):
     ]
 
 
+def input_payload(record):
+    """Canonical private input retained inside a frozen evaluator package."""
+    return {
+        "snapshot_id": record["id"],
+        "digest": record["digest"],
+        "items": record["items"],
+        "dataset_partition": record["provenance"].get("dataset_partition", "unsplit"),
+        "split_id": record["provenance"].get("split_id"),
+    }
+
+
 def materialize(workspace, snapshot_id, evaluation_id):
     """Copy a selected immutable dataset only into its evaluation preparation tree."""
     from agentagon.webapp.datasets import assert_development
@@ -113,14 +124,7 @@ def _materialize(workspace, snapshot_id, evaluation_id):
         raise AuditError("private input destination cannot use symlinks")
     if not target.resolve().is_relative_to(root.resolve()):
         raise AuditError("private input destination escapes the preparation worktree")
-    payload = {
-        "snapshot_id": snapshot_id,
-        "digest": record["digest"],
-        "items": record["items"],
-        "dataset_partition": record["provenance"].get("dataset_partition", "unsplit"),
-        "split_id": record["provenance"].get("split_id"),
-    }
-    workspace.write(target, payload)
+    workspace.write(target, input_payload(record))
     return {
         "snapshot_id": snapshot_id,
         "path": relative,

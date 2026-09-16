@@ -547,6 +547,7 @@ class Catalog:
         """Revalidate evidence; a saved identifier alone is not measurement readiness."""
         from agentagon.experiments import preparation
         from agentagon.webapp.comparisons import _completed
+        from agentagon.webapp.designs import Designs
 
         measurement = focus.get("measurement")
         evaluation = {
@@ -554,10 +555,27 @@ class Catalog:
             "reason": "Create or select a reviewed evaluation for this focus.",
         }
         baseline = {"ready": False, "reason": "Run a baseline after evaluation preparation."}
-        if not measurement:
-            return {"evaluation": evaluation, "baseline": baseline}
         workspace = self.state.workspace(project_id)
         try:
+            accepted = Designs(self.state, self).accepted(project_id, agent_id, focus["id"])
+            selected = (accepted["evaluation"].get("evaluation_id") if accepted else None) or (
+                measurement or {}
+            ).get("evaluation_id")
+            if not selected:
+                return {"evaluation": evaluation, "baseline": baseline}
+            if accepted:
+                Designs.validate_evaluator(workspace, accepted, selected)
+            if not measurement or measurement["evaluation_id"] != selected:
+                return {
+                    "evaluation": {
+                        "ready": True,
+                        "reason": "Accepted frozen evaluation available.",
+                    },
+                    "baseline": {
+                        "ready": False,
+                        "reason": "Run a baseline for the accepted evaluator.",
+                    },
+                }
             if (
                 measurement.get("agent_binding_digest")
                 != self.agent(project_id, agent_id)["binding_digest"]
@@ -565,7 +583,7 @@ class Catalog:
                 raise AuditError(
                     "Agent scope changed. Review and bind this measurement to the current agent."
                 )
-            identity = preparation.evaluator_identity(workspace, measurement["evaluation_id"])
+            identity = preparation.evaluator_identity(workspace, selected)
             if identity != measurement["evaluator_digest"]:
                 raise AuditError("Frozen evaluator identity changed. Prepare a new evaluation.")
             evaluation = {"ready": True, "reason": "Frozen evaluation available."}
@@ -826,22 +844,31 @@ class Catalog:
                         "missing": [],
                     },
                 )
-                for member in outcome.get("members", []):
-                    if member["focus_id"] not in focus_ids:
-                        continue
-                    child = load_run(workspace, member["executions"]["finalist"])
-                    for name, row in rows(
-                        member["focus_id"], member["name"], member, child["spec"]["metrics"], child
-                    ):
-                        row["measurements"].append(
-                            {
-                                "value": member["finalist"].get(name),
-                                "created_at": state.get("completed_at", state["created_at"]),
-                                "source_revision": state["binding"]["source_revision"],
-                                "run_id": run_id,
-                                "state": "verified" if outcome["passed"] else "guardrail_failed",
-                            }
-                        )
+                for candidate_id, verified in outcome["finalists"].items():
+                    finalist = state["finalists"][candidate_id]
+                    for member in verified.get("members", []):
+                        if member["focus_id"] not in focus_ids:
+                            continue
+                        child = load_run(workspace, member["executions"]["finalist"])
+                        for name, row in rows(
+                            member["focus_id"],
+                            member["name"],
+                            member,
+                            child["spec"]["metrics"],
+                            child,
+                        ):
+                            row["measurements"].append(
+                                {
+                                    "value": member["finalist"].get(name),
+                                    "created_at": finalist.get("completed_at", state["created_at"]),
+                                    "source_revision": finalist["binding"]["source_revision"],
+                                    "run_id": run_id,
+                                    "candidate_id": candidate_id,
+                                    "state": "verified"
+                                    if verified["passed"]
+                                    else "guardrail_failed",
+                                }
+                            )
             except (AuditError, OSError, KeyError) as exc:
                 limits.append(f"Fix measurement {run_id} is unavailable: {exc}")
         guards = []

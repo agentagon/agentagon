@@ -1,11 +1,29 @@
 """Finite native-host optimization commands over the existing execution pipeline."""
 
+from pathlib import Path
+
 import click
 
 from agentagon.core.records import AuditError
 from agentagon.experiments import engine, optimize_run
-from agentagon.experiments.optimizer import ENGINES, MetaHarnessConfig
+from agentagon.experiments.optimizer import (
+    ENGINES,
+    MAX_BACKGROUND_BYTES,
+    MetaHarnessConfig,
+    validate_background,
+)
 from agentagon.storage.workspace import Workspace
+
+
+def _background_text(path):
+    if path is None:
+        return ""
+    with path.open("rb") as stream:
+        content = stream.read(MAX_BACKGROUND_BYTES + 1)
+    try:
+        return validate_background(content.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise AuditError("optimization background must be UTF-8 text") from exc
 
 
 def register(fix_group, output):
@@ -16,6 +34,8 @@ def register(fix_group, output):
     @click.option("--intent", "intent_id")
     @click.option("--engine", "optimizer", type=click.Choice(ENGINES), default="omni")
     @click.option("--host-concurrency", type=click.IntRange(min=1), default=1)
+    @click.option("--finalist-count", type=click.IntRange(1, 10))
+    @click.option("--background-file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
     @click.option("--max-trials", type=click.IntRange(min=1))
     @click.option("--max-elapsed-seconds", type=click.IntRange(min=1))
     @click.option("--meta-harness-host")
@@ -30,6 +50,8 @@ def register(fix_group, output):
         intent_id,
         optimizer,
         host_concurrency,
+        finalist_count,
+        background_file,
         max_trials,
         max_elapsed_seconds,
         meta_harness_host,
@@ -48,6 +70,8 @@ def register(fix_group, output):
                 intent_id=intent_id,
                 optimizer=optimizer,
                 host_concurrency=host_concurrency,
+                finalist_count=finalist_count,
+                background=_background_text(background_file),
                 max_trials=max_trials,
                 max_elapsed_seconds=max_elapsed_seconds,
                 meta_harness=MetaHarnessConfig(host=meta_harness_host, model=meta_harness_model),

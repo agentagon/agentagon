@@ -29,6 +29,7 @@ class Result:
 class Task:
     seed_candidate: str
     objective: str
+    background: str = ""
 
 
 @dataclass
@@ -54,7 +55,7 @@ class BudgetTracker:
 
 
 class EvalServer:
-    """Serialize stage evaluations; Agentagon's ledger owns durable evidence."""
+    """Admit bounded concurrent evaluations; Agentagon's ledger owns durable evidence."""
 
     def __init__(self, task, evaluate, budget):
         self.task = task
@@ -67,15 +68,14 @@ class EvalServer:
     def evaluate(self, candidate, example=None, **kwargs):
         with self._lock:
             self.budget.check()
-            try:
-                score, info = self.eval_fn(candidate, example, **kwargs)
-            except Exception:
-                self.budget.used += 1
-                raise
             self.budget.used += 1
+        score, info = self.eval_fn(candidate, example, **kwargs)
+        with self._lock:
             if score > self.best_score:
                 self.best_candidate, self.best_score = candidate, score
-            return score, {**info, "_budget": self.budget.status()}
+        # Scheduling-dependent counters must not enter upstream reflection feedback:
+        # replay must assemble exactly the same prompt regardless of completion order.
+        return score, info
 
 
 class GepaEngine:
@@ -96,6 +96,7 @@ class GepaEngine:
                 seed_candidate=task.seed_candidate,
                 evaluator=server.evaluate,
                 objective=task.objective,
+                background=task.background,
                 config=self.config,
             )
         except EvalBudgetExhausted:

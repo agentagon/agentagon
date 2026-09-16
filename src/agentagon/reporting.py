@@ -420,7 +420,7 @@ def _scoring_definition_projection(value: dict) -> dict:
     return result
 
 
-def _top_comparisons(data: dict, candidates: list[dict]) -> dict:
+def _top_comparisons(data: dict, candidates: list[dict], *, eligible_ids=None) -> dict:
     from agentagon.experiments import scoring
 
     baseline_id = data.get("baseline_id")
@@ -430,6 +430,8 @@ def _top_comparisons(data: dict, candidates: list[dict]) -> dict:
     raw = data.get("candidates", {})
     if data.get("optimizer_configured"):
         ranked = [entry for entry in ranked if raw[entry["candidate_id"]].get("verification_of")]
+    if eligible_ids is not None:
+        ranked = [entry for entry in ranked if entry["candidate_id"] in eligible_ids]
     selected_id = (data.get("selected") or {}).get("candidate_id")
     ranked = sorted(ranked, key=lambda entry: entry["candidate_id"] != selected_id)
     displayed = {candidate["id"]: candidate for candidate in candidates}
@@ -445,7 +447,7 @@ def _top_comparisons(data: dict, candidates: list[dict]) -> dict:
             continue
         seen.add(source)
         alternatives.append(displayed[entry["candidate_id"]])
-        if len(alternatives) == 3:
+        if not data.get("optimizer_configured") and len(alternatives) == 3:
             break
     result = "verified_improvement" if alternatives else "baseline_retained"
     if not alternatives and data.get("optimizer_configured") and originals:
@@ -725,6 +727,17 @@ def build_fix_report(workspace: Workspace, run_state: dict) -> dict:
     usage = run_state.get("usage") or {}
     profile = run_state.get("profile") or {}
     runner = profile.get("runner") or {}
+    eligible_ids = None
+    if run_state.get("suite"):
+        from agentagon.experiments import suites
+
+        eligible_ids = {
+            candidate_id
+            for candidate_id, finalist in suites.status(workspace, run_state["run_id"])[
+                "finalists"
+            ].items()
+            if finalist["state"] == "completed" and finalist.get("result", {}).get("passed")
+        }
     return {
         "run_id": run_state["run_id"],
         "revision": run_state.get("revision") if type(run_state.get("revision")) is int else 0,
@@ -740,7 +753,7 @@ def build_fix_report(workspace: Workspace, run_state: dict) -> dict:
             if isinstance(item, str) and item in valid_ids
         ],
         "candidates": candidates,
-        "comparisons": _top_comparisons(run_state, candidates),
+        "comparisons": _top_comparisons(run_state, candidates, eligible_ids=eligible_ids),
         "rounds": [
             {
                 key: round_[key]
@@ -794,6 +807,7 @@ def build_fix_report(workspace: Workspace, run_state: dict) -> dict:
         "selected_branch": selected.get("branch")
         if isinstance(selected.get("branch"), str)
         else None,
+        "selected_candidate_id": selected.get("candidate_id"),
         "cleanup_pending": bool(run_state.get("cleanup_pending", False)),
     }
 

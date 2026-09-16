@@ -140,7 +140,7 @@ def test_host_requests_binding_claim_cancel_and_judging(workspace):
     assert len(bridge.snapshot()["requests"]) == 2
 
 
-def coordinator(workspace, *, concurrency=1, engine="omni"):
+def coordinator(workspace, *, concurrency=1, engine="omni", background=""):
     ledger = BudgetLedger(workspace, RUN)
     ledger.create(40, 300)
     # Fake baseline and release its unused preparation budget.
@@ -153,6 +153,7 @@ def coordinator(workspace, *, concurrency=1, engine="omni"):
         evaluator="frozen-eval",
         seed="0",
         objective="increase integer",
+        background=background,
         scope=["candidate"],
         host="codex",
         model="current-model",
@@ -213,8 +214,12 @@ def test_real_omni_all_engines_fresh_refine_and_concurrency(workspace, monkeypat
     assert len(evaluations) == len(set(evaluations))
 
 
-def test_real_gepa_host_pending_restart_never_repeats_work(workspace):
-    optimizer = coordinator(workspace, engine="gepa")
+@pytest.mark.parametrize("concurrency", [1, 2])
+def test_real_gepa_host_pending_restart_never_repeats_work(workspace, concurrency):
+    background = "Approved evidence: retries must preserve idempotency.\nSource: immutable evidence snapshot."
+    optimizer = coordinator(
+        workspace, engine="gepa", background=background, concurrency=concurrency
+    )
     evaluations = []
 
     def evaluate(candidate, **kwargs):
@@ -231,6 +236,7 @@ def test_real_gepa_host_pending_restart_never_repeats_work(workspace):
     assert "## Optimization Goal\n\nincrease integer" in request["payload"]["prompt"]
     assert "## Current Component" in request["payload"]["prompt"]
     assert "## Evaluation Results" in request["payload"]["prompt"]
+    assert background in request["payload"]["prompt"]
     assert "candidate" not in request["payload"]
     optimizer.bridge.start(request["request_id"])
     assert OptimizerCoordinator(workspace, RUN).advance(evaluate)["state"] == "host_pending"
@@ -263,10 +269,12 @@ def test_gepa_default_extractor_receives_raw_native_response(workspace, monkeypa
         return extract(text)
 
     monkeypatch.setattr(InstructionProposalSignature, "output_extractor", recording_extract)
-    optimizer = coordinator(workspace, engine="gepa")
+    background = "Approved evidence: preserve request idempotency."
+    optimizer = coordinator(workspace, engine="gepa", background=background)
     replies = []
 
     def host(request):
+        assert background in request["payload"]["prompt"]
         response = proposal_response(request, str(int(candidate_text(request)) + 1))
         replies.append(response["text"])
         return response

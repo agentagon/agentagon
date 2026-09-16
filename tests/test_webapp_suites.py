@@ -19,7 +19,7 @@ from agentagon.webapp.service import Application
 def test_suite_completion_requires_each_managed_child_reviewer(
     application, specification, quality, expected, tmp_path
 ):
-    job = validation_job("fix", engine="gepa")
+    job = validation_job("fix", engine="gepa", finalist_count=1)
     run_id, manifest = _suite(application, specification)
     job.update(agent="codex", session_id="author", actual_model="fake")
     job["options"]["suite_manifest"] = manifest

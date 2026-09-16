@@ -1013,9 +1013,11 @@ def _accept_review(workspace: Workspace, data: dict, candidate: dict, review: di
     candidate["state"] = "verified" if passing else "rejected"
 
 
-def _retry_cleanup(workspace: Workspace, run_id: str) -> None:
+def _retry_cleanup(workspace: Workspace, run_id: str, candidate_id: str | None = None) -> None:
     data = load_run(workspace, run_id)
     for candidate in data["candidates"].values():
+        if candidate_id is not None and candidate["candidate_id"] != candidate_id:
+            continue
         for trial in candidate["trials"]:
             if not trial.get("cleanup_pending") or trial["state"] in {"running", "interrupted"}:
                 continue
@@ -1052,7 +1054,7 @@ def run(
     data = load_run(workspace, run_id)
     candidate_id = _candidate(data, candidate_id)["candidate_id"]
     with _driver(workspace, run_id, candidate_id):
-        _retry_cleanup(workspace, run_id)
+        _retry_cleanup(workspace, run_id, candidate_id)
         with locked(workspace, run_id):
             data = load_run(workspace, run_id)
             _continue(data, continue_run, limits)
@@ -1317,20 +1319,36 @@ def select_best(workspace: Workspace, run_id: str) -> dict:
         if not data["spec"].get("scoring"):
             raise AuditError("automatic selection requires agreed scoring")
         ranked = qualifying(data)
+        finalist_count = 3
         if data.get("optimizer_configured"):
+            from agentagon.experiments import optimize_run
+
+            finalist_count = optimize_run.status(workspace, run_id)["config"]["finalist_count"]
             ranked = [
                 entry
                 for entry in ranked
                 if data["candidates"][entry["candidate_id"]].get("verification_of")
             ]
-        for entry in ranked[:3]:
+        if data.get("suite"):
+            from agentagon.experiments import suites
+
+            finalists = suites.status(workspace, run_id)["finalists"]
+            ranked = [
+                entry
+                for entry in ranked
+                if finalists.get(entry["candidate_id"], {}).get("state") == "completed"
+            ]
+            for entry in ranked:
+                suites.verify_selection(workspace, run_id, entry["candidate_id"])
+        ranked = ranked[:finalist_count]
+        for entry in ranked:
             _verified_evidence(workspace, data, data["candidates"][entry["candidate_id"]])
         if ranked:
             _select_locked(workspace, data, ranked[0]["candidate_id"])
         return {
             "run_id": run_id,
             "winner": ranked[0] if ranked else None,
-            "alternatives": ranked[1:3],
+            "alternatives": ranked[1:],
             "retained_baseline": not ranked,
         }
 

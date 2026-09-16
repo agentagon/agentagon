@@ -13,9 +13,10 @@ import math
 import os
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 
-from agentagon.core.records import AuditError, encoded, load_json, validate_record
+from agentagon.core.records import AuditError, digest, encoded, load_json, validate_record
 from agentagon.experiments.budget import BudgetExhausted, BudgetLedger
 from agentagon.experiments.host_bridge import HostBridge, HostWorkPending
 from agentagon.experiments.runtime import MeasurementUnavailable
@@ -23,8 +24,15 @@ from agentagon.experiments.runtime import MeasurementUnavailable
 GEPA_REVISION = "0632cdb5dcc052e690eab439e1b4a7e3e9cfe407"
 GEPA_VERSION = "0.1.4"
 # Persisted identity stays stable across module renames.
-RUNTIME_VERSION = "agentagon-gepa-reflection-v2"
+RUNTIME_VERSION = "agentagon-gepa-reflection-v3"
 ENGINES = {"omni", "gepa", "autoresearch", "meta_harness"}
+MAX_BACKGROUND_BYTES = 128 * 1024
+
+
+def validate_background(background):
+    if not isinstance(background, str) or len(background.encode("utf-8")) > MAX_BACKGROUND_BYTES:
+        raise AuditError("optimization background must be text of at most 128 KiB")
+    return background
 
 
 @dataclass(frozen=True)
@@ -106,14 +114,16 @@ class OptimizerCoordinator:
         scope: list[str],
         host: str,
         model: str,
+        background: str = "",
         engine: str = "omni",
         host_concurrency: int = 1,
         meta_harness: MetaHarnessConfig | None = None,
     ) -> dict:
         if engine not in ENGINES:
             raise AuditError("optimizer must be omni, gepa, autoresearch or meta_harness")
-        if type(host_concurrency) is not int or host_concurrency < 1:
-            raise AuditError("actual host concurrency must be a positive integer")
+        validate_background(background)
+        if type(host_concurrency) is not int or not 1 <= host_concurrency <= 64:
+            raise AuditError("actual host concurrency must be between 1 and 64")
         if not all(
             isinstance(v, str) and v.strip()
             for v in (source, evaluator, seed, objective, host, model)
@@ -148,6 +158,7 @@ class OptimizerCoordinator:
             "evaluator": evaluator,
             "seed": seed,
             "objective": objective,
+            "background": background,
             "scope": scope,
             "host": host,
             "model": model,
@@ -321,7 +332,9 @@ class OptimizerCoordinator:
             Task,
         )
 
-        counters = {"proposal": 0, "evaluation": 0}
+        counters = {"proposal": 0}
+        evaluation_locks = {}
+        evaluation_lock_guard = threading.Lock()
         route = config["meta_harness"] if stage["engine"] == "meta_harness" else {}
         host, model = route.get("host") or config["host"], route.get("model") or config["model"]
 
@@ -344,6 +357,7 @@ class OptimizerCoordinator:
                     "candidate": candidate,
                     "feedback": feedback,
                     "objective": config["objective"],
+                    "background": config["background"],
                 },
             )
             if request["state"] == "pending" and host_handler is not None:
@@ -362,7 +376,7 @@ class OptimizerCoordinator:
                 )
             return proposed
 
-        def reflect(prompt):
+        def reflect(prompt, *, index=None):
             if stop_requested.is_set():
                 raise OptimizationTargetReached()
             if not isinstance(prompt, str) or not prompt.strip():
@@ -373,8 +387,9 @@ class OptimizerCoordinator:
                 raise MeasurementUnavailable(
                     "GEPA reflection prompt exceeds the native transport limit"
                 )
-            index = counters["proposal"]
-            counters["proposal"] += 1
+            if index is None:
+                index = counters["proposal"]
+                counters["proposal"] += 1
             try:
                 request = self.bridge.request(
                     f"{stage['id']}:reflection:{index}",
@@ -426,12 +441,42 @@ class OptimizerCoordinator:
                 )
             return text
 
+        def batch_complete(messages_list):
+            prompts = []
+            for messages in messages_list:
+                if (
+                    not isinstance(messages, list)
+                    or len(messages) != 1
+                    or messages[0].get("role") != "user"
+                    or not isinstance(messages[0].get("content"), str)
+                ):
+                    raise MeasurementUnavailable(
+                        "native GEPA batch requires text-only rendered prompts"
+                    )
+                prompts.append(messages[0]["content"])
+            # Reserve deterministic identities in upstream input order before any
+            # transport threads run. Return raw responses in that same order.
+            start = counters["proposal"]
+            counters["proposal"] += len(prompts)
+            with ThreadPoolExecutor(max_workers=config["host_concurrency"]) as pool:
+                futures = [
+                    pool.submit(reflect, prompt, index=start + i)
+                    for i, prompt in enumerate(prompts)
+                ]
+                return [future.result() for future in futures]
+
+        reflect.batch_complete = batch_complete
+
         def evaluate(candidate, example=None, **kwargs):
+            with evaluation_lock_guard:
+                lock = evaluation_locks.setdefault(digest(candidate), threading.Lock())
+            with lock:
+                return evaluate_one(candidate, example, **kwargs)
+
+        def evaluate_one(candidate, example=None, **kwargs):
             if stop_requested.is_set():
                 raise OptimizationTargetReached()
-            index = counters["evaluation"]
-            counters["evaluation"] += 1
-            operation_id = f"optimizer:{stage['id']}:evaluation:{index}"
+            operation_id = f"optimizer:{stage['id']}:evaluation:{digest(candidate)}"
             binding = {
                 "candidate": candidate,
                 "evaluator": config["evaluator"],
@@ -468,7 +513,10 @@ class OptimizerCoordinator:
                     except OptimizationTargetReached:
                         stop_requested.set()
                         raise
-                    except BudgetExhausted:
+                    except BudgetExhausted as exc:
+                        self.ledger.finish(
+                            operation_id, status="failed", result={"error": str(exc)}
+                        )
                         raise
                     except Exception as exc:
                         self.ledger.finish(
@@ -502,6 +550,7 @@ class OptimizerCoordinator:
             Task(
                 seed_candidate=seed,
                 objective=config["objective"],
+                background=config["background"],
             ),
             evaluate,
             # Replayed seeds are already measured by the enclosing application pipeline.
@@ -510,14 +559,19 @@ class OptimizerCoordinator:
             ),
         )
         if stage["engine"] == "gepa":
+            from gepa.strategies.proposal_sampling import PxNSampling
+
             from agentagon.experiments.runtime import GepaEngine
 
             engine = GepaEngine(
                 f"{run_dir}/{stage['id']}",
                 engine={
-                    "parallel": False,
+                    "parallel": config["host_concurrency"] > 1,
+                    "max_workers": config["host_concurrency"],
+                    "sampling_strategy": PxNSampling(p=1, n=config["host_concurrency"]),
                     "use_cloudpickle": False,
                     "seed": 0,
+                    "max_candidate_proposals": stage["max_evals"],
                     "cache_evaluation": not count_trial,
                     "cache_evaluation_storage": "memory" if not count_trial else "auto",
                 },

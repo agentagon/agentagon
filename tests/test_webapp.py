@@ -14,6 +14,7 @@ from agentagon.cli.main import main
 from agentagon.core.records import AuditError
 from agentagon.storage.config import Config
 from agentagon.webapp import snapshots
+from agentagon.webapp.providers import CredentialStore
 from agentagon.webapp.server import create_server
 from agentagon.webapp.service import Application
 
@@ -75,6 +76,130 @@ def connection(app, project_id):
             "credential_mode": "session",
         }
     )
+
+
+@pytest.mark.parametrize("mode", ["keyring", "session", "env"])
+@pytest.mark.parametrize("commit_succeeds", [True, False])
+def test_claude_credential_rotation_follows_settings_commit(
+    app, monkeypatch, mode, commit_succeeds
+):
+    class Keyring:
+        def __init__(self):
+            self.values = {}
+
+        def set_password(self, service, name, value):
+            self.values[name] = value
+
+        def get_password(self, service, name):
+            return self.values.get(name)
+
+        def delete_password(self, service, name):
+            assert app.state.read()["agents"]["claude_api_key_ref"] != name
+            del self.values[name]
+
+    keyring = Keyring()
+    app.credentials = CredentialStore(keyring)
+    monkeypatch.setattr("agentagon.webapp.service.detect_agents", lambda: [])
+    app.save_agents({"claude_api_key": "old-secret", "credential_mode": "keyring"})
+    previous = app.state.read()["agents"]["claude_api_key_ref"]
+    monkeypatch.setenv("REPLACEMENT_CLAUDE_KEY", "new-secret")
+    payload = {
+        "claude_api_key": "REPLACEMENT_CLAUDE_KEY" if mode == "env" else "new-secret",
+        "credential_mode": mode,
+    }
+    if commit_succeeds:
+        app.save_agents(payload)
+        current = app.state.read()["agents"]["claude_api_key_ref"]
+        assert current != previous
+        assert app.credentials.resolve(current) == "new-secret"
+        assert previous not in keyring.values
+        with pytest.raises(AuditError, match="unavailable"):
+            app.credentials.resolve(previous)
+        # Changing other settings keeps the current credential usable.
+        app.save_agents({"concurrency": 2})
+        assert app.state.read()["agents"]["claude_api_key_ref"] == current
+        assert app.credentials.resolve(current) == "new-secret"
+    else:
+
+        @contextmanager
+        def failed_commit():
+            yield app.state.read()
+            raise OSError("settings commit failed")
+
+        monkeypatch.setattr(app.state, "locked", failed_commit)
+        with pytest.raises(OSError, match="settings commit failed"):
+            app.save_agents(payload)
+        assert app.state.read()["agents"]["claude_api_key_ref"] == previous
+        assert app.credentials.resolve(previous) == "old-secret"
+        assert keyring.values == {previous: "old-secret"}
+        assert not app.credentials._values
+    assert app.credentials.resolve("env:REPLACEMENT_CLAUDE_KEY") == "new-secret"
+
+
+def test_claude_credential_rotation_waits_for_starting_session(app, tmp_path, monkeypatch):
+    resolving = threading.Event()
+    release = threading.Event()
+    rotating = threading.Event()
+    observed = []
+    monkeypatch.setattr("agentagon.webapp.service.detect_agents", lambda: [])
+    app.save_agents({"claude_api_key": "old-secret", "credential_mode": "session"})
+    previous = app.state.read()["agents"]["claude_api_key_ref"]
+    resolve = app.credentials.resolve
+
+    def paused_resolve(reference):
+        if reference == previous:
+            resolving.set()
+            assert release.wait(5), "starting session was not released"
+        return resolve(reference)
+
+    class ObservedCondition(threading.Condition):
+        def __enter__(self):
+            if threading.current_thread().name.startswith("credential-rotation"):
+                rotating.set()
+            return super().__enter__()
+
+    def host(request, *_):
+        observed.append(request["api_key"])
+        return {"state": "interrupted", "session_id": "saved-session"}
+
+    monkeypatch.setattr(app.credentials, "resolve", paused_resolve)
+    app.jobs.condition = ObservedCondition(threading.RLock())
+    app.jobs.execute = host
+    saved = project(app, tmp_path)
+    job = app.jobs.submit(
+        saved["id"],
+        {
+            "operation_id": str(uuid.uuid4()),
+            "kind": "audit",
+            "goal": "Review this application",
+            "agent": "claude",
+        },
+    )
+    try:
+        assert resolving.wait(5), "session did not read its credential reference"
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="credential-rotation") as pool:
+            rotation = pool.submit(
+                app.save_agents,
+                {"claude_api_key": "new-secret", "credential_mode": "session"},
+            )
+            try:
+                # Let rotation reach the manager lock while resolution is paused.
+                assert rotating.wait(5), "rotation did not reach the session lock"
+            finally:
+                release.set()
+            rotation.result(timeout=5)
+        for worker in list(app.jobs.threads):
+            worker.join(timeout=5)
+        result = app.jobs.get(saved["id"], job["id"])
+        assert result["state"] == "interrupted", result["next_action"]
+        assert result["session_id"] == "saved-session"
+        assert observed == ["old-secret"]
+        current = app.state.read()["agents"]["claude_api_key_ref"]
+        assert resolve(current) == "new-secret"
+        with pytest.raises(AuditError, match="unavailable"):
+            resolve(previous)
+    finally:
+        release.set()
 
 
 @contextmanager

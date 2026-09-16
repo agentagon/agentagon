@@ -31,11 +31,13 @@ Use Omni by default: bounded exploration across GEPA, Agentagon's native-host Au
 
 Run the [native-host optimizer and request procedure](references/native-host.md), servicing each available proposal, grading and review request before advancing the coordinator. The optimizer proposes work; Agentagon enforces scope, admission budgets, complete attempt history, measurement validity, gates and review. Use durable host request/reply identities for proposals, grading and independent reviews. Honor the saved host/model and role; unavailable work stays pending. Resume the same request without duplicating edits, evaluations or charges. Keep judge configuration separate from proposer configuration.
 
+Use [optimization context](../workflows/prepare-optimization-context.md) to bind accepted evidence and optional approved guidance. Use [candidate review](../workflows/review-candidate.md) for each finalist and [delivery preparation](../workflows/prepare-delivery.md) after selection. These procedures are also bundled into the web app.
+
 Allow code, prompts, harnesses, tool code/names and ordinary configuration within agreed scope. Directional model substitutions should be a small fixed step within the existing family or configured router. Broader provider/model changes and permission expansion require approval.
 
 Follow [bounded experiments](references/experiments.md) for execution and review invariants. Every failed or dominated attempt remains evidence. Stop when a target-reaching candidate passes final verification or the budget ends. Select the highest-scoring independently verified candidate that satisfies all gates and establishes improvement over baseline. Preserve the user's ability to choose another verified alternative; retain the baseline when no improvement is established.
 
-Report the winner and next two qualifying alternatives against the baseline, including score components, checks, limits and concrete changes. Verify within the reserved budget and show fewer when fewer qualify. Never substitute host-written score JSON for bound execution or grading observations.
+Retain the configured number of finalists, default three and bounded from one to ten, excluding the baseline. Report their score components, checks, limits and concrete changes. Verify each against the full required suite within the reserved budget and show fewer when fewer qualify. Never substitute host-written score JSON for bound execution or grading observations.
 
 ## Deliver
 

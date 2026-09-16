@@ -21,6 +21,8 @@ Recommend one path that addresses the user's goal. A local assertion suite may c
 
 ## Inspect and agree
 
+Use the focused procedures for [goal definition](../workflows/define-goal.md), [evidence analysis](../workflows/analyze-evidence.md), [measurement design](../workflows/design-measurement.md) and [native evaluator adaptation](../workflows/adapt-evaluation.md). Their outputs are shared with the web app; keep execution and acceptance in the validated host workflow.
+
 1. Inspect application requirements, entry points, configuration and existing evals far enough to recommend a useful first measurement. Discovery accepts dirty or non-Git directories. A full audit is not a prerequisite for that recommendation. When a full audit is requested or needed to support a claim, follow [Audit](../audit/SKILL.md), preserving its complete rubric, evidence scope and trace-alignment limits. Describe initial inspection as discovery, not a completed audit or measured coverage.
 2. Use the shared [goals, scoring and eval authoring procedure](../eval/references/authoring.md). Infer relevant behaviors and propose a scoring definition, required gates and one understandable time/evaluation budget from the evidence. Present their practical meaning using the response guidance above; let the user customize them without requiring them to design the evaluation. Do not turn audit facets into a universal score.
 3. Resolve existing eval code before proposing new evals. If usable evals are absent, confirm that finding and the proposed creation/running of missing evals. An explicit request to create evals already supplies that authorization; do not ask again.
@@ -31,6 +33,8 @@ Recommend one path that addresses the user's goal. A local assertion suite may c
 Run the shared [evaluation preparation](../fix/references/evaluation.md), preserving application source. Cases, assertions, judge prompts, scoring and execution logic belong in the user's repository. Save accepted intent and supporting evidence through CLI operations in private `.agentagon/` records.
 
 Validate representative known judgments and sensitivity, obtain independent review and freeze the evaluator before comparison. Measure a fresh baseline with the saved definition and execution settings. Init-only work budgets its applicable preparation and baseline stages; it does not reserve an optimization stage. Missing source, access, judge or execution prerequisites remain visible and do not discard discovery.
+
+Use [evaluation review](../workflows/review-evaluation.md) and [baseline interpretation](../workflows/interpret-baseline.md) for their distinct evidence requirements.
 
 Deliver reviewed eval creation as an eval-only draft PR when the destination and authentication are configured; otherwise prepare the local branch/patch using [delivery](../fix/references/delivery.md). Do not create an application patch during onboarding. Lead the result with what was measured, the score and relevant failures, or the precise blocker and next step. State material limits on what the result proves. Link the delivered eval changes and dashboard; retain the full agreed definition, evaluator identity and execution evidence there.
 

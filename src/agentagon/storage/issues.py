@@ -18,7 +18,9 @@ SEVERITY = {"critical": 4, "high": 3, "medium": 2, "low": 1}
 
 def list_issues(workspace: Workspace) -> list[dict]:
     issues = {}
-    for audit in sorted(workspace.audits(), key=lambda a: a["created_at"]):
+    audits = workspace.audits()
+    created = {audit["audit_id"]: timestamp_ns(audit["created_at"]) for audit in audits}
+    for audit in sorted(audits, key=lambda a: (created[a["audit_id"]], a["audit_id"])):
         findings = {
             finding["id"]: finding for d in audit["diagnoses"].values() for finding in d["findings"]
         }
@@ -61,7 +63,17 @@ def list_issues(workspace: Workspace) -> list[dict]:
             issues[event["issue_id"]]["history"].append(event)
             issues[event["issue_id"]]["status"] = event["status"]
     for issue in issues.values():
-        issue["audit_ids"] = list(dict.fromkeys(o["audit_id"] for o in issue["occurrences"]))
+        issue["occurrences"].sort(
+            key=lambda o: (
+                created[o["audit_id"]],
+                timestamp_ns(o["assigned_at"]),
+                o["audit_id"],
+                o["finding_id"],
+            )
+        )
+        # With tied audit times, use each audit's latest assignment for this issue.
+        latest_occurrence = {o["audit_id"]: i for i, o in enumerate(issue["occurrences"])}
+        issue["audit_ids"] = sorted(latest_occurrence, key=latest_occurrence.__getitem__)
         issue["latest_audit_id"] = issue["audit_ids"][-1] if issue["audit_ids"] else None
         traces = {key for occurrence in issue["occurrences"] for key in occurrence["trace_ids"]}
         issue["historical_affected_traces"] = len(traces)

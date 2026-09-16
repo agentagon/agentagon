@@ -146,3 +146,13 @@ def test_optimizer_report_requires_final_verification_and_respects_selection(wor
     assert alternatives[0]["id"] == "chosen"
     assert len(alternatives) == 2
     assert "search" not in {candidate["id"] for candidate in alternatives}
+    for index in range(3):
+        candidate_id = f"additional-{index}"
+        fix_run["candidates"][candidate_id] = {
+            **copy.deepcopy(final),
+            "candidate_id": candidate_id,
+            "source_digest": f"source-{index}",
+        }
+    alternatives = build_fix_report(workspace, fix_run)["comparisons"]["alternatives"]
+    assert len(alternatives) == 5
+    assert alternatives[0]["id"] == "chosen"

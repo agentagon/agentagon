@@ -82,6 +82,9 @@ class AppFixture:
         self.baselines = []
         self.datasets = []
         self.issues = []
+        self.designs = {}
+        self.native_evaluators = []
+        self.frozen_evaluators = []
         self.agent_settings = {"default_agent": "codex", "models": {}, "concurrency": 1}
         self.agents = [{"id": "codex", "name": "Codex", "available": True}]
         self.profile = {
@@ -202,6 +205,35 @@ class AppFixture:
                     return value
                 return {"agents": agents}
             agent_id = parts[5]
+            if "/design" in path:
+                focus_id = parts[7]
+                draft = self.designs.get((agent_id, focus_id))
+                if method == "POST":
+                    assert payload["expected_revision"] == (draft["revision"] if draft else 0)
+                    if path.endswith("/accept"):
+                        draft.update(state="accepted", revision=draft["revision"] + 1)
+                    else:
+                        draft = {
+                            "id": "design_one",
+                            "revision": payload["expected_revision"] + 1,
+                            "state": "draft",
+                            **{
+                                key: value
+                                for key, value in payload.items()
+                                if key != "expected_revision"
+                            },
+                        }
+                        self.designs[agent_id, focus_id] = draft
+                    return draft
+                return {
+                    "focus": next(
+                        item for item in self.focuses[agent_id] if item["id"] == focus_id
+                    ),
+                    "draft": draft,
+                    "evaluators": self.native_evaluators,
+                    "frozen_evaluators": self.frozen_evaluators,
+                    "snapshots": self.datasets,
+                }
             if path.endswith("/focuses"):
                 if method == "POST":
                     value = {"id": "focus_new", "state": "active", **payload}
@@ -311,6 +343,7 @@ class AppFixture:
             }
         if path.endswith("/control"):
             self.runs[0]["selected_branch"] = "agentagon/fix-result"
+            self.runs[0]["selected_candidate_id"] = payload["candidate_id"]
             return {"state": "applied"}
         if path.endswith("/deliveries"):
             return {
@@ -353,7 +386,7 @@ def test_project_switch_and_guided_audit_are_scoped(webapp_page):
     page.get_by_label("Project", exact=True).select_option("project_beta")
     playwright.expect(page.locator("#project-name")).to_have_text("Research agent")
     page.get_by_label("Application agent", exact=True).select_option("agent_research")
-    page.get_by_role("button", name="Start audit", exact=True).click()
+    page.get_by_role("button", name="Investigate", exact=True).click()
     page.get_by_label("Goal", exact=True).fill("Investigate duplicate citations")
     page.get_by_label("Audit scope").select_option("changes")
     page.get_by_role("dialog").get_by_role("button", name="Start audit", exact=True).click()
@@ -431,7 +464,16 @@ def test_dataset_preview_requires_explicit_save_and_renders_provider_text_safely
     assert [item["path"] for item in fixture.mutations] == [
         "/api/projects/project_alpha/imports/preview"
     ]
-    page.get_by_role("button", name="Save local snapshot", exact=True).click()
+    pending_refresh = []
+    page.route(
+        "**/api/projects/project_alpha/overview", lambda route: pending_refresh.append(route)
+    )
+    with page.expect_request("**/api/projects/project_alpha/overview"):
+        page.get_by_role("button", name="Save local snapshot", exact=True).click()
+    # Keep completion atomic: closing early allows a late refresh to redirect newer navigation.
+    playwright.expect(page.get_by_role("dialog")).to_be_visible()
+    assert len(pending_refresh) == 1
+    fixture.route(pending_refresh.pop())
     playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
     assert fixture.mutations[-1]["path"] == "/api/projects/project_alpha/imports"
     assert fixture.mutations[-1]["payload"]["preview_id"] == "preview_one"
@@ -500,7 +542,7 @@ def test_fix_evidence_selection_and_publication_are_separate(webapp_page):
     ]
     page.goto("http://127.0.0.1:8765/?agent=agent_support&view=fix")
     page.get_by_role("button", name="Improve routing quality", exact=True).click()
-    playwright.expect(page.get_by_text("Best verified result", exact=True)).to_be_visible()
+    playwright.expect(page.get_by_text("Verified alternative", exact=True)).to_be_visible()
     page.get_by_role("button", name="Inspect diff & evidence", exact=True).nth(1).click()
     playwright.expect(page.get_by_text("+ validate the tool name", exact=False)).to_be_visible()
     playwright.expect(
@@ -510,6 +552,7 @@ def test_fix_evidence_selection_and_publication_are_separate(webapp_page):
     playwright.expect(
         page.get_by_role("button", name="Prepare local delivery", exact=True)
     ).to_be_visible()
+    playwright.expect(page.get_by_text("Selected candidate", exact=True)).to_be_visible()
     selection = fixture.mutations[-1]["payload"]
     assert selection["expected_revision"] == 7
     assert selection["candidate_id"] == "candidate_best"
@@ -598,12 +641,17 @@ def test_dataset_to_measurement_keeps_frozen_evaluator_and_profile_limits(webapp
     page.get_by_label("Goal", exact=True).fill("Improve support correctness")
     page.get_by_text("Additional options", exact=True).click()
     page.get_by_label("Optimization engine", exact=True).select_option("gepa")
+    playwright.expect(page.get_by_label("Finalists to verify", exact=True)).to_have_value("3")
+    page.get_by_label("Finalists to verify", exact=True).fill("4")
+    page.get_by_label("Concurrent coding sessions", exact=True).fill("2")
     page.get_by_role("dialog").get_by_role("button", name="Start fix", exact=True).click()
     playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
     options = fixture.mutations[-1]["payload"]["options"]
     assert options["baseline_id"] == "baseline_saved"
     assert options["evaluation_id"] == "eval_frozen"
     assert options["engine"] == "gepa"
+    assert options["finalist_count"] == 4
+    assert options["host_concurrency"] == 2
 
 
 def test_selected_task_reload_and_grouped_answers_remain_distinct(webapp_page):
@@ -704,7 +752,7 @@ def test_agent_authentication_and_cross_agent_model_selection(webapp_page):
     ]
     fixture.agent_settings["models"]["codex"] = "codex-saved-model"
     page.goto("http://127.0.0.1:8765/?agent=agent_support&view=overview")
-    page.get_by_role("button", name="Start audit", exact=True).click()
+    page.get_by_role("button", name="Investigate", exact=True).click()
     playwright.expect(
         page.get_by_role("dialog").get_by_role("button", name="Start audit", exact=True)
     ).to_be_disabled()
@@ -725,6 +773,23 @@ def test_agent_authentication_and_cross_agent_model_selection(webapp_page):
     )
     page.get_by_label("Default coding agent", exact=True).select_option("claude")
     playwright.expect(page.get_by_label("Default model", exact=True)).to_have_value("")
+
+
+def test_task_codex_default_overrides_saved_model(webapp_page):
+    page, fixture = webapp_page
+    fixture.agent_settings["models"]["codex"] = "codex-saved-model"
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=overview")
+    page.get_by_role("button", name="Investigate", exact=True).click()
+    model = page.get_by_role("dialog").get_by_label("Model", exact=True)
+    playwright.expect(model).to_have_value("codex-saved-model")
+    model.select_option(label="Codex default")
+    page.get_by_role("dialog").get_by_role("button", name="Start audit", exact=True).click()
+    playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
+    request = fixture.mutations[-1]
+    assert request["path"] == "/api/projects/project_alpha/jobs"
+    assert request["payload"]["agent"] == "codex"
+    assert request["payload"]["model"] == ""
+    assert fixture.agent_settings["models"]["codex"] == "codex-saved-model"
 
 
 def test_audit_issue_handoff_retains_issue_and_audit_identity(webapp_page):
@@ -751,13 +816,13 @@ def test_saved_issue_focus_keeps_evidence_identity_and_existing_focuses(webapp_p
         }
     ]
     page.goto("http://127.0.0.1:8765/?agent=agent_support&view=overview")
-    page.get_by_role("button", name="Add focus", exact=True).click()
+    page.get_by_role("button", name="Add goal", exact=True).click()
     page.get_by_label("Start from", exact=True).select_option("issue")
-    playwright.expect(page.get_by_role("button", name="Save focus", exact=True)).to_be_disabled()
+    playwright.expect(page.get_by_role("button", name="Save goal", exact=True)).to_be_disabled()
     page.get_by_label("Saved issue", exact=True).select_option("issue_one")
-    page.get_by_label("Focus name", exact=True).fill("Choose the correct tool")
+    page.get_by_label("Goal name", exact=True).fill("Choose the correct tool")
     page.get_by_label("Desired behavior", exact=True).fill("Use the support lookup tool")
-    page.get_by_role("button", name="Save focus", exact=True).click()
+    page.get_by_role("button", name="Save goal", exact=True).click()
     playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
     assert fixture.mutations[-1]["payload"]["source"] == {
         "kind": "issue",
@@ -771,15 +836,16 @@ def test_saved_issue_focus_keeps_evidence_identity_and_existing_focuses(webapp_p
 
     fixture.issues = []
     page.reload()
-    page.get_by_role("button", name="Add focus", exact=True).click()
+    page.get_by_role("button", name="Goals", exact=True).click()
+    page.get_by_role("button", name="Add goal", exact=True).click()
     page.get_by_label("Start from", exact=True).select_option("issue")
     playwright.expect(
         page.get_by_text("This agent has no saved issues.", exact=False)
     ).to_be_visible()
-    playwright.expect(page.get_by_role("button", name="Save focus", exact=True)).to_be_disabled()
+    playwright.expect(page.get_by_role("button", name="Save goal", exact=True)).to_be_disabled()
     page.get_by_role("button", name="Start from a goal", exact=True).click()
     playwright.expect(page.get_by_label("Start from", exact=True)).to_have_value("goal")
-    playwright.expect(page.get_by_role("button", name="Save focus", exact=True)).to_be_enabled()
+    playwright.expect(page.get_by_role("button", name="Save goal", exact=True)).to_be_enabled()
 
 
 def test_baseline_comparison_preserves_unknowns_and_rejects_incompatibility(webapp_page):
@@ -888,17 +954,21 @@ def test_agent_discovery_confirmation_focus_and_scoped_launch(webapp_page):
     page.get_by_label("Agent code paths", exact=True).fill("src/router, prompts/routing")
     page.get_by_role("button", name="Confirm agent", exact=True).click()
     playwright.expect(page.get_by_role("heading", name="Routing agent", exact=True)).to_be_visible()
-    page.get_by_role("button", name="Choose a focus", exact=True).click()
-    page.get_by_label("Focus category", exact=True).select_option("latency")
-    page.get_by_label("Focus name", exact=True).fill("Faster routing")
+    page.get_by_role("button", name="Choose a goal", exact=True).click()
+    page.get_by_label("Goal category", exact=True).select_option("latency")
+    page.get_by_label("Goal name", exact=True).fill("Faster routing")
     page.get_by_label("Desired behavior", exact=True).fill(
         "Route simple requests within one second"
     )
-    page.get_by_role("button", name="Save focus", exact=True).click()
-    playwright.expect(page.get_by_label("Active focus", exact=True)).to_have_value("focus_new")
+    page.get_by_role("button", name="Save goal", exact=True).click()
+    playwright.expect(
+        page.get_by_role("heading", name="Measurement plan", exact=True)
+    ).to_be_visible()
+    page.get_by_role("button", name="Goals", exact=True).click()
+    playwright.expect(page.get_by_label("Current goal", exact=True)).to_have_value("focus_new")
     page.reload()
-    playwright.expect(page.get_by_label("Active focus", exact=True)).to_have_value("focus_new")
-    page.get_by_role("button", name="Start audit", exact=True).click()
+    playwright.expect(page.get_by_label("Current goal", exact=True)).to_have_value("focus_new")
+    page.get_by_role("button", name="Investigate", exact=True).click()
     playwright.expect(page.get_by_label("Code paths", exact=True)).to_have_value(
         "src/router, prompts/routing"
     )
@@ -919,7 +989,7 @@ def test_recent_trace_focus_requires_retained_evidence(webapp_page):
     page, fixture = webapp_page
     page.goto("http://127.0.0.1:8765/?agent=agent_support&view=traces")
     page.get_by_role("button", name="Find failures", exact=True).click()
-    playwright.expect(page.get_by_role("button", name="Save focus", exact=True)).to_be_disabled()
+    playwright.expect(page.get_by_role("button", name="Save goal", exact=True)).to_be_disabled()
     playwright.expect(
         page.get_by_text("Import a bounded trace sample before", exact=False)
     ).to_be_visible()
@@ -929,11 +999,11 @@ def test_recent_trace_focus_requires_retained_evidence(webapp_page):
     ]
     page.reload()
     page.get_by_role("button", name="Find failures", exact=True).click()
-    page.get_by_label("Focus name", exact=True).fill("Recent failures")
+    page.get_by_label("Goal name", exact=True).fill("Recent failures")
     page.get_by_label("Desired behavior", exact=True).fill("Investigate incomplete requests")
     page.get_by_label("Imported trace snapshot", exact=True).select_option("snapshot_traces")
     page.get_by_label("Most recent completed traces", exact=True).fill("25")
-    page.get_by_role("button", name="Save focus", exact=True).click()
+    page.get_by_role("button", name="Save goal", exact=True).click()
     playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
     assert fixture.mutations[-1]["payload"]["source"] == {
         "kind": "recent_traces",
@@ -1084,11 +1154,34 @@ def test_real_service_browser_project_settings_import_and_scoped_approval(tmp_pa
             edited_agent = application.catalog.agent(second["id"], saved_agent["id"])
             assert edited_agent["name"] == "Reviewed answer agent"
             assert edited_agent["revision"] == saved_agent["revision"] + 1
-            page.get_by_role("button", name="Choose a focus", exact=True).click()
-            page.get_by_label("Focus name", exact=True).fill("Answer correctly")
+            page.get_by_role("button", name="Choose a goal", exact=True).click()
+            page.get_by_label("Goal name", exact=True).fill("Answer correctly")
             page.get_by_label("Desired behavior", exact=True).fill("Inspect answer behavior")
-            page.get_by_role("button", name="Save focus", exact=True).click()
+            page.get_by_role("button", name="Save goal", exact=True).click()
             playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
+            page.get_by_role("button", name="Write a plan", exact=True).click()
+            page.get_by_role("button", name="Add behavior", exact=True).click()
+            page.get_by_label("Behavior 1", exact=True).fill("Answer equals the accepted reference")
+            page.get_by_label("Check name", exact=True).fill("reference_match")
+            page.get_by_role("button", name="Add metric", exact=True).click()
+            page.get_by_label("Primary metric", exact=True).select_option("metric_1")
+            page.get_by_role("button", name="Save draft", exact=True).click()
+            playwright.expect(
+                page.get_by_role("button", name="Accept plan", exact=True)
+            ).to_be_enabled()
+            focus = application.catalog.focuses(second["id"], edited_agent["id"])[0]
+            draft = application.designs.get(second["id"], edited_agent["id"], focus["id"])
+            assert draft["state"] == "draft"
+            assert (
+                application.designs.accepted(second["id"], edited_agent["id"], focus["id"]) is None
+            )
+            page.get_by_role("button", name="Accept plan", exact=True).click()
+            playwright.expect(
+                page.get_by_role("button", name="Prepare evaluator", exact=True)
+            ).to_be_visible()
+            accepted = application.designs.accepted(second["id"], edited_agent["id"], focus["id"])
+            assert accepted["behaviors"][0]["check"] == "reference_match"
+            assert accepted["scoring"] == {"mode": "primary", "primary": "metric_1"}
             page.get_by_role("button", name="Settings", exact=True).click()
             page.get_by_role("button", name="Add connection", exact=True).click()
             page.get_by_label("Connection name").fill("Test evidence")
@@ -1203,3 +1296,449 @@ def test_trace_only_agent_audit_cannot_silently_include_checkout_code(webapp_pag
     options = fixture.mutations[-1]["payload"]["options"]
     assert options["scope"] == options["mode"] == "traces"
     assert options["code_scopes"] == []
+
+
+def measurement_proposal():
+    return {
+        "id": "design_one",
+        "revision": 1,
+        "state": "draft",
+        "background": "Create exactly one ticket for each request, including retries.",
+        "evidence": ["requirements/tickets.md"],
+        "behaviors": [
+            {
+                "id": "one_ticket",
+                "description": "Repeated requests create one ticket.",
+                "required": True,
+                "check": "no_duplicate_tickets",
+                "evidence": ["requirements/tickets.md:8"],
+                "prerequisites": ["Record tool-call IDs during instrumented evaluation runs."],
+            }
+        ],
+        "metrics": {
+            "success": {
+                "direction": "max",
+                "unit": "ratio",
+                "aggregation": "mean",
+                "missing": "fail",
+            }
+        },
+        "scoring": {"mode": "primary", "primary": "success"},
+        "evaluation": {
+            "mode": "create",
+            "framework": "pytest",
+            "scorer": "Expected ticket count is one.",
+        },
+        "limitations": [
+            "Production traces are absent; instrumented test runs can supply trajectory evidence."
+        ],
+    }
+
+
+def test_measurement_plan_is_editable_and_requires_saved_explicit_acceptance(webapp_page):
+    page, fixture = webapp_page
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    fixture.designs["agent_support", "focus_correctness"] = measurement_proposal()
+    fixture.focuses["agent_support"][0]["measurement"] = {"evaluation_id": "eval_old"}
+    fixture.evaluations = [
+        {"evaluation_id": "eval_old", "goal": "Previous evaluator", "state": "frozen"}
+    ]
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=design")
+    playwright.expect(
+        page.get_by_text("Production traces are optional.", exact=False)
+    ).to_be_visible()
+    assert fixture.mutations == []
+    page.get_by_label("Behavior 1", exact=True).fill("Retries keep the original ticket ID.")
+    page.get_by_label("Scoring approach", exact=True).select_option("weighted")
+    page.get_by_label("Normalization scale", exact=True).fill("0.1")
+    page.get_by_label("Weight", exact=True).fill("2")
+    playwright.expect(page.get_by_role("button", name="Accept plan", exact=True)).to_be_disabled()
+    page.get_by_role("button", name="Save draft", exact=True).click()
+    playwright.expect(page.get_by_role("button", name="Accept plan", exact=True)).to_be_enabled()
+    saved = fixture.mutations[-1]["payload"]
+    assert saved["expected_revision"] == 1
+    assert saved["scoring"] == {"mode": "weighted"}
+    assert saved["metrics"]["success"]["scale"] == 0.1
+    assert saved["metrics"]["success"]["weight"] == 2
+    assert saved["behaviors"][0]["required"] is True
+    assert saved["behaviors"][0]["check"] == "no_duplicate_tickets"
+    assert saved["behaviors"][0]["prerequisites"] == [
+        "Record tool-call IDs during instrumented evaluation runs."
+    ]
+    assert "command" not in saved["evaluation"]
+    assert not any(item["path"].endswith("/jobs") for item in fixture.mutations)
+    page.get_by_role("button", name="Accept plan", exact=True).click()
+    playwright.expect(
+        page.get_by_role("button", name="Prepare evaluator", exact=True)
+    ).to_be_enabled()
+    assert fixture.mutations[-1]["path"].endswith("/focuses/focus_correctness/design/accept")
+    assert fixture.mutations[-1]["payload"] == {"expected_revision": 2}
+    page.get_by_text("Goal context and supporting evidence", exact=True).click()
+    page.get_by_label("Background and requirements", exact=True).fill("A changed requirement")
+    playwright.expect(
+        page.get_by_role("button", name="Prepare evaluator", exact=True)
+    ).to_be_disabled()
+    # Refreshing asynchronous activity must preserve unsubmitted local edits.
+    page.get_by_role("button", name="Refresh workspace", exact=True).click()
+    playwright.expect(page.get_by_label("Background and requirements", exact=True)).to_have_value(
+        "A changed requirement"
+    )
+    page.get_by_role("button", name="Reload saved plan", exact=True).click()
+    playwright.expect(page.get_by_label("Background and requirements", exact=True)).to_have_value(
+        measurement_proposal()["background"]
+    )
+    page.get_by_role("button", name="Prepare evaluator", exact=True).click()
+    playwright.expect(page.get_by_label("Evaluation", exact=True)).to_be_disabled()
+    playwright.expect(page.get_by_label("Evaluation", exact=True)).to_have_value("")
+    page.get_by_role("dialog").get_by_role("button", name="Start eval", exact=True).click()
+    playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
+    assert fixture.mutations[-1]["payload"]["kind"] == "eval"
+    assert fixture.mutations[-1]["payload"]["focus_id"] == "focus_correctness"
+    assert "evaluation_id" not in fixture.mutations[-1]["payload"]["options"]
+    assert errors == []
+
+
+def test_goal_plan_proposal_is_scoped_and_never_accepted_automatically(webapp_page):
+    page, fixture = webapp_page
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=design")
+    page.get_by_role("button", name="Ask agent for a plan", exact=True).click()
+    page.get_by_role("button", name="Propose plan", exact=True).click()
+    playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
+    request = fixture.mutations[-1]["payload"]
+    assert request["kind"] == "design"
+    assert request["application_agent_id"] == "agent_support"
+    assert request["focus_id"] == "focus_correctness"
+    assert "profile" not in request["options"]
+    fixture.designs["agent_support", "focus_correctness"] = measurement_proposal()
+    page.reload()
+    playwright.expect(page.get_by_label("Behavior 1", exact=True)).to_have_value(
+        "Repeated requests create one ticket."
+    )
+    playwright.expect(page.get_by_role("button", name="Accept plan", exact=True)).to_be_enabled()
+    assert len(fixture.mutations) == 1
+    assert fixture.designs["agent_support", "focus_correctness"]["state"] == "draft"
+
+
+def test_native_evaluator_review_and_frozen_scoring_reuse_are_distinct(webapp_page):
+    page, fixture = webapp_page
+    proposal = measurement_proposal()
+    proposal["scoring"]["target"] = 0.95
+    fixture.designs["agent_support", "focus_correctness"] = proposal
+    fixture.native_evaluators = [
+        {
+            "id": "native_pytest",
+            "framework": "pytest",
+            "entrypoint": "evals/test_tickets.py",
+            "command": {"argv": ["python", "-m", "pytest", "evals/test_tickets.py"], "cwd": "."},
+            "evidence": [
+                {"path": "evals/test_tickets.py", "line": 10, "detail": "Existing test entrypoint"}
+            ],
+        }
+    ]
+    scoring = {
+        "mode": "primary",
+        "primary": "success",
+        "target": 0.95,
+        "metrics": proposal["metrics"],
+        "behaviors": [
+            {
+                key: value
+                for key, value in proposal["behaviors"][0].items()
+                if key not in {"evidence", "prerequisites"}
+            }
+        ],
+    }
+    fixture.frozen_evaluators = [
+        {"evaluation_id": "eval_reviewed", "goal": "Reviewed correctness", "scoring": scoring}
+    ]
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=design")
+    page.get_by_label("Evaluator approach", exact=True).select_option("reuse")
+    page.get_by_label("Existing evaluator", exact=True).select_option("native:native_pytest")
+    playwright.expect(page.get_by_label("Executable", exact=True)).to_have_value("python")
+    playwright.expect(page.get_by_label("Command arguments", exact=True)).to_have_value(
+        "-m\npytest\nevals/test_tickets.py"
+    )
+    playwright.expect(page.get_by_text("evals/test_tickets.py:10", exact=False)).to_be_visible()
+    page.get_by_text("Native metric output mapping", exact=True).click()
+    page.get_by_label("Output field for success", exact=True).fill("summary.pass_rate")
+    page.get_by_role("button", name="Save draft", exact=True).click()
+    playwright.expect(page.get_by_role("button", name="Accept plan", exact=True)).to_be_enabled()
+    evaluation = fixture.mutations[-1]["payload"]["evaluation"]
+    assert fixture.mutations[-1]["payload"]["scoring"]["target"] == 0.95
+    assert evaluation["candidate_id"] == "native_pytest"
+    assert evaluation["command"]["argv"] == ["python", "-m", "pytest", "evals/test_tickets.py"]
+    assert evaluation["output_mapping"] == {"success": "summary.pass_rate"}
+    assert "evaluation_id" not in evaluation
+    page.get_by_label("Existing evaluator", exact=True).select_option("frozen:eval_reviewed")
+    playwright.expect(page.get_by_label("Metric key", exact=True)).to_be_disabled()
+    playwright.expect(page.get_by_label("Behavior 1", exact=True)).to_be_disabled()
+    playwright.expect(
+        page.get_by_text("This evaluator's scoring is frozen.", exact=False)
+    ).to_be_visible()
+    page.get_by_role("button", name="Save draft", exact=True).click()
+    playwright.expect(page.get_by_role("button", name="Accept plan", exact=True)).to_be_enabled()
+    saved = fixture.mutations[-1]["payload"]
+    assert saved["metrics"] == scoring["metrics"]
+    assert saved["behaviors"] == scoring["behaviors"]
+    assert saved["scoring"] == {"mode": "primary", "primary": "success", "target": 0.95}
+    assert saved["evaluation"] == {"mode": "reuse", "evaluation_id": "eval_reviewed"}
+    page.get_by_label("Evaluator approach", exact=True).select_option("create")
+    playwright.expect(page.get_by_label("Metric key", exact=True)).to_be_enabled()
+
+
+def test_manual_plan_and_setup_remain_usable_without_traces_on_mobile(webapp_page):
+    page, fixture = webapp_page
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto("http://127.0.0.1:8765/")
+    playwright.expect(page.get_by_role("region", name="Setup checklist")).to_contain_text(
+        "Traces · optional"
+    )
+    page.get_by_role("button", name="Open agent", exact=True).click()
+    page.get_by_role("button", name="Design measurement", exact=True).click()
+    page.get_by_role("button", name="Write a plan", exact=True).click()
+    page.get_by_role("button", name="Add behavior", exact=True).click()
+    page.get_by_label("Behavior 1", exact=True).fill("A retry does not create a second ticket")
+    page.get_by_label("Check name", exact=True).fill("unique_ticket")
+    page.get_by_role("button", name="Add metric", exact=True).click()
+    page.get_by_label("Metric key", exact=True).fill("latency")
+    page.get_by_label("Direction", exact=True).select_option("min")
+    page.get_by_label("Unit", exact=True).fill("ms")
+    page.get_by_label("Primary metric", exact=True).select_option("latency")
+    page.get_by_role("button", name="Save draft", exact=True).click()
+    playwright.expect(page.get_by_role("button", name="Accept plan", exact=True)).to_be_enabled()
+    payload = fixture.mutations[-1]["payload"]
+    assert payload["expected_revision"] == 0
+    assert payload["metrics"]["latency"]["direction"] == "min"
+    assert "dataset_snapshot_id" not in payload["evaluation"]
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(path="/private/tmp/agentagon-goal-mobile.png")
+    page.get_by_label("Behavior 1", exact=True).scroll_into_view_if_needed()
+    page.screenshot(path="/private/tmp/agentagon-goal-mobile-editor.png")
+    page.set_viewport_size({"width": 1450, "height": 1000})
+    page.get_by_role("button", name="Coding agent", exact=True).click()
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(path="/private/tmp/agentagon-goal-desktop.png")
+    page.get_by_label("Metric key", exact=True).scroll_into_view_if_needed()
+    page.screenshot(path="/private/tmp/agentagon-goal-desktop-editor.png")
+
+
+def test_dataset_export_and_publication_require_separate_reviewed_actions(webapp_page):
+    page, fixture = webapp_page
+    fixture.datasets = [
+        {"id": "snapshot_cases", "kind": "dataset", "name": "Ticket cases", "count": 2}
+    ]
+    fixture.connections = [
+        {
+            "id": "source_bt",
+            "provider": "braintrust",
+            "name": "Team Braintrust",
+            "project": "Support",
+            "project_ids": ["project_alpha"],
+        }
+    ]
+    publications = []
+
+    def dataset_actions(route):
+        request = route.request
+        payload = request.post_data_json
+        publications.append((urlsplit(request.url).path, payload))
+        if request.url.endswith("/export"):
+            route.fulfill(
+                json={
+                    "state": "draft",
+                    "count": 2,
+                    "missing_expectations": 1,
+                    "framework": payload["framework"],
+                    "artifact_urls": {
+                        "dataset.jsonl": "/api/projects/project_alpha/datasets/snapshot_cases/exports/export_one/dataset.jsonl"
+                    },
+                }
+            )
+        elif request.url.endswith("/publish-preview"):
+            route.fulfill(
+                json={
+                    "preview_id": "preview_exact",
+                    "destination": {"project": "Support", "name": "Ticket cases · snapshot-1234"},
+                    "count": 2,
+                    "missing_expectations": 1,
+                    "events": [
+                        {"input": "<script>window.compromised=true</script>", "output": "observed"}
+                    ],
+                }
+            )
+        elif len([item for item in publications if item[0].endswith("/publish")]) == 1:
+            route.fulfill(
+                status=503,
+                json={"error": "Connection interrupted. Retry this reviewed publication."},
+            )
+        else:
+            route.fulfill(
+                json={
+                    "state": "completed",
+                    "receipt": {
+                        "count": 2,
+                        "project": "Support",
+                        "name": "Ticket cases · snapshot-1234",
+                        "dataset_id": "remote_dataset",
+                    },
+                }
+            )
+
+    page.route("**/datasets/snapshot_cases/*", dataset_actions)
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=eval&tab=datasets")
+    page.get_by_role("button", name="Export", exact=True).click()
+    assert publications == []
+    page.get_by_label("Export framework", exact=True).select_option("deepeval")
+    page.get_by_role("button", name="Create export", exact=True).click()
+    playwright.expect(
+        page.get_by_role("link", name="Download dataset.jsonl", exact=True)
+    ).to_be_visible()
+    playwright.expect(
+        page.get_by_text("1 examples have no accepted expectation.", exact=False)
+    ).to_be_visible()
+    assert publications[-1][1] == {"framework": "deepeval"}
+    page.get_by_role("button", name="Close dialog", exact=True).click()
+    page.get_by_role("button", name="Publish to Braintrust", exact=True).click()
+    page.get_by_role("button", name="Preview publication", exact=True).click()
+    playwright.expect(page.get_by_role("dialog")).to_contain_text("Ticket cases · snapshot-1234")
+    playwright.expect(
+        page.get_by_text("Those expected values will remain missing.", exact=False)
+    ).to_be_visible()
+    assert not any(path.endswith("/publish") for path, _ in publications)
+    assert page.evaluate("window.compromised || false") is False
+    page.get_by_role("button", name="Publish reviewed dataset", exact=True).click()
+    playwright.expect(page.get_by_role("dialog").get_by_role("alert")).to_contain_text(
+        "Connection interrupted"
+    )
+    page.get_by_role("button", name="Publish reviewed dataset", exact=True).click()
+    playwright.expect(page.get_by_role("dialog")).to_contain_text("Published 2 examples")
+    attempts = [payload for path, payload in publications if path.endswith("/publish")]
+    assert len(attempts) == 2
+    assert attempts[0] == attempts[1]
+    assert attempts[0]["preview_id"] == "preview_exact"
+    assert attempts[0]["connection_id"] == "source_bt"
+
+
+def test_each_verified_finalist_keeps_its_own_goal_measurements_and_behaviors(webapp_page):
+    page, fixture = webapp_page
+    baseline = {
+        "id": "candidate_base",
+        "state": "verified",
+        "hypothesis": "Original agent",
+        "metrics": {"latency": 1000},
+        "score": {"score": -1000},
+    }
+    candidates = [
+        {
+            "id": f"candidate_{index}",
+            "state": "verified",
+            "hypothesis": f"Finalist {index + 1}",
+            "metrics": {"latency": 500 + index * 10},
+            "score": {
+                "score": -(500 + index * 10),
+                "components": [
+                    {
+                        "id": "latency",
+                        "value": 500 + index * 10,
+                        "unit": "ms",
+                        "direction": "min",
+                        "weight": 1,
+                    }
+                ],
+                "behaviors": [{"id": "unique_ticket", "required": True, "passed": True}],
+            },
+            "review_verdict": "pass",
+        }
+        for index in range(4)
+    ]
+    members = [
+        {
+            "focus_id": "focus_quality",
+            "name": "Keep answer quality",
+            "primary_metric": "quality",
+            "metrics": {"quality": {"unit": "ratio", "direction": "max"}},
+        }
+    ]
+    finalists = {
+        candidate["id"]: {
+            "state": "completed",
+            "result": {
+                "passed": True,
+                "members": [
+                    {
+                        "focus_id": "focus_quality",
+                        "reference": {"quality": 0.9},
+                        "finalist": {"quality": 0.91 + index / 100},
+                        "score": {
+                            "value": 0.91 + index / 100,
+                            "behaviors": [
+                                {
+                                    "id": "grounded_answer",
+                                    "description": "Answers cite retained evidence",
+                                    "required": True,
+                                    "passed": True,
+                                }
+                            ],
+                        },
+                        "checks": [{"id": "citations_exist", "passed": True}],
+                        "guardrails": [
+                            {
+                                "metric": "quality",
+                                "reference": "baseline_delta",
+                                "baseline": "accepted",
+                                "actual": 0.01 + index / 100,
+                                "threshold": 0,
+                                "op": "gte",
+                                "passed": True,
+                            }
+                        ],
+                        "passed": True,
+                    }
+                ],
+            },
+        }
+        for index, candidate in enumerate(candidates)
+    }
+    fixture.runs = [
+        {
+            "run_id": "run_finalists",
+            "goal": "Choose a verified improvement",
+            "baseline_id": "candidate_base",
+            "candidates": [baseline, *candidates],
+            "frontier": [candidates[0]["id"]],
+            "comparisons": {"result": "verified_improvement", "alternatives": candidates},
+            "measurement_suite": {
+                "state": "completed",
+                "members": members,
+                "result": finalists["candidate_0"]["result"],
+                "finalists": finalists,
+            },
+        }
+    ]
+    page.goto("http://127.0.0.1:8765/?agent=agent_support&view=fix")
+    page.get_by_role("button", name="Choose a verified improvement", exact=True).click()
+    cards = page.locator(".comparison-grid > article")
+    playwright.expect(cards).to_have_count(5)
+    first = cards.filter(has=page.get_by_role("heading", name="Finalist 1", exact=True))
+    fourth = cards.filter(has=page.get_by_role("heading", name="Finalist 4", exact=True))
+    # Agreed scores allow choosing verified alternatives outside the Pareto frontier.
+    playwright.expect(
+        fourth.get_by_role("button", name="Select candidate", exact=True)
+    ).to_be_enabled()
+    for card in (first, fourth):
+        card.get_by_text("Signals, behaviors and required goals", exact=True).click()
+    playwright.expect(
+        first.get_by_role("table", name="Finalist 1 · Keep answer quality", exact=True)
+    ).to_contain_text("0.91")
+    playwright.expect(
+        fourth.get_by_role("table", name="Finalist 4 · Keep answer quality", exact=True)
+    ).to_contain_text("0.94")
+    playwright.expect(
+        fourth.get_by_role("table", name="Finalist 4 signals", exact=True)
+    ).to_contain_text("530 ms")
+    playwright.expect(fourth).to_contain_text("unique_ticket · required · passed")
+    playwright.expect(fourth).to_contain_text("Answers cite retained evidence · required · passed")
+    playwright.expect(fourth).to_contain_text("quality · baseline delta · accepted")
+    assert fixture.mutations == []

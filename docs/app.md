@@ -19,7 +19,11 @@ An **application agent** is the workflow you are investigating, such as a suppor
 
 Choose an application agent, then add a focus: correctness, reliability, grounding, safety, security, latency, cost, interaction, or a custom objective. Describe the desired outcome, attach a saved issue, or investigate a bounded selection of recent traces. A focus preserves its goal and measurement history. Its code binding and trace selection determine the investigation scope; the audit rubric still applies within that scope.
 
-The usual sequence is **Focus → Audit → Eval → Baseline → Fix**. Existing reviewed evaluations and baselines can be reused when compatible. Full-project audits are also available through the CLI without first defining an application agent. Trace-only agents require a code binding before measured fixes.
+Start with a goal, review its proposed measurements, establish a baseline, then improve and compare candidates. Audit is available when you need a deeper investigation. Existing reviewed evaluations and baselines can be reused when compatible. Full-project audits are also available through the CLI without first defining an application agent. Trace-only agents require a code binding before measured fixes.
+
+Request a measurement proposal from the goal view. The coding agent inspects code, existing evals and selected evidence, then proposes behaviors, metrics and an evaluation approach. Edit metric units, aggregation, weights and scaling; choose a primary metric, weighted score or custom evaluator output. Required behaviors remain separate gates. Missing measurements stay unknown. Traces are optional: a proposed behavior can instead require instrumentation or an executable check, with that prerequisite shown explicitly.
+
+Save and accept the proposal before preparing its evaluation. Acceptance freezes a version; later edits create a new version and cannot rewrite a baseline. Reusing a frozen evaluator preserves its scoring. Changing cases, scores or required behaviors requires a new reviewed evaluator. Discovery also finds native Braintrust, DeepEval, pytest and custom evaluation entrypoints for the coding agent to adapt without replacing the project's usual evaluation command.
 
 ## Connect a coding agent
 
@@ -36,7 +40,7 @@ These sessions are separate from a conversation already open in your terminal or
 
 Choose a Codex model from the installed CLI's model catalog in Settings; the app validates the selection before starting a session. The catalog reflects that installation and account, so it can differ between machines. Claude has its own model setting. Model selection is separate from the execution profile used to run evaluations.
 
-Set concurrent task capacity in Settings. The app queues tasks from the same project so they do not edit one checkout concurrently. Permissions and questions appear in the task view; a pending approval waits for your explicit answer. Independent reviews use separate managed sessions.
+Set coding-agent capacity in Settings. Fix has a separate requested parallelism limit; actual work stays within the shared capacity and execution budget. The app queues tasks from the same project, while candidate work uses isolated worktrees. Permissions and questions appear in the task view; a pending approval waits for your explicit answer. Independent reviews use separate managed sessions.
 
 ## Connect traces and datasets
 
@@ -54,14 +58,17 @@ Credentials can come from environment-variable references, session memory or a s
 
 Choose a connection in the trace or dataset import flow, set the selection, and preview it before saving. Trace selections require a timezone-aware date window and a cap on whole traces. Dataset selections preserve their provider version, structured inputs, reference outputs and source metadata. LangSmith also supports split and metadata filters.
 
-Imports are bounded to 100 selected traces or 1,000 dataset items, with separate limits of 10,000 trace spans and 20 MB of retrieved data. The preview reports incomplete pagination, capped selections and missing trace details. It does not turn a sample into a production-wide measurement. Saving creates an immutable local snapshot; refreshing creates another snapshot. Connections do not enable provider write-back, instrumentation or continuous collection.
+Imports are bounded to 100 selected traces or 1,000 dataset items, with separate limits of 10,000 trace spans and 20 MB of retrieved data. The preview reports incomplete pagination, capped selections and missing trace details. It does not turn a sample into a production-wide measurement. Saving creates an immutable local snapshot; refreshing creates another snapshot. Connecting alone starts no collection or publication.
+
+A dataset can be exported as a Braintrust or DeepEval starter bundle with its native adapter and local cases. Missing expectations remain missing; adapters require the application's task and accepted scorers. Structured DeepEval inputs require an explicit case mapping. Braintrust publication is a separate action: preview the exact connection, destination, rows and missing expectations, then confirm publishing. Retrying the same operation reconciles its saved receipt. No other provider write-back is supported.
 
 ## Choose a workflow
 
 | View | Use it to |
 |---|---|
 | Agents | Discover, confirm and select application agents in the project. |
-| Overview | Inspect the selected agent's focuses, readiness, recent tasks and results. |
+| Goals | Inspect the selected agent's focuses, readiness, recent tasks and results. |
+| Measurement plan | Propose, edit and accept behaviors, scores, evidence and evaluation choices for the selected goal. |
 | Audit | Investigate the selected focus using captured local code, changes, traces or both. Read findings with their evidence and coverage limits. |
 | Eval | Import or select a dataset, agree on expectations and scoring, and prepare a reviewed evaluator. |
 | Fix | Select a saved issue or goal, declare scope and limits, and compare candidates against a frozen evaluator. |
@@ -81,7 +88,11 @@ Baseline comparison requires completed measurements with the same frozen evaluat
 
 Fix defaults to Omni. GEPA uses its upstream proposer: Agentagon sends the exact assembled reflection prompt to a dedicated coding-agent session and returns its raw final response for upstream extraction. Agentagon still validates candidate scope, runs measurements and requires independent review. AutoResearch and Meta-Harness retain their separate proposal contracts.
 
-Fix binds the required suite across active focuses and agents affected by permitted changes. Final verification measures the reference and finalist with each frozen evaluator, checks prior guardrails and requires separate reviews. Missing prerequisites block the run; failed guards retain the baseline with limits. Suite-bound runs expose one finalist, with other candidates retained as experiment evidence. Inspect the saved suite scope before drawing conclusions about other agents.
+Evidence analysis happens while proposing measurements, before the baseline. Its accepted context, evidence references and coverage limits become frozen optimization background. Evaluation feedback then adds observations from each candidate. Optional Intelligence adds only completed, approved guidance receipts bound to that run; configuring optimization does not initiate a lookup.
+
+Choose how many verified candidates to retain: three by default, from one to ten, excluding the baseline. This count is separate from parallelism and affects the final-verification reserve. Fix binds the required suite across active focuses and agents affected by permitted changes. Each finalist is compared with the reference under every required frozen evaluator and independent review. Missing prerequisites block the run; candidates that fail a prior guard cannot be selected. Fewer qualifying candidates means fewer results, and no verified improvement retains the baseline. Inspect the suite scope before drawing conclusions about other agents.
+
+Compare each verified candidate's scores, behaviors, checks and changes, select one, then explicitly create its draft PR or local delivery. Every candidate retains its own source identity and worktree evidence. Selection does not publish, merge or deploy.
 
 Starting a task authorizes its selected workflow. Publishing, merging and deploying remain separate actions. Optional Intelligence keeps its own request consent and data-handling rules.
 

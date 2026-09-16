@@ -17,6 +17,7 @@ from agentagon.telemetry.normalize import redact
 from agentagon.webapp import snapshots
 from agentagon.webapp.agents import detect_agents
 from agentagon.webapp.catalog import Catalog
+from agentagon.webapp.designs import Designs
 from agentagon.webapp.jobs import ACTIVE, JobManager, operation_id, public_job
 from agentagon.webapp.providers import DEFAULT_ENDPOINTS, CredentialStore, ProviderClient
 from agentagon.webapp.state import AppState, identifier, private_directory
@@ -29,6 +30,7 @@ class Application:
         self.provider_factory = provider_factory or ProviderClient
         self.jobs = JobManager(self.state, self.credentials, execute)
         self.catalog = Catalog(self.state)
+        self.designs = Designs(self.state, self.catalog)
         self.jobs.verify_result = self.completed_job
         self.previews = {}
         self.lock = threading.RLock()
@@ -117,6 +119,28 @@ class Application:
         with self.lock:
             return self.catalog.save_agent(project_id, payload, agent_id)
 
+    def measurement_design(self, project_id, agent_id, focus_id):
+        from agentagon.experiments import preparation
+        from agentagon.webapp import evaluators
+
+        focus = self.catalog.focus(project_id, agent_id, focus_id)
+        workspace = self.state.workspace(project_id)
+        inventory = evaluators.discover(workspace)
+        overview = self.overview(project_id)
+        frozen = []
+        for item in overview["evaluations"]:
+            if item["state"] == "frozen":
+                record = preparation.load(workspace, item["evaluation_id"])
+                frozen.append({**item, "scoring": record["package"]["spec"].get("scoring")})
+        return {
+            "focus": focus,
+            "draft": self.designs.get(project_id, agent_id, focus_id),
+            "evaluators": inventory["candidates"],
+            "limitations": inventory["limitations"],
+            "frozen_evaluators": frozen,
+            "snapshots": overview["datasets"],
+        }
+
     def agent_overview(self, project_id, agent_id, focus_id=None):
         agent = self.catalog.agent(project_id, agent_id)
         focuses = self.catalog.focuses(project_id, agent_id)
@@ -186,7 +210,14 @@ class Application:
             options = payload.setdefault("options", {})
             if not isinstance(options, dict):
                 raise AuditError("workflow options must be an object")
-            if "investigation_plan" in options or "suite_manifest" in options:
+            if set(options) & {
+                "investigation_plan",
+                "suite_manifest",
+                "measurement_design",
+                "design_revision",
+                "optimization_background",
+                "design_context",
+            }:
                 raise AuditError("workflow evidence bindings are prepared by the application")
             payload["goal"] = payload.get("goal") or focus["goal"]
             scopes = options.get("code_scopes")
@@ -199,6 +230,39 @@ class Application:
             self.catalog.validate_evidence_reference(project_id, agent_id, options)
             plan = self.catalog.investigation(project_id, agent_id, focus_id, options)
             options["investigation_plan"] = plan
+            accepted = (
+                self.designs.accepted(project_id, agent_id, focus_id)
+                if payload["kind"] in {"eval", "baseline", "fix"}
+                else None
+            )
+            if payload["kind"] == "design":
+                draft = self.designs.get(project_id, agent_id, focus_id)
+                options["design_revision"] = draft["revision"] if draft else 0
+                options["design_context"] = self.measurement_design(project_id, agent_id, focus_id)
+            elif accepted:
+                if payload["kind"] == "eval" and accepted["native_plan"].get("id"):
+                    from agentagon.webapp.evaluators import validate_plan
+
+                    validate_plan(self.state.workspace(project_id), accepted["native_plan"])
+                options["measurement_design"] = accepted
+                evaluation = accepted["evaluation"]
+                if (
+                    payload["kind"] == "eval"
+                    and not evaluation.get("evaluation_id")
+                    and options.get("evaluation_id")
+                ):
+                    raise AuditError("This measurement plan requires preparing a new evaluator.")
+                for key in ("evaluation_id", "dataset_snapshot_id"):
+                    if evaluation.get(key):
+                        if options.get(key) and options[key] != evaluation[key]:
+                            raise AuditError(
+                                "Selected input differs from the accepted measurement design."
+                            )
+                        options[key] = evaluation[key]
+                if payload["kind"] == "fix":
+                    options["optimization_background"] = self.designs.background(
+                        accepted, focus["goal"]
+                    )
             if plan.get("trace_snapshot_id"):
                 options["trace_snapshot_id"] = plan["trace_snapshot_id"]
             if payload["kind"] == "audit" and not agent["code_scopes"]:
@@ -212,15 +276,39 @@ class Application:
                     )
                 options.update(mode="traces", scope="traces")
             measurement = focus.get("measurement") or {}
-            if payload["kind"] in {"baseline", "fix"} and measurement:
+            accepted_evaluator = accepted["evaluation"].get("evaluation_id") if accepted else None
+            if (
+                payload["kind"] in {"baseline", "fix"}
+                and measurement
+                and not (payload["kind"] == "baseline" and accepted_evaluator)
+            ):
                 if (
                     options.get("evaluation_id")
                     and options["evaluation_id"] != measurement["evaluation_id"]
                 ):
                     raise AuditError(
-                        "selected evaluator differs from this focus's accepted measurement"
+                        "Run a baseline for the accepted evaluator before starting a Fix."
+                        if payload["kind"] == "fix" and accepted_evaluator
+                        else "selected evaluator differs from this focus's accepted measurement"
                     )
                 options["evaluation_id"] = measurement["evaluation_id"]
+            if payload["kind"] in {"baseline", "fix"} and accepted:
+                if not options.get("evaluation_id"):
+                    raise AuditError("This measurement plan requires preparing a new evaluator.")
+                self.designs.validate_evaluator(
+                    self.state.workspace(project_id), accepted, options["evaluation_id"]
+                )
+            if payload["kind"] == "baseline" and options.get("baseline_id"):
+                from agentagon.experiments import baselines
+
+                previous = baselines.status(
+                    self.state.workspace(project_id), options["baseline_id"]
+                )
+                if (
+                    options.get("evaluation_id")
+                    and previous["evaluation_id"] != options["evaluation_id"]
+                ):
+                    raise AuditError("Selected baseline does not measure the accepted evaluator.")
             if payload["kind"] == "fix":
                 from agentagon.experiments.checkouts import under
 
@@ -268,11 +356,32 @@ class Application:
             plan.get("focus_version") != focus["version"]
             or plan.get("binding_digest") != agent["binding_digest"]
         ):
+            if job["kind"] == "design":
+                raise AuditError("Goal or agent scope changed. Request a new measurement proposal.")
             return {
                 **result,
                 "measurement_note": "Focus changed during execution. Retained evidence needs an explicit measurement binding.",
             }
+        if job["kind"] == "design":
+            saved = self.designs.save(
+                job["project_id"],
+                agent_id,
+                focus_id,
+                {
+                    **result.pop("measurement_design"),
+                    "expected_revision": job["options"]["design_revision"],
+                },
+            )
+            return {
+                **result,
+                "design_id": saved["id"],
+                "design_revision": saved["revision"],
+                "next_action": "Review and accept the proposed measurements.",
+            }
         if job["kind"] == "eval" and result.get("evaluation_id"):
+            accepted = job["options"].get("measurement_design")
+            if accepted:
+                self.designs.validate_evaluator(workspace, accepted, result["evaluation_id"])
             self.catalog.bind_measurement(
                 job["project_id"],
                 agent_id,
@@ -389,9 +498,15 @@ class Application:
                     "result": suite.get("result"),
                     "next_action": suite.get("next_action"),
                     "members": suite["manifest"]["members"],
+                    "finalists": suite["finalists"],
                 }
                 comparison = result.setdefault("comparisons", {})
-                if suite["state"] != "completed":
+                passed = {
+                    candidate_id
+                    for candidate_id, finalist in suite["finalists"].items()
+                    if finalist["state"] == "completed" and finalist.get("result", {}).get("passed")
+                }
+                if not passed:
                     retained = False
                     if data.get("optimizer_configured"):
                         from agentagon.experiments import optimize_run
@@ -407,9 +522,8 @@ class Application:
                     )
                     comparison["alternatives"] = []
                 else:
-                    finalist = (suite.get("binding") or {}).get("candidate_id")
                     comparison["alternatives"] = [
-                        c for c in comparison.get("alternatives", []) if c["id"] == finalist
+                        c for c in comparison.get("alternatives", []) if c["id"] in passed
                     ]
             return result
         if kind == "baseline":
@@ -446,6 +560,83 @@ class Application:
             workspace, project_id, payload.get("trace_snapshot_id"), agent["trace_selector"]
         )
         return datasets.derive(workspace, project_id, source["id"], payload.get("selection", {}))
+
+    def export_dataset(self, project_id, snapshot_id, payload):
+        from agentagon.webapp.evaluators import export_bundle
+
+        if set(payload) != {"framework"}:
+            raise AuditError("choose an export framework")
+        record = export_bundle(self.state.workspace(project_id), snapshot_id, payload["framework"])
+        return {
+            **record,
+            "artifact_urls": {
+                item[
+                    "name"
+                ]: f"/api/projects/{project_id}/datasets/{snapshot_id}/exports/{record['id']}/{item['name']}"
+                for item in record["files"]
+            },
+        }
+
+    def export_artifact(self, project_id, snapshot_id, export_id, name):
+        import hashlib
+
+        identifier(export_id, "export")
+        workspace = self.state.workspace(project_id)
+        from agentagon.webapp.datasets import assert_development
+
+        assert_development(workspace, snapshots.load(workspace, snapshot_id))
+        record = load_json(
+            workspace.checked(private_directory(workspace, "exports") / f"{export_id}.json")
+        )
+        if (
+            record["snapshot_id"] != snapshot_id
+            or digest({k: v for k, v in record.items() if k not in {"id", "digest"}})
+            != record["digest"]
+        ):
+            raise AuditError("export does not match this snapshot")
+        item = next((item for item in record["files"] if item["name"] == name), None)
+        if not item:
+            raise AuditError("export artifact not found")
+        path = workspace.checked(workspace.root / item["artifact"])
+        if path.stat().st_size > snapshots.MAX_IMPORT_BYTES:
+            raise AuditError("export artifact exceeds download limit")
+        content = path.read_bytes()
+        if hashlib.sha256(content).hexdigest() != item["digest"]:
+            raise AuditError("export artifact integrity changed")
+        return content
+
+    def preview_dataset_publication(self, project_id, snapshot_id, payload):
+        from agentagon.webapp.evaluators import preview_publication
+
+        if set(payload) - {"connection_id", "project", "name"}:
+            raise AuditError("unsupported dataset publication fields")
+        connection = self.connection(payload.get("connection_id"), project_id)
+        return preview_publication(
+            self.state.workspace(project_id),
+            connection,
+            snapshot_id,
+            {k: v for k, v in payload.items() if k != "connection_id"},
+        )
+
+    def publish_dataset(self, project_id, snapshot_id, payload):
+        from agentagon.webapp.evaluators import publish_dataset
+
+        if set(payload) != {"connection_id", "preview_id", "operation_id"}:
+            raise AuditError("publish a reviewed dataset preview with an operation ID")
+        workspace = self.state.workspace(project_id)
+        connection = self.connection(payload["connection_id"], project_id)
+        preview = self.state.db.get_record(
+            project_id, "dataset_publications", payload["preview_id"]
+        )
+        if not preview or preview["snapshot_id"] != snapshot_id:
+            raise AuditError("publication preview does not belong to this dataset")
+        return publish_dataset(
+            workspace,
+            self.provider_factory(connection, self.credentials),
+            payload["preview_id"],
+            operation_id(payload["operation_id"]),
+            authorized=True,
+        )
 
     def settings(self, project_id):
         workspace = self.state.workspace(project_id)
@@ -868,6 +1059,7 @@ class Application:
                 model = validate_codex_model(model, settings.get("codex_executable"))
             settings.update(default_agent=agent, concurrency=concurrency)
             settings["models"][agent] = model
+            previous_reference = settings.get("claude_api_key_ref")
             key = payload.get("claude_api_key")
             if key:
                 mode = payload.get("credential_mode", "session")
@@ -877,9 +1069,17 @@ class Application:
                     settings["claude_api_key_ref"] = "env:" + key
                 else:
                     settings["claude_api_key_ref"] = self.credentials.set(key, mode)
-            with self.state.locked() as data:
-                data["agents"] = settings
+            reference = settings.get("claude_api_key_ref")
             with self.jobs.condition:
+                try:
+                    with self.state.locked() as data:
+                        data["agents"] = settings
+                except Exception:
+                    if reference and reference != previous_reference:
+                        self.credentials.delete(reference)
+                    raise
+                if previous_reference and previous_reference != reference:
+                    self.credentials.delete(previous_reference)
                 self.jobs._dispatch()
             return self.agents()
 

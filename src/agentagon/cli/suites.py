@@ -16,13 +16,16 @@ def register(main, output):
 
     @suite_group.command("bind")
     @click.option("--run", "run_id", required=True)
+    @click.option("--finalist-count", type=click.IntRange(1, 10), default=3)
     @click.option(
         "--manifest", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True
     )
     @click.pass_obj
     @output
-    def bind(path, run_id, manifest):
-        return suites.bind(Workspace(path), run_id, load_json(manifest))
+    def bind(path, run_id, manifest, finalist_count):
+        return suites.bind(
+            Workspace(path), run_id, load_json(manifest), finalist_count=finalist_count
+        )
 
     @suite_group.command("run")
     @click.option("--run", "run_id", required=True)

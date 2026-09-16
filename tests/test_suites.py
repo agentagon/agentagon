@@ -26,14 +26,14 @@ from agentagon.experiments.host_bridge import HostBridge, HostWorkPending
 from agentagon.experiments.store import load_run, save_run
 
 
-def _suite(application, specification, timeout=None):
+def _suite(application, specification, timeout=None, finalist_count=1, target=80):
     members = []
     for primary in ("quality", "latency"):
         spec = copy.deepcopy(specification)
         spec.update(repetitions=1, seeds=[0])
         spec["scoring"] = {**definition(), "mode": "primary", "primary": primary}
-        if primary == "latency":
-            spec["scoring"]["target"] = 80
+        if primary == "latency" and target is not None:
+            spec["scoring"]["target"] = target
         started, plan = draft(application, spec)
         checked = preparation.check(application, started["evaluation_id"], plan)
         frozen = preparation.freeze(application, started["evaluation_id"], review_for(checked))
@@ -77,7 +77,7 @@ def _suite(application, specification, timeout=None):
         "local",
         execution_profile=profile,
     )
-    suites.bind(application, run["run_id"], manifest)
+    suites.bind(application, run["run_id"], manifest, finalist_count=finalist_count)
     return run["run_id"], manifest
 
 
@@ -267,3 +267,64 @@ def test_isolated_finalist_requires_repaired_checks_instead_of_baseline_reproduc
     accepted = verify(application, isolated["run_id"], isolated["candidate_id"])
     assert accepted["candidate"]["state"] == "verified"
     assert accepted["candidate"]["checks"][0]["expected"] == "pass"
+
+
+def test_three_finalists_keep_passing_alternatives_and_recheck_selected_suite(
+    application, specification
+):
+    run_id, manifest = _suite(application, specification, finalist_count=3, target=None)
+    optimize_run.configure(
+        application, run_id, host="fake", model="fake", optimizer="gepa", max_trials=30
+    )
+    proposals = [(70, 0.7), (80, 0.9), (90, 0.85)]
+    calls = 0
+
+    def host(request):
+        nonlocal calls
+        if request["role"] == "review":
+            return _host()(request)
+        latency, quality = proposals[min(calls, 2)]
+        calls += 1
+        proposal = json.loads(candidate_text(request))
+        proposal["files"]["app.json"] = json.dumps(
+            {"latency": latency, "quality": quality, "variant": str(latency)}
+        )
+        return proposal_response(request, json.dumps(proposal))
+
+    before = len(executions())
+    result = optimize_run.advance(application, run_id, host_handler=host)
+    assert result["state"] == "completed", result
+    state = suites.status(application, run_id)
+    assert len(state["finalists"]) == 3
+    assert len(state["measurements"]) == 12
+    assert sum(f["result"]["passed"] for f in state["finalists"].values()) == 2
+    assert result["budget"]["limits"]["verification_trials"] == 15
+    assert BudgetLedger.spent(result["budget"], "verification") == 15
+    assert len(executions()) - before == 19  # Baseline + three search + three fresh + twelve suite.
+    winner = result["selection"]["winner"]["candidate_id"]
+    alternative = result["selection"]["alternatives"][0]["candidate_id"]
+    assert len(result["selection"]["alternatives"]) == 1
+    assert load_run(application, run_id)["candidates"][winner]["metrics"]["latency"] == 80
+    failed = next(cid for cid, f in state["finalists"].items() if not f["result"]["passed"])
+    from agentagon.reporting import build_fix_report
+
+    displayed = build_fix_report(application, load_run(application, run_id))
+    assert {c["id"] for c in displayed["comparisons"]["alternatives"]} == {winner, alternative}
+    with pytest.raises(AuditError, match="guardrail failed"):
+        engine.select(application, run_id, failed)
+    engine.select(application, run_id, alternative)
+    selected = suites.verify_completed(application, run_id, manifest)
+    assert selected["binding"]["candidate_id"] == alternative
+    assert delivery.deliver(application, run_id=run_id)["state"] == "prepared"
+    assert len(suites.verify_outcome(application, run_id, manifest)["finalists"]) == 3
+    count = len(executions())
+    optimize_run.advance(application, run_id, host_handler=host)
+    assert len(executions()) == count
+    # Revalidation is for the user's exact alternative, not the originally recommended winner.
+    finalist = state["finalists"][alternative]
+    child_id = next(iter(finalist["measurements"].values()))["execution_run_id"]
+    child = load_run(application, child_id)
+    child["candidates"][child["baseline_id"]]["metrics"]["quality"] = 999
+    save_run(application, child)
+    with pytest.raises(AuditError, match="execution evidence"):
+        delivery.deliver(application, run_id=run_id)
