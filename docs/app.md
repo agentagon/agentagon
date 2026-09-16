@@ -95,6 +95,6 @@ The app's authoritative metadata is SQLite at `~/.config/agentagon/config.app/ap
 
 Each checkout's ignored `.agentagon/` directory contains engine records, immutable imported evidence and artifacts, reports and isolated work areas. Generated task context files are projections, not another task-state authority. Preserve both the app database and project evidence when backing up work. Do not edit saved records directly.
 
-This app state format has no legacy-state migration or compatibility writer. Existing CLI trace settings do not create named app connections; add those connections explicitly in Settings.
+This app state format has no migration or compatibility writer. An earlier development database requires a new `AGENTAGON_APP_STATE` directory; the old files remain untouched. Existing CLI trace settings do not create named app connections; add those connections explicitly in Settings.
 
 The web app is a loopback application for one local user. The existing `agentagon dashboard` command remains a separate checkout viewer with read-only defaults and explicitly enabled controls. See [the dashboard guide](dashboard.md) if you use the skill-based workflow.

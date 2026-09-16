@@ -16,7 +16,6 @@ from agentagon.experiments.runtime import (
     BudgetTracker,
     EvalServer,
     GepaEngine,
-    OptimizeAnythingConfig,
     Task,
 )
 from agentagon.installation import SKILLS
@@ -57,20 +56,14 @@ for references in REFERENCES.values():
 assert callable(track)
 with tempfile.TemporaryDirectory(prefix="agentagon-gepa-check-") as directory:
     server = EvalServer(
-        Task("installed-wheel", "0", "increase score"),
+        Task("0", "increase score"),
         lambda candidate, example, **kwargs: (float(candidate), {}),
         BudgetTracker(4),
     )
     engine = GepaEngine(
-        OptimizeAnythingConfig(
-            run_dir=directory,
-            engine_config={
-                "engine": {"parallel": False, "use_cloudpickle": False, "seed": 0},
-                "reflection": {
-                    "reflection_lm": lambda prompt: "```\n1\n```",
-                },
-            },
-        )
+        directory,
+        engine={"parallel": False, "use_cloudpickle": False, "seed": 0},
+        reflection={"reflection_lm": lambda prompt: "```\n1\n```"},
     )
     result = engine.run(server.task, server)
     assert result.best_candidate == "1" and result.best_score == 1.0

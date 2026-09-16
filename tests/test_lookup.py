@@ -1,14 +1,13 @@
 import asyncio
 import json
 from contextlib import contextmanager
-from pathlib import Path
 
 import httpx
 import pytest
 from click.testing import CliRunner
 
 from agentagon.cli.main import main
-from agentagon.core.records import AuditError, digest, validate_record
+from agentagon.core.records import AuditError, validate_record
 from agentagon.lookup import client as lookup_client
 from agentagon.lookup.client import (
     lookup,
@@ -165,88 +164,6 @@ def test_redacted_request_and_durable_resumption(workspace, imported, monkeypatc
     assert data["intelligence"][0]["response"] == RESPONSE
     lookup(workspace, imported, query, phase="follow_up", transport=httpx.MockTransport(handler))
     assert len(calls) == 2
-
-
-def test_legacy_query_receipt_survives_reports_and_new_request_resumption(
-    workspace, imported, monkeypatch
-):
-    monkeypatch.setenv("AGENTAGON_API_KEY", "synthetic-key")
-    endpoint = "https://guidance.example/v1/audit"
-    context = "Document Q&A with retrieval and caching."
-    focus = "Reduce response latency."
-    legacy_payload = {"query": f"{context}\n{focus}", "limit": 5}
-    legacy = {
-        "phase": "initial",
-        "request_digest": digest([endpoint, "initial", legacy_payload]),
-        "at": "2026-09-07T00:00:00Z",
-        "endpoint": endpoint,
-        "request": legacy_payload,
-        "status": "complete",
-        "response": {
-            "knowledge_version": "legacy-knowledge-version",
-            "suggestions": [
-                {
-                    "id": "legacy-retrieval",
-                    "title": "Review retrieval",
-                    "suggestion": "Inspect retrieval against local evidence.",
-                }
-            ],
-        },
-        "request_id": "legacy-request",
-    }
-    legacy_path = workspace.artifact(legacy)
-    legacy_bytes = (workspace.root / legacy_path).read_bytes()
-    legacy_index = {
-        "phase": legacy["phase"],
-        "request_digest": legacy["request_digest"],
-        "status": legacy["status"],
-        "path": legacy_path,
-    }
-    audit = workspace.read_audit(imported)
-    audit["intelligence"] = [legacy_index]
-    workspace.save_audit(audit)
-
-    generated = report(workspace, imported)
-    data = json.loads(Path(generated["json_report"]).read_text(encoding="utf-8"))
-    assert data["intelligence"] == [legacy]
-    markdown = Path(generated["report"]).read_text(encoding="utf-8")
-    assert "`legacy-knowledge-version`" in markdown and "`legacy-retrieval`" in markdown
-
-    calls = []
-
-    def handler(request):
-        calls.append(request)
-        assert request.method == "POST" and str(request.url) == endpoint
-        assert request.headers["authorization"] == "Bearer synthetic-key"
-        assert json.loads(request.content) == {"context": context, "focus": focus, "limit": 5}
-        return httpx.Response(200, json=RESPONSE)
-
-    transport = httpx.MockTransport(handler)
-    first = lookup(workspace, imported, context, focus=focus, transport=transport)
-    assert first["status"] == "complete" and not first["cached"] and len(calls) == 1
-    assert first["receipt"] != legacy_path and first["response"] == RESPONSE
-
-    reopened = Workspace(workspace.root)
-    resumed = lookup(reopened, imported, context, focus=focus, transport=transport)
-    assert resumed == {**first, "cached": True} and len(calls) == 1
-    assert reopened.read_audit(imported)["intelligence"] == [
-        legacy_index,
-        {
-            "phase": first["phase"],
-            "request_digest": first["request_digest"],
-            "status": first["status"],
-            "path": first["receipt"],
-        },
-    ]
-
-    generated = report(reopened, imported)
-    data = json.loads(Path(generated["json_report"]).read_text(encoding="utf-8"))
-    assert data["intelligence"] == [legacy, reopened.read_artifact(first["receipt"])]
-    markdown = Path(generated["report"]).read_text(encoding="utf-8")
-    for response in (legacy["response"], RESPONSE):
-        assert f"`{response['knowledge_version']}`" in markdown
-        assert f"`{response['suggestions'][0]['id']}`" in markdown
-    assert (reopened.root / legacy_path).read_bytes() == legacy_bytes
 
 
 @pytest.mark.parametrize(

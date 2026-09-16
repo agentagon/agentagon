@@ -1,13 +1,12 @@
 """User-local SQLite registration and private application artifact paths."""
 
-import copy
 import os
 import re
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from agentagon.core.records import AuditError, encoded, load_json
+from agentagon.core.records import AuditError, encoded
 from agentagon.storage.config import Config
 from agentagon.storage.metadata import MetadataStore
 from agentagon.storage.workspace import Workspace
@@ -65,8 +64,7 @@ class AppState:
             raise AuditError("provide an existing local project directory")
         workspace = Workspace(Path(path))
         with self.db.transaction() as transaction:
-            project = transaction.register(workspace.root)
-        return copy.deepcopy(project)
+            return transaction.register(workspace.root)
 
     def project_id(self, root):
         project = self.db.project_for_path(Workspace(Path(root)).root)
@@ -75,7 +73,6 @@ class AppState:
         return project["id"]
 
     def project(self, project_id):
-        identifier(project_id, "project")
         return self.db.project(project_id)
 
     def workspace(self, project_id):
@@ -103,12 +100,3 @@ def private_directory(workspace, name):
     if directory.is_symlink():
         raise AuditError("application records cannot use symlinks")
     return directory
-
-
-def list_records(workspace, name):
-    directory = private_directory(workspace, name)
-    return [
-        load_json(workspace.checked(path))
-        for path in sorted(directory.glob("*.json"), reverse=True)
-        if not path.is_symlink()
-    ]

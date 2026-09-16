@@ -7,7 +7,7 @@ import re
 import sqlite3
 import stat
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from agentagon.core.records import AuditError, encoded, now
@@ -15,7 +15,8 @@ from agentagon.core.records import AuditError, encoded, now
 _PROJECT = re.compile(r"project_[a-f0-9]{24}")
 _NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,159}")
 _REFERENCE = re.compile(r"(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:session|keyring):[a-f0-9]{32})")
-_AGENTS = {"default_agent": "codex", "model": "", "concurrency": 1}
+_VERSION = 2
+_AGENTS = {"default_agent": "codex", "models": {"codex": "", "claude": ""}, "concurrency": 1}
 _SCHEMA = (
     """CREATE TABLE projects (
         id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, active INTEGER NOT NULL DEFAULT 1,
@@ -105,7 +106,7 @@ class MetadataTransaction:
             "SELECT payload FROM settings WHERE name = 'agents'"
         ).fetchone()
         return {
-            "version": 1,
+            "version": _VERSION,
             "projects": projects,
             "connections": connections,
             "agents": json.loads(row["payload"]) if row else copy.deepcopy(_AGENTS),
@@ -119,7 +120,7 @@ class MetadataTransaction:
             "agents",
         }:
             raise AuditError("invalid application settings")
-        if data["version"] != 1:
+        if data["version"] != _VERSION:
             raise AuditError("unsupported application settings")
         projects = data["projects"]
         if not isinstance(projects, dict) or not isinstance(data["connections"], dict):
@@ -179,9 +180,7 @@ class MetadataTransaction:
         ]
 
     def put_record(self, project_id, kind, record_id, payload, expected_revision=None):
-        self.project(project_id)
-        _name(kind)
-        _name(record_id)
+        current = self.get_record(project_id, kind, record_id)
         if not isinstance(payload, dict):
             raise AuditError("application record must be an object")
         if (
@@ -192,7 +191,6 @@ class MetadataTransaction:
         expected = payload.get("revision", 0) if expected_revision is None else expected_revision
         if type(expected) is not int or expected < 0:
             raise AuditError("invalid application record revision")
-        current = self.get_record(project_id, kind, record_id)
         if (current["revision"] if current else 0) != expected:
             raise AuditError("application record changed; reload before updating")
         saved = copy.deepcopy(payload)
@@ -208,18 +206,6 @@ class MetadataTransaction:
             (project_id, kind, record_id, saved["revision"], saved["created_at"], body),
         )
         return saved
-
-    def delete_record(self, project_id, kind, record_id, expected_revision=None):
-        current = self.get_record(project_id, kind, record_id)
-        if current is None:
-            return False
-        if expected_revision is not None and current["revision"] != expected_revision:
-            raise AuditError("application record changed; reload before deleting")
-        self.connection.execute(
-            "DELETE FROM records WHERE project_id = ? AND kind = ? AND id = ?",
-            (project_id, kind, record_id),
-        )
-        return True
 
 
 class MetadataStore:
@@ -242,12 +228,14 @@ class MetadataStore:
         with self._transaction(write=True) as transaction:
             connection = transaction.connection
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in {0, 1}:
-                raise AuditError("unsupported application database version")
+            if version not in {0, _VERSION}:
+                raise AuditError(
+                    "unsupported application database version; choose a new AGENTAGON_APP_STATE directory"
+                )
             if version == 0:
                 for statement in _SCHEMA:
                     connection.execute(statement)
-                connection.execute("PRAGMA user_version = 1")
+                connection.execute(f"PRAGMA user_version = {_VERSION}")
 
     def _check_paths(self):
         paths = [self.path, self.path.with_name(self.path.name + "-journal")]
@@ -258,29 +246,21 @@ class MetadataStore:
     @contextmanager
     def _transaction(self, *, write):
         self._check_paths()
-        connection = None
         try:
-            connection = sqlite3.connect(self.path, timeout=5, isolation_level=None)
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA journal_mode = DELETE")
-            connection.execute("PRAGMA synchronous = FULL")
-            connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-            yield MetadataTransaction(connection)
-            connection.commit()
+            with (
+                closing(sqlite3.connect(self.path, timeout=5, isolation_level=None)) as connection,
+                connection,
+            ):
+                connection.row_factory = sqlite3.Row
+                connection.execute("PRAGMA foreign_keys = ON")
+                connection.execute("PRAGMA journal_mode = DELETE")
+                connection.execute("PRAGMA synchronous = FULL")
+                connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+                yield MetadataTransaction(connection)
         except sqlite3.Error as exc:
-            if connection is not None:
-                connection.rollback()
             raise AuditError(
                 "application database operation failed; retry after active updates finish"
             ) from exc
-        except BaseException:
-            if connection is not None:
-                connection.rollback()
-            raise
-        finally:
-            if connection is not None:
-                connection.close()
 
     def transaction(self):
         return self._transaction(write=True)
@@ -308,7 +288,3 @@ class MetadataStore:
     def put_record(self, project_id, kind, record_id, payload, expected_revision=None):
         with self.transaction() as transaction:
             return transaction.put_record(project_id, kind, record_id, payload, expected_revision)
-
-    def delete_record(self, project_id, kind, record_id, expected_revision=None):
-        with self.transaction() as transaction:
-            return transaction.delete_record(project_id, kind, record_id, expected_revision)

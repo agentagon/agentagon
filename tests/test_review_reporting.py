@@ -75,16 +75,3 @@ def test_review_report_does_not_assume_traces_reflect_local_changes(workspace):
     assert "traces may describe the baseline rather than the edits" in markdown
     assert "Supplied traces are assumed to reflect" not in markdown
     assert _detail(workspace, audit_id)["trace_alignment"]["status"] == "unverified"
-
-
-def test_legacy_report_keeps_original_scope_without_inventing_revision(workspace, imported):
-    audit = workspace.read_audit(imported)
-    audit["snapshot"].pop("code_scope")
-    audit["snapshot"].pop("revision")
-    audit.pop("trace_alignment")
-    workspace.save_audit(audit)
-    payload = build_report(workspace, imported)
-    assert payload["workflow"] == "audit"
-    assert payload["revision"] is None
-    assert "code_scope" not in payload["code_scope"]
-    assert payload["trace_alignment"] is None

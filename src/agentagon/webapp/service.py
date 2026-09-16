@@ -142,7 +142,12 @@ class Application:
             if set(i.get("audit_ids", [])) & audit_ids or i.get("latest_audit_id") in audit_ids
         ]
         history = self.catalog.metrics(project_id, agent_id)
-        baseline_ids = {m["baseline_id"] for s in history["metrics"] for m in s["measurements"]}
+        baseline_ids = {
+            m["baseline_id"]
+            for s in history["metrics"]
+            for m in s["measurements"]
+            if "baseline_id" in m
+        }
         result["baselines"] = [
             b
             for b in result["baselines"]
@@ -169,11 +174,7 @@ class Application:
         payload = copy.deepcopy(payload)
         agent_id, focus_id = payload.get("application_agent_id"), payload.get("focus_id")
         if not agent_id:
-            if payload.get("kind") != "audit":
-                raise AuditError(
-                    "select an application agent and focus before starting this workflow"
-                )
-            return self.jobs.submit(project_id, payload, request_binding=request_binding)
+            raise AuditError("select an application agent and focus before starting this workflow")
         with self.lock:
             agent = self.catalog.agent(project_id, agent_id)
             if agent["status"] != "confirmed":
@@ -298,27 +299,18 @@ class Application:
 
         models = codex_models(self.state.read()["agents"].get("codex_executable"))
         return {
-            "models": [
-                {**m, "name": m["display_name"], "default": m["is_default"]} for m in models
-            ],
-            "default_model": next((m["id"] for m in models if m["is_default"]), None),
+            "models": models,
+            "default_model": next((m["id"] for m in models if m["default"]), None),
         }
 
     def remove_project(self, project_id):
         with self.lock, self.jobs.condition:
-            return self._remove_project(project_id)
-
-    def _remove_project(self, project_id):
-        self.state.project(project_id)
-        if any(key[0] == project_id for key in self.jobs.active):
-            raise AuditError("pause or cancel this project's tasks before removing it")
-        try:
-            jobs = self.jobs.list(project_id)
-        except (AuditError, OSError):
-            jobs = []
-        if any(j["state"] in ACTIVE or (project_id, j["id"]) in self.jobs.active for j in jobs):
-            raise AuditError("pause or cancel this project's tasks before removing it")
-        return self.state.remove(project_id)
+            self.state.project(project_id)
+            if any(key[0] == project_id for key in self.jobs.active):
+                raise AuditError("pause or cancel this project's tasks before removing it")
+            if any(j["state"] in ACTIVE for j in self.jobs.list(project_id)):
+                raise AuditError("pause or cancel this project's tasks before removing it")
+            return self.state.remove(project_id)
 
     def overview(self, project_id):
         from agentagon.experiments import baselines, inspection
@@ -367,11 +359,11 @@ class Application:
         from agentagon.experiments import baselines, inspection, preparation
 
         workspace = self.state.workspace(project_id)
-        if kind in {"audit", "audits"}:
+        if kind == "audit":
             return _detail(workspace, result_id)
-        if kind in {"eval", "evaluations"}:
+        if kind == "eval":
             return inspection.evaluation_summary(preparation.load(workspace, result_id))
-        if kind in {"fix", "runs"}:
+        if kind == "fix":
             from agentagon.experiments import suites
             from agentagon.experiments.store import load_run
 
@@ -417,9 +409,9 @@ class Application:
                         c for c in comparison.get("alternatives", []) if c["id"] == finalist
                     ]
             return result
-        if kind in {"baseline", "baselines"}:
+        if kind == "baseline":
             return baselines.public_projection(baselines.status(workspace, result_id))
-        if kind in {"dataset", "traces", "imports"}:
+        if kind in {"dataset", "traces"}:
             record = snapshots.load(workspace, result_id)
             split = next(
                 (
@@ -620,13 +612,10 @@ class Application:
                 Config().update(scope, workspace.root, values, tuple(unset))
         return self.settings(project_id)
 
-    def _connections(self):
-        return self.state.read()["connections"]
-
     def connection(self, connection_id, project_id=None):
         identifier(connection_id, "connection")
-        connection = self._connections().get(connection_id)
-        if not connection or connection.get("disconnected"):
+        connection = self.state.read()["connections"].get(connection_id)
+        if not connection:
             raise AuditError("connection not found")
         if project_id and project_id not in connection.get("project_ids", []):
             raise AuditError("assign this connection to the selected project first")
@@ -649,96 +638,95 @@ class Application:
     def connections(self):
         return {
             "connections": [
-                self.connection_projection(c)
-                for c in self._connections().values()
-                if not c.get("disconnected")
+                self.connection_projection(c) for c in self.state.read()["connections"].values()
             ]
         }
 
     def save_connection(self, payload):
         with self.lock:
-            return self._save_connection(payload)
-
-    def _save_connection(self, payload):
-        allowed = {
-            "id",
-            "name",
-            "provider",
-            "endpoint",
-            "project",
-            "workspace_id",
-            "project_ids",
-            "credentials",
-            "credential_mode",
-        }
-        if set(payload) - allowed:
-            raise AuditError("unsupported connection fields")
-        provider = payload.get("provider")
-        if provider not in DEFAULT_ENDPOINTS:
-            raise AuditError("choose Braintrust, LangSmith, or Langfuse")
-        name = payload.get("name", "")
-        if not isinstance(name, str) or not name.strip() or len(name) > 100:
-            raise AuditError("connection name must contain 1–100 characters")
-        connection_id = payload.get("id") or "connection_" + uuid.uuid4().hex[:24]
-        identifier(connection_id, "connection")
-        previous = self._connections().get(connection_id, {})
-        if previous and previous.get("provider") != provider:
-            raise AuditError("create a new connection to change providers")
-        project_ids = payload.get("project_ids", previous.get("project_ids", []))
-        if not isinstance(project_ids, list) or len(project_ids) > 100:
-            raise AuditError("project assignments must be a bounded list")
-        for project_id in project_ids:
-            self.state.project(project_id)
-        mode = payload.get("credential_mode", "session")
-        if mode not in {"env", "session", "keyring"}:
-            raise AuditError("choose environment, session, or OS credential storage")
-        values = payload.get("credentials", {})
-        allowed_credentials = (
-            {"public_key", "secret_key"} if provider == "langfuse" else {"api_key"}
-        )
-        if not isinstance(values, dict) or set(values) - allowed_credentials:
-            raise AuditError("unsupported credential fields for this provider")
-        connection = {
-            "id": connection_id,
-            "name": name.strip(),
-            "provider": provider,
-            "endpoint": payload.get("endpoint") or DEFAULT_ENDPOINTS[provider],
-            "project": payload.get("project", ""),
-            "workspace_id": payload.get("workspace_id", ""),
-            "project_ids": list(dict.fromkeys(project_ids)),
-            "credentials": dict(previous.get("credentials", {})),
-            "status": "not_tested",
-            "updated_at": now(),
-        }
-        for field in ("project", "workspace_id"):
-            if not isinstance(connection[field], str) or len(connection[field]) > 500:
-                raise AuditError(f"invalid {field}")
-        self.provider_factory(
-            connection, self.credentials
-        )  # Validate endpoint before saving secrets.
-        new_references = []
-        try:
-            for key, value in values.items():
-                if not value:
-                    continue
-                if mode == "env":
-                    if not isinstance(value, str) or not re.fullmatch(r"[A-Z_][A-Z0-9_]*", value):
-                        raise AuditError("credential references must be environment-variable names")
-                    reference = "env:" + value
-                else:
-                    reference = self.credentials.set(connection_id, key, value, mode)
-                    new_references.append(reference)
-                connection["credentials"][key] = reference
-            with self.state.locked() as data:
-                data["connections"][connection_id] = connection
-        except Exception:
-            for reference in new_references:
-                self.credentials.delete(reference)
-            raise
-        for reference in previous.get("credentials", {}).values():
-            if reference not in connection["credentials"].values():
-                self.credentials.delete(reference)
-        return self.connection_projection(connection)
+            allowed = {
+                "id",
+                "name",
+                "provider",
+                "endpoint",
+                "project",
+                "workspace_id",
+                "project_ids",
+                "credentials",
+                "credential_mode",
+            }
+            if set(payload) - allowed:
+                raise AuditError("unsupported connection fields")
+            provider = payload.get("provider")
+            if provider not in DEFAULT_ENDPOINTS:
+                raise AuditError("choose Braintrust, LangSmith, or Langfuse")
+            name = payload.get("name", "")
+            if not isinstance(name, str) or not name.strip() or len(name) > 100:
+                raise AuditError("connection name must contain 1–100 characters")
+            connection_id = payload.get("id") or "connection_" + uuid.uuid4().hex[:24]
+            identifier(connection_id, "connection")
+            previous = self.state.read()["connections"].get(connection_id, {})
+            if previous and previous.get("provider") != provider:
+                raise AuditError("create a new connection to change providers")
+            project_ids = payload.get("project_ids", previous.get("project_ids", []))
+            if not isinstance(project_ids, list) or len(project_ids) > 100:
+                raise AuditError("project assignments must be a bounded list")
+            for project_id in project_ids:
+                self.state.project(project_id)
+            mode = payload.get("credential_mode", "session")
+            if mode not in {"env", "session", "keyring"}:
+                raise AuditError("choose environment, session, or OS credential storage")
+            values = payload.get("credentials", {})
+            allowed_credentials = (
+                {"public_key", "secret_key"} if provider == "langfuse" else {"api_key"}
+            )
+            if not isinstance(values, dict) or set(values) - allowed_credentials:
+                raise AuditError("unsupported credential fields for this provider")
+            connection = {
+                "id": connection_id,
+                "name": name.strip(),
+                "provider": provider,
+                "endpoint": payload.get("endpoint") or DEFAULT_ENDPOINTS[provider],
+                "project": payload.get("project", ""),
+                "workspace_id": payload.get("workspace_id", ""),
+                "project_ids": list(dict.fromkeys(project_ids)),
+                "credentials": dict(previous.get("credentials", {})),
+                "status": "not_tested",
+                "updated_at": now(),
+            }
+            for field in ("project", "workspace_id"):
+                if not isinstance(connection[field], str) or len(connection[field]) > 500:
+                    raise AuditError(f"invalid {field}")
+            self.provider_factory(
+                connection, self.credentials
+            )  # Validate endpoint before saving secrets.
+            new_references = []
+            try:
+                for key, value in values.items():
+                    if not value:
+                        continue
+                    if mode == "env":
+                        if not isinstance(value, str) or not re.fullmatch(
+                            r"[A-Z_][A-Z0-9_]*", value
+                        ):
+                            raise AuditError(
+                                "credential references must be environment-variable names"
+                            )
+                        reference = "env:" + value
+                    else:
+                        reference = self.credentials.set(value, mode)
+                        new_references.append(reference)
+                    connection["credentials"][key] = reference
+                with self.state.locked() as data:
+                    data["connections"][connection_id] = connection
+            except Exception:
+                for reference in new_references:
+                    self.credentials.delete(reference)
+                raise
+            for reference in previous.get("credentials", {}).values():
+                if reference not in connection["credentials"].values():
+                    self.credentials.delete(reference)
+            return self.connection_projection(connection)
 
     def test_connection(self, connection_id):
         connection = self.connection(connection_id)
@@ -772,15 +760,12 @@ class Application:
 
     def disconnect(self, connection_id):
         with self.lock:
-            return self._disconnect(connection_id)
-
-    def _disconnect(self, connection_id):
-        connection = self.connection(connection_id)
-        for ref in connection.get("credentials", {}).values():
-            self.credentials.delete(ref)
-        with self.state.locked() as data:
-            del data["connections"][connection_id]
-        return {"disconnected": connection_id}
+            connection = self.connection(connection_id)
+            for ref in connection.get("credentials", {}).values():
+                self.credentials.delete(ref)
+            with self.state.locked() as data:
+                del data["connections"][connection_id]
+            return {"disconnected": connection_id}
 
     def preview(self, project_id, payload):
         self.state.workspace(project_id)
@@ -856,49 +841,44 @@ class Application:
 
     def save_agents(self, payload):
         with self.lock:
-            return self._save_agents(payload)
+            if set(payload) - {
+                "default_agent",
+                "model",
+                "concurrency",
+                "claude_api_key",
+                "credential_mode",
+            }:
+                raise AuditError("unsupported coding-agent settings")
+            settings = self.state.read()["agents"]
+            agent = payload.get("default_agent", settings.get("default_agent"))
+            if agent not in {"codex", "claude"}:
+                raise AuditError("choose Codex or Claude")
+            concurrency = payload.get("concurrency", settings.get("concurrency", 1))
+            if type(concurrency) is not int or not 1 <= concurrency <= 8:
+                raise AuditError("agent capacity must be between 1 and 8")
+            model = payload.get("model", settings["models"][agent])
+            if not isinstance(model, str) or len(model) > 200:
+                raise AuditError("invalid model name")
+            if agent == "codex" and model:
+                from agentagon.webapp.agents import validate_codex_model
 
-    def _save_agents(self, payload):
-        if set(payload) - {
-            "default_agent",
-            "model",
-            "concurrency",
-            "claude_api_key",
-            "credential_mode",
-        }:
-            raise AuditError("unsupported coding-agent settings")
-        settings = self.state.read()["agents"]
-        agent = payload.get("default_agent", settings.get("default_agent"))
-        if agent not in {"codex", "claude"}:
-            raise AuditError("choose Codex or Claude")
-        concurrency = payload.get("concurrency", settings.get("concurrency", 1))
-        if type(concurrency) is not int or not 1 <= concurrency <= 8:
-            raise AuditError("agent capacity must be between 1 and 8")
-        model = payload.get("model", settings.get("models", {}).get(agent, ""))
-        if not isinstance(model, str) or len(model) > 200:
-            raise AuditError("invalid model name")
-        if agent == "codex" and model:
-            from agentagon.webapp.agents import validate_codex_model
-
-            model = validate_codex_model(model, settings.get("codex_executable"))
-        settings.update(default_agent=agent, model=model, concurrency=concurrency)
-        settings.setdefault("models", {})[agent] = model
-        key = payload.get("claude_api_key")
-        if key:
-            mode = payload.get("credential_mode", "session")
-            if mode == "env":
-                if not isinstance(key, str) or not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key):
-                    raise AuditError("use an environment-variable name")
-                settings["claude_api_key_ref"] = "env:" + key
-            else:
-                settings["claude_api_key_ref"] = self.credentials.set(
-                    "claude", "api_key", key, mode
-                )
-        with self.state.locked() as data:
-            data["agents"] = settings
-        with self.jobs.condition:
-            self.jobs._dispatch()
-        return self.agents()
+                model = validate_codex_model(model, settings.get("codex_executable"))
+            settings.update(default_agent=agent, concurrency=concurrency)
+            settings["models"][agent] = model
+            key = payload.get("claude_api_key")
+            if key:
+                mode = payload.get("credential_mode", "session")
+                if mode == "env":
+                    if not isinstance(key, str) or not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key):
+                        raise AuditError("use an environment-variable name")
+                    settings["claude_api_key_ref"] = "env:" + key
+                else:
+                    settings["claude_api_key_ref"] = self.credentials.set(key, mode)
+            with self.state.locked() as data:
+                data["agents"] = settings
+            with self.jobs.condition:
+                self.jobs._dispatch()
+            return self.agents()
 
     def close(self):
         self.jobs.close()

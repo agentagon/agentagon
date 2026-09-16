@@ -64,4 +64,4 @@ If interrupted, resume the recorded IDs in the same coding host. Do not create r
 
 ## Direct control and references
 
-[Execution and legacy controls](reference/fix.md) · [Evaluation preparation](reference/evaluation.md) · [Baselines](baselines.md) · [Reviewed patch commands](reference/patches.md) · [Delivery](delivery.md)
+[Execution and controls](reference/fix.md) · [Evaluation preparation](reference/evaluation.md) · [Baselines](baselines.md) · [Reviewed patch commands](reference/patches.md) · [Delivery](delivery.md)

@@ -36,32 +36,39 @@ def validate_limits(value: dict) -> dict:
 
 
 def artifact_bytes(workspace, entry: dict) -> bytes:
-    """Read both legacy inline artifacts and content-addressed binary files."""
+    """Read a retained content-addressed artifact and verify its identity."""
     try:
-        if "content_path" in entry:
-            expected = f".agentagon/evidence/{entry['sha256']}.bin"
-            if entry["content_path"] != expected or not re.fullmatch(
-                r"[0-9a-f]{64}", entry["sha256"]
-            ):
-                raise AuditError("artifact content path is invalid")
-            content = workspace.read_blob(expected)
-        else:
-            content = base64.b64decode(entry["content_base64"], validate=True)
-        if len(content) != entry["bytes"] or hashlib.sha256(content).hexdigest() != entry["sha256"]:
-            raise AuditError("artifact checksum changed")
-        return content
+        expected = f".agentagon/evidence/{entry['sha256']}.bin"
+        if entry["content_path"] != expected or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]):
+            raise AuditError("artifact content path is invalid")
+        return _checked_bytes(entry, workspace.read_blob(expected))
     except AuditError:
         raise
     except (ValueError, KeyError, TypeError) as exc:
         raise AuditError("artifact content is invalid") from exc
 
 
+def _checked_bytes(entry, content):
+    if len(content) != entry["bytes"] or hashlib.sha256(content).hexdigest() != entry["sha256"]:
+        raise AuditError("artifact checksum changed")
+    return content
+
+
 def _compact(workspace, result: dict) -> dict:
     compact = copy.deepcopy(result)
     for entry in (compact.get("evidence") or {}).get("artifacts", []):
-        content = artifact_bytes(workspace, entry)
+        if "content_path" in entry:
+            artifact_bytes(workspace, entry)
+            entry.pop("content_base64", None)
+            continue
+        # Inline bytes are the worker's transport format, never retained evidence.
+        try:
+            content = _checked_bytes(
+                entry, base64.b64decode(entry.pop("content_base64"), validate=True)
+            )
+        except (ValueError, KeyError, TypeError) as exc:
+            raise AuditError("artifact content is invalid") from exc
         entry["content_path"] = workspace.blob(content, ".bin")
-        entry.pop("content_base64", None)
     return compact
 
 
@@ -69,8 +76,7 @@ def read_result(workspace, relative: str) -> dict:
     """Check the result and any external bytes before relying on its evidence."""
     result = workspace.read_artifact(relative)
     for entry in (result.get("evidence") or {}).get("artifacts", []):
-        if "content_path" in entry:
-            artifact_bytes(workspace, entry)
+        artifact_bytes(workspace, entry)
     return result
 
 

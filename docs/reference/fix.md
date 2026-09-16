@@ -2,7 +2,7 @@
 
 Describe the change you want to your coding agent. It prepares the configuration and runs the commands. For your first comparison, follow [Measure candidate fixes](../fix.md).
 
-The current primary journey uses [Omni and one overall budget](../fix.md). This reference retains the low-level execution profiles, search policies and controls used by historical runs. These compatibility policies are not the new journey's optimizer choices.
+The primary journey uses [Omni and one overall budget](../fix.md). This reference covers low-level execution profiles, search policies and controls for explicit CLI use.
 
 The prompts below are examples. Replace IDs, paths, metrics, and limits to fit your application.
 

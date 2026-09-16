@@ -118,15 +118,10 @@ def build_report(workspace: Workspace, audit_id: str) -> dict:
             "Completion covers the selected local changes. Related code is context; "
             "unrelated existing defects are outside this review."
         )
-    alignment = current.get("trace_alignment") or audit.get("trace_alignment")
-    if alignment_limit := trace_alignment_text(alignment):
+    if alignment_limit := trace_alignment_text(current["trace_alignment"]):
         limits.append(alignment_limit)
     return {
         **current,
-        "workflow": current.get("workflow")
-        or ("review" if audit["snapshot"].get("code_scope") == "changes" else "audit"),
-        "revision": current.get("revision") or audit["snapshot"].get("revision"),
-        "trace_alignment": alignment,
         "generated_at": now(),
         "host": audit["host"],
         "model": audit["model"],

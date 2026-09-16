@@ -218,7 +218,7 @@ def test_changed_baseline_invalidates_review_even_with_same_file_bytes(checkout)
         checkout.verify_snapshot(snapshot)
 
 
-def test_full_snapshot_accepts_local_changes_and_legacy_snapshot_still_reads(checkout):
+def test_full_snapshot_accepts_local_changes_and_rejects_missing_scope(checkout):
     snapshot = checkout.snapshot([])
     checkout.verify_snapshot(snapshot)
     (checkout.root / "untracked.py").write_text("new\n", encoding="utf-8")
@@ -228,7 +228,8 @@ def test_full_snapshot_accepts_local_changes_and_legacy_snapshot_still_reads(che
     checkout.verify_snapshot(current)
     with pytest.raises(AuditError, match="code input changed"):
         checkout.verify_snapshot(snapshot)
-    checkout.verify_snapshot({"revision": "older", "files": []})
+    with pytest.raises(AuditError, match="unsupported snapshot scope"):
+        checkout.verify_snapshot({"revision": "older", "files": []})
     checkout.verify_code(
         {
             "path": "app.py",

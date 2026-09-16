@@ -12,7 +12,7 @@ from agentagon.webapp.providers import CredentialStore, ProviderClient, Provider
 def client(provider, handler, **overrides):
     credentials = CredentialStore()
     names = ("public_key", "secret_key") if provider == "langfuse" else ("api_key",)
-    refs = {name: credentials.set("connection", name, f"private-{name}-value") for name in names}
+    refs = {name: credentials.set(f"private-{name}-value") for name in names}
     connection = {
         "id": "connection",
         "provider": provider,
@@ -34,7 +34,7 @@ def trace_selection(**values):
 
 def test_credentials_references_and_session_lifetime(monkeypatch):
     store = CredentialStore()
-    reference = store.set("connection", "api_key", "a-secret-value")
+    reference = store.set("a-secret-value")
     assert "a-secret-value" not in reference
     assert store.resolve(reference) == "a-secret-value"
     with pytest.raises(ProviderError, match="unavailable"):
@@ -65,7 +65,7 @@ def test_os_keyring_and_sanitized_failure():
 
     backend = Keyring()
     first = CredentialStore(backend)
-    reference = first.set("connection", "api_key", "persistent-secret", "keyring")
+    reference = first.set("persistent-secret", "keyring")
     second = CredentialStore(backend)
     assert second.resolve(reference) == "persistent-secret"
     second.delete(reference)
@@ -77,9 +77,7 @@ def test_os_keyring_and_sanitized_failure():
             raise RuntimeError("persistent-secret leaked by OS")
 
     with pytest.raises(ProviderError) as error:
-        CredentialStore(FailingKeyring()).set(
-            "connection", "api_key", "persistent-secret", "keyring"
-        )
+        CredentialStore(FailingKeyring()).set("persistent-secret", "keyring")
     assert "persistent-secret" not in str(error.value)
 
 

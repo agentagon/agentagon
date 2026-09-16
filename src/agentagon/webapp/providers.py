@@ -113,9 +113,7 @@ class CredentialStore:
                 "OS credential storage unavailable; use session credentials"
             ) from None
 
-    def set(self, connection_id, name, value, persistence="session"):
-        _text(connection_id, "connection ID", maximum=200)
-        _text(name, "credential name", maximum=100)
+    def set(self, value, persistence="session"):
         value = _text(value, "credential", maximum=16384)
         if persistence not in {"session", "keyring"}:
             raise ProviderError("credential persistence must be session or keyring")

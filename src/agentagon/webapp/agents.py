@@ -36,6 +36,7 @@ _READ_TOOLS = ["Read", "Glob", "Grep", "AskUserQuestion"]
 
 def detect_agents() -> list[dict]:
     """Inspect local capabilities without starting a model session or exposing auth data."""
+    sdk_available = importlib.util.find_spec("claude_agent_sdk") is not None
     result = []
     for name in ("codex", "claude"):
         executable = shutil.which(name)
@@ -60,7 +61,6 @@ def detect_agents() -> list[dict]:
                     )
             except (OSError, subprocess.SubprocessError):
                 pass
-        sdk_available = importlib.util.find_spec("claude_agent_sdk") is not None
         item = {
             "agent": name,
             "available": bool(executable) if name == "codex" else sdk_available,
@@ -104,16 +104,9 @@ def _codex_catalog(client):
             models.append(
                 {
                     "id": model["model"],
-                    "catalog_id": model.get("id", model["model"]),
-                    "display_name": model.get("displayName") or model["model"],
+                    "name": model.get("displayName") or model["model"],
                     "description": model.get("description", ""),
-                    "is_default": model.get("isDefault", False),
-                    "reasoning_efforts": [
-                        item["reasoningEffort"]
-                        for item in model.get("supportedReasoningEfforts", [])
-                        if isinstance(item, dict) and isinstance(item.get("reasoningEffort"), str)
-                    ],
-                    "default_reasoning_effort": model.get("defaultReasoningEffort"),
+                    "default": model.get("isDefault", False),
                 }
             )
         cursor = page.get("nextCursor")
@@ -149,14 +142,11 @@ def codex_models(executable=None):
 def _choose_codex_model(model, models):
     if not isinstance(model, str) or not model.strip():
         raise AuditError("Choose an available Codex model.")
-    selected = next(
-        (entry for entry in models if model in (entry["id"], entry["catalog_id"])), None
-    )
-    if selected is None:
+    if not any(entry["id"] == model for entry in models):
         raise AuditError(
             "Selected model is not available in this Codex installation. Refresh the model list and choose an available OpenAI model."
         )
-    return selected["id"]
+    return model
 
 
 def validate_codex_model(model, executable=None):
@@ -466,11 +456,19 @@ def run_agent(
         raise AuditError("Coding-agent timeout must be between 0 and 86400 seconds.")
     request["timeout_seconds"] = timeout
     environment = request.get("env", {})
-    if not isinstance(environment, dict) or set(environment) - {"AGENTAGON_CONFIG"}:
+    if not isinstance(environment, dict) or set(environment) - {
+        "AGENTAGON_CONFIG",
+        "AGENTAGON_APP_STATE",
+    }:
         raise AuditError("Unsupported coding-agent environment override.")
-    for value in environment.values():
-        if not isinstance(value, str) or not Path(value).is_absolute() or not Path(value).is_file():
-            raise AuditError("Coding-agent configuration must be an existing absolute file.")
+    for key, value in environment.items():
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            raise AuditError("Coding-agent environment paths must be absolute.")
+        path = Path(value)
+        if key == "AGENTAGON_CONFIG" and not path.is_file():
+            raise AuditError("Coding-agent configuration must be an existing file.")
+        if key == "AGENTAGON_APP_STATE" and not path.is_dir():
+            raise AuditError("Coding-agent application state must be an existing directory.")
     for key in ("session_id", "model", "api_key", "executable"):
         if key in request and request[key] is not None:
             if not isinstance(request[key], str) or not request[key].strip():
@@ -522,7 +520,6 @@ class _Codex:
         self.turn_id = None
         self.finished = None
         self.pending_completion = None
-        self.stderr = bytearray()
         executable = run.request.get("executable") or shutil.which("codex")
         if not executable:
             raise AuditError("Codex CLI was not found. Install it and run codex login.")
@@ -571,10 +568,9 @@ class _Codex:
 
     def drain(self):
         try:
-            while chunk := self.process.stderr.read(4096):
-                # Keep only a bounded diagnostic tail. Never emit raw stderr.
-                self.stderr.extend(chunk)
-                del self.stderr[:-16384]
+            # Consume stderr to avoid blocking the host; it may contain credentials.
+            while self.process.stderr.read(4096):
+                pass
         except (OSError, ValueError):
             pass
 
@@ -856,21 +852,12 @@ async def _claude(run):
     async def drive():
         async with sdk.ClaudeSDKClient(options=sdk.ClaudeAgentOptions(**options)) as client:
             await client.query(run.request["prompt"])
-            receiver = asyncio.create_task(receive(client))
             try:
-                while not receiver.done():
-                    run.check()
-                    await asyncio.wait({receiver}, timeout=0.1)
-                await receiver
+                await receive(client)
             except (_Stopped, AuditError, asyncio.CancelledError):
                 with suppress(Exception):
                     await asyncio.wait_for(client.interrupt(), timeout=2)
                 raise
-            finally:
-                if not receiver.done():
-                    receiver.cancel()
-                with suppress(asyncio.CancelledError, _Stopped, AuditError):
-                    await receiver
 
     driver = asyncio.create_task(drive())
     try:

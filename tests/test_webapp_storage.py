@@ -49,6 +49,14 @@ def test_registration_canonical_path_restarts_and_reactivation_keep_id(registere
     assert workspace.metadata_store is restarted.db
 
 
+def test_database_rejects_previous_format_without_migration(registered):
+    state, _ = registered
+    with sqlite3.connect(state.path) as connection:
+        connection.execute("PRAGMA user_version = 1")
+    with pytest.raises(AuditError, match="choose a new AGENTAGON_APP_STATE directory"):
+        AppState(state.directory)
+
+
 def test_concurrent_registration_has_one_opaque_identity(registered):
     state, project = registered
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -123,8 +131,6 @@ def test_domain_records_are_scoped_and_stale_revisions_fail(registered, tmp_path
     assert updated["revision"] == 2
     with pytest.raises(AuditError, match="changed"):
         state.db.put_record(project["id"], "focuses", record["id"], record)
-    with pytest.raises(AuditError, match="changed"):
-        state.db.delete_record(project["id"], "focuses", record["id"], expected_revision=1)
     assert state.db.get_record(project["id"], "focuses", record["id"])["name"] == "Latency"
 
 
@@ -136,12 +142,12 @@ def test_settings_and_assignments_commit_together_and_only_store_references(regi
         "credentials": {"api_key": "env:PROVIDER_KEY"},
     }
     with state.locked() as data:
-        data["agents"]["model"] = "selected-model"
+        data["agents"]["models"]["codex"] = "selected-model"
         data["connections"][connection["id"]] = connection
     saved = state.read()
     with pytest.raises(AuditError, match="secret references"):
         with state.locked() as data:
-            data["agents"]["model"] = "should-roll-back"
+            data["agents"]["models"]["codex"] = "should-roll-back"
             data["connections"][connection["id"]]["credentials"]["api_key"] = "plaintext-secret"
     assert state.read() == saved
     assert b"plaintext-secret" not in state.path.read_bytes()

@@ -35,7 +35,6 @@ def public_job(job):
         not in {
             "frozen_settings",
             "execution_profile",
-            "binding",
             "request_binding",
             "receipts",
             "agent_settings",
@@ -57,7 +56,6 @@ class JobManager:
         self.answers = {}
         self.threads = set()
         self.stopping = False
-        self.revision = 0
         self.verify_result = lambda workspace, job, result: result
         # Starting the service reconciles records; it never restarts agent work.
         for project in self.state.read()["projects"].values():
@@ -86,7 +84,6 @@ class JobManager:
     def _write(self, job, transaction=None):
         saved = (transaction or self.state.db).put_record(job["project_id"], "jobs", job["id"], job)
         job.update(revision=saved["revision"], updated_at=saved["updated_at"])
-        self.revision += 1
         with self.condition:
             self.condition.notify_all()
 
@@ -128,8 +125,7 @@ class JobManager:
         if kind not in workflows.REFERENCES:
             raise AuditError("choose audit, eval, fix, or baseline")
         job_id = "job_" + hashlib.sha256(f"{project_id}:{operation}".encode()).hexdigest()[:24]
-        binding = digest(payload)
-        request_binding = binding if request_binding is None else request_binding
+        request_binding = digest(payload) if request_binding is None else request_binding
         with self.condition:
             existing = self.existing_submission(project_id, operation, request_binding)
             if existing is not None:
@@ -224,18 +220,10 @@ class JobManager:
         settings = self.state.read()["agents"]
         if not settings.get("claude_api_key_ref") and os.environ.get("ANTHROPIC_API_KEY"):
             settings["claude_api_key_ref"] = "env:ANTHROPIC_API_KEY"
-        agent = payload.get("agent") or settings.get("default_agent", "codex")
-        model = (
-            payload.get("model")
-            or settings.get("models", {}).get(agent)
-            or (
-                settings.get("model", "") if agent == settings.get("default_agent", "codex") else ""
-            )
-        )
+        agent = payload.get("agent") or settings["default_agent"]
+        model = payload.get("model") or settings["models"].get(agent, "")
         if agent not in {"codex", "claude"} or not isinstance(model, str) or len(model) > 200:
             raise AuditError("invalid coding agent or model")
-        job_id = "job_" + hashlib.sha256(f"{project_id}:{operation}".encode()).hexdigest()[:24]
-        binding = digest(payload)
         with self.condition:
             workspace.initialize()
             job = {
@@ -249,8 +237,7 @@ class JobManager:
                 "agent": agent,
                 "model": model,
                 "state": "queued",
-                "options": copy.deepcopy(options),
-                "binding": binding,
+                "options": options,
                 "request_binding": request_binding,
                 "created_at": now(),
                 "events": [],
@@ -266,7 +253,7 @@ class JobManager:
                 "reflection_tasks": {},
                 "frozen_settings": frozen,
                 "execution_profile": execution_profile,
-                "agent_settings": copy.deepcopy(settings),
+                "agent_settings": settings,
                 "elapsed_seconds": 0,
                 "next_action": "Waiting for coding-agent capacity.",
             }
@@ -330,9 +317,10 @@ class JobManager:
     def _dispatch(self):
         if self.stopping:
             return
-        capacity = self.state.read()["agents"].get("concurrency", 1)
+        settings = self.state.read()
+        capacity = settings["agents"]["concurrency"]
         active_projects = {project for project, _ in self.active}
-        for project_id in self.state.read()["projects"]:
+        for project_id in settings["projects"]:
             if len(self.active) >= capacity:
                 return
             if project_id in active_projects:
@@ -460,9 +448,7 @@ class JobManager:
                 job.update(state="running", next_action=None, attempt_started_at=now())
                 self._write(job)
                 workflows.freeze_settings(workspace, job)
-                remaining = job["options"].get("max_elapsed_seconds", 1800) - job.get(
-                    "elapsed_seconds", 0
-                )
+                remaining = job["options"]["max_elapsed_seconds"] - job["elapsed_seconds"]
                 if remaining <= 0:
                     raise AuditError(
                         "task time budget exhausted; start a new task with explicit limits"
@@ -542,7 +528,7 @@ class JobManager:
             with self.condition:
                 cancelled.set()  # Release outstanding approval waiters on timeout/failure too.
                 job = self._read(project_id, job_id)
-                job["elapsed_seconds"] = job.get("elapsed_seconds", 0) + time.monotonic() - started
+                job["elapsed_seconds"] += time.monotonic() - started
                 job.pop("attempt_started_at", None)
                 self._write(job)
                 self.active.pop((project_id, job_id), None)
@@ -559,7 +545,7 @@ class JobManager:
                     return {"state": "interrupted", "session_id": job.get("session_id")}
                 remaining = (
                     job["options"]["max_elapsed_seconds"]
-                    - job.get("elapsed_seconds", 0)
+                    - job["elapsed_seconds"]
                     - (time.monotonic() - started)
                 )
                 if remaining <= 0:
@@ -567,7 +553,7 @@ class JobManager:
                         "task time budget exhausted; start a new task with explicit limits"
                     )
                 review_id = job.get("active_review_id")
-                task = job.get("review_tasks", {}).get(review_id) if review_id else None
+                task = job["review_tasks"][review_id] if review_id else None
                 reflection = job.get("active_reflection")
                 current = {**request, "timeout_seconds": remaining}
                 if task:
@@ -725,11 +711,9 @@ class JobManager:
                     return outcome
                 if handoff.get("evaluation_id"):
                     job["workflow_ids"]["evaluation_id"] = handoff["evaluation_id"]
-                if job["kind"] == "fix" and handoff.get("run_id"):
-                    job["workflow_ids"]["run_id"] = handoff.get(
-                        "workflow_run_id", handoff["run_id"]
-                    )
-                task = job.setdefault("review_tasks", {}).setdefault(
+                if job["kind"] == "fix" and handoff["kind"] == "native":
+                    job["workflow_ids"]["run_id"] = handoff["workflow_run_id"]
+                task = job["review_tasks"].setdefault(
                     handoff["id"],
                     {
                         **handoff,
@@ -775,8 +759,9 @@ class JobManager:
                     event.get("model") or job.get("model") or job.get("actual_model")
                 )
                 self._write(job)
-                self._prepare(self.state.workspace(project_id), job)
-                workflows.write_context(self.state.workspace(project_id), job)
+                workspace = self.state.workspace(project_id)
+                self._prepare(workspace, job)
+                workflows.write_context(workspace, job)
             event = copy.deepcopy(event)
             if review_id:
                 event.update(role="reviewer", review_id=review_id)
@@ -815,7 +800,7 @@ class JobManager:
             )
             self._write(job)
             key = (project_id, job_id)
-            budget_left = job["options"]["max_elapsed_seconds"] - job.get("elapsed_seconds", 0)
+            budget_left = job["options"]["max_elapsed_seconds"] - job["elapsed_seconds"]
             deadline = datetime.fromisoformat(job["attempt_started_at"]).timestamp() + budget_left
             while key not in self.answers and not cancelled.is_set():
                 remaining = deadline - time.time()
@@ -930,7 +915,7 @@ class JobManager:
         if started is None:
             return False
         elapsed = max(0, time.time() - datetime.fromisoformat(started).timestamp())
-        job["elapsed_seconds"] = job.get("elapsed_seconds", 0) + elapsed
+        job["elapsed_seconds"] += elapsed
         return True
 
     def close(self):

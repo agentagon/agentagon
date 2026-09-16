@@ -24,15 +24,6 @@ def _workspace(workspace, project_id):
     return workspace.metadata_store
 
 
-def _index(workspace, project_id, record):
-    database = _workspace(workspace, project_id)
-    with database.transaction() as transaction:
-        existing = transaction.get_record(project_id, "datasets", record["id"])
-        if existing is None:
-            transaction.put_record(project_id, "datasets", record["id"], snapshots.summary(record))
-    return snapshots.summary(record)
-
-
 def derive(workspace, project_id, trace_snapshot_id, selection):
     """Copy complete trace roots into examples without treating observations as labels."""
     _workspace(workspace, project_id)
@@ -121,7 +112,7 @@ def derive(workspace, project_id, trace_snapshot_id, selection):
         },
         "items": items,
     }
-    return _index(workspace, project_id, snapshots.save(workspace, project_id, preview))
+    return snapshots.summary(snapshots.save(workspace, project_id, preview))
 
 
 def _groups(items, group_key):
@@ -303,10 +294,6 @@ def split(state, project_id, snapshot_id, selection):
                 "this dataset already has a frozen split artifact; reuse its partition"
             )
         workspace.write(guard_path, guard)
-        for partition in saved.values():
-            transaction.put_record(
-                project_id, "datasets", partition["id"], snapshots.summary(partition)
-            )
         return transaction.put_record(
             project_id,
             "dataset_splits",

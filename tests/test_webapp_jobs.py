@@ -198,7 +198,6 @@ def test_saved_model_is_selected_per_host(manager_factory):
     with state.locked() as settings:
         settings["agents"].update(
             default_agent="codex",
-            model="codex-choice",
             models={"codex": "codex-choice", "claude": "claude-choice"},
         )
     selected = manager.submit(project, payload(agent="claude"))
@@ -294,7 +293,7 @@ def test_claude_environment_credentials_work_without_storing_secret(manager_fact
     manager, state, project = manager_factory(host)
     manager.credentials = CredentialStore()
     with state.locked() as settings:
-        settings["agents"]["model"] = "codex-specific-model"
+        settings["agents"]["models"]["codex"] = "codex-specific-model"
     submitted = manager.submit(project, payload(agent="claude"))
     job = wait_for(manager, project, submitted["id"])
     assert job["state"] == "completed_with_limits"
@@ -321,9 +320,10 @@ def test_resume_uses_repaired_claude_credentials_without_changing_session_settin
     failed = wait_for(manager, project, submitted["id"])
     assert failed["state"] == "failed"
     assert not calls
-    ref = manager.credentials.set("coding-agent", "api_key", "repaired-key")
+    ref = manager.credentials.set("repaired-key")
     with state.locked() as settings:
-        settings["agents"].update(claude_api_key_ref=ref, model="different-later-default")
+        settings["agents"]["claude_api_key_ref"] = ref
+        settings["agents"]["models"]["claude"] = "different-later-default"
     manager.control(project, submitted["id"], "resume", {"operation_id": str(uuid.uuid4())})
     result = wait_for(manager, project, submitted["id"])
     assert result["state"] == "completed_with_limits"

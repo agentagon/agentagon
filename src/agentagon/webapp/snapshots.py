@@ -3,7 +3,7 @@
 import json
 
 from agentagon.core.records import AuditError, digest, load_json, now
-from agentagon.webapp.state import identifier, list_records, private_directory
+from agentagon.webapp.state import identifier, private_directory
 
 MAX_IMPORT_BYTES = 20_000_000
 
@@ -80,7 +80,11 @@ def summary(record):
 
 
 def list_snapshots(workspace):
-    return [summary(load(workspace, r["id"])) for r in list_records(workspace, "imports")]
+    return [
+        summary(load(workspace, path.stem))
+        for path in sorted(private_directory(workspace, "imports").glob("*.json"), reverse=True)
+        if not path.is_symlink()
+    ]
 
 
 def materialize(workspace, snapshot_id, evaluation_id):

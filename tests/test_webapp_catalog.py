@@ -103,7 +103,7 @@ def test_focused_audit_binds_dirty_local_code_and_missing_baseline_blocks_fix(
 
 
 def test_new_focus_retains_prior_measurements_and_requires_its_own_baseline(
-    app, application, specification
+    app, application, specification, monkeypatch
 ):
     specification["repetitions"] = 1
     evaluation = frozen(application, specification)
@@ -155,6 +155,12 @@ def test_new_focus_retains_prior_measurements_and_requires_its_own_baseline(
     history = app.catalog.metrics(saved["id"], a["id"])
     assert len(history["guardrails"]) == 2
     assert all(len(row["measurements"]) == 1 for row in history["metrics"])
+    history["metrics"][0]["measurements"].append(
+        {"run_id": "run_" + "a" * 24, "value": 0.9, "state": "verified"}
+    )
+    monkeypatch.setattr(app.catalog, "metrics", lambda *_: history)
+    overview = app.agent_overview(saved["id"], a["id"])
+    assert {b["baseline_id"] for b in overview["baselines"]} == {baseline["baseline_id"]}
 
     # Shared application changes need coverage for every confirmed affected agent.
     other = app.save_application_agent(
@@ -242,7 +248,7 @@ def test_agent_routes_require_session_and_reading_never_discovers(app, tmp_path)
         assert overview["active_focus_id"] == f["id"]
         assert overview["readiness"]["fix"]["ready"] is False
         client.headers.pop("X-Agentagon-Token")
-        assert client.patch(f"{base}/{a['id']}", json={"name": "Changed"}).status_code == 403
+        assert client.post(f"{base}/{a['id']}", json={"name": "Changed"}).status_code == 403
 
 
 def test_focused_request_replay_keeps_original_binding_after_agent_edits(

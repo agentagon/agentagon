@@ -81,6 +81,8 @@ def request(tmp_path, **kwargs):
 def test_codex_streams_approval_question_and_redacted_result(tmp_path, monkeypatch):
     monkeypatch.setenv("EXAMPLE_API_KEY", "super-secret-value")
     executable, log = fake_codex(tmp_path)
+    config = tmp_path / "config.json"
+    config.write_text("{}")
     events, questions = [], []
 
     def ask(question):
@@ -88,7 +90,14 @@ def test_codex_streams_approval_question_and_redacted_result(tmp_path, monkeypat
         return {"decision": "decline"} if question["kind"] == "approval" else {"text": "Minimal"}
 
     result = agents.run_agent(
-        request(tmp_path, executable=str(executable)), events.append, ask, threading.Event()
+        request(
+            tmp_path,
+            executable=str(executable),
+            env={"AGENTAGON_CONFIG": str(config), "AGENTAGON_APP_STATE": str(tmp_path)},
+        ),
+        events.append,
+        ask,
+        threading.Event(),
     )
     messages = [json.loads(line) for line in log.read_text().splitlines()]
     assert result == {
@@ -159,9 +168,15 @@ def test_codex_model_catalog_paginates_without_creating_session(tmp_path):
     executable, log = fake_codex(tmp_path, "pages")
     models = agents.codex_models(str(executable))
     assert [entry["id"] for entry in models] == ["host-model", "openai-alt"]
-    assert models[0]["display_name"] == "OpenAI Host"
-    assert models[0]["reasoning_efforts"] == ["medium"]
-    assert agents.validate_codex_model("alt-picker", str(executable)) == "openai-alt"
+    assert models[0] == {
+        "id": "host-model",
+        "name": "OpenAI Host",
+        "description": "Available model",
+        "default": True,
+    }
+    assert agents.validate_codex_model("openai-alt", str(executable)) == "openai-alt"
+    with pytest.raises(AuditError, match="not available"):
+        agents.validate_codex_model("alt-picker", str(executable))
     messages = [json.loads(line) for line in log.read_text().splitlines()]
     assert not any(message.get("method") in {"thread/start", "turn/start"} for message in messages)
 
@@ -188,7 +203,7 @@ def test_codex_selected_model_and_private_terminal_text(tmp_path, monkeypatch):
     events = []
     result = agents.run_agent(
         request(
-            tmp_path, executable=str(executable), model="host-picker", response_mode="raw-final"
+            tmp_path, executable=str(executable), model="host-model", response_mode="raw-final"
         ),
         events.append,
         lambda event: {},
@@ -280,6 +295,25 @@ def test_codex_timeout_stops_owned_process(tmp_path):
     assert time.monotonic() - before < 3
 
 
+@pytest.mark.parametrize("invalid", ["relative", "file", "missing", "unknown"])
+def test_host_environment_rejects_invalid_app_paths_before_launch(tmp_path, invalid):
+    config = tmp_path / "config.json"
+    config.write_text("{}")
+    environment = {
+        "relative": {"AGENTAGON_APP_STATE": "relative"},
+        "file": {"AGENTAGON_APP_STATE": str(config)},
+        "missing": {"AGENTAGON_APP_STATE": str(tmp_path / "missing")},
+        "unknown": {"ARBITRARY_OVERRIDE": str(tmp_path)},
+    }[invalid]
+    with pytest.raises(AuditError, match="environment|application state"):
+        agents.run_agent(
+            request(tmp_path, env=environment),
+            lambda event: pytest.fail("host should not start"),
+            lambda question: {},
+            threading.Event(),
+        )
+
+
 def fake_claude(monkeypatch, scenario="success"):
     record = {}
 
@@ -291,6 +325,8 @@ def fake_claude(monkeypatch, scenario="success"):
             record["options"] = options
 
         async def __aenter__(self):
+            if scenario == "connect-hold":
+                await asyncio.sleep(30)
             return self
 
         async def __aexit__(self, *args):
@@ -298,6 +334,8 @@ def fake_claude(monkeypatch, scenario="success"):
 
         async def query(self, prompt):
             record["prompt"] = prompt
+            if scenario == "query-hold":
+                await asyncio.sleep(30)
 
         async def interrupt(self):
             record["interrupted"] = True
@@ -354,7 +392,7 @@ def test_claude_api_key_approvals_exact_resume_and_redaction(tmp_path, monkeypat
             agent="claude",
             api_key="sdk-secret-value",
             session_id="exact-saved-id",
-            env={"AGENTAGON_CONFIG": str(config)},
+            env={"AGENTAGON_CONFIG": str(config), "AGENTAGON_APP_STATE": str(tmp_path)},
         ),
         events.append,
         lambda event: {"decision": "decline"}
@@ -368,6 +406,7 @@ def test_claude_api_key_approvals_exact_resume_and_redaction(tmp_path, monkeypat
     assert options.env["ANTHROPIC_API_KEY"] == "sdk-secret-value"
     assert options.env["CLAUDE_CODE_OAUTH_TOKEN"] == ""
     assert options.env["AGENTAGON_CONFIG"] == str(config)
+    assert options.env["AGENTAGON_APP_STATE"] == str(tmp_path)
     assert options.setting_sources == ["user", "project", "local"]
     assert type(record["approval"]).__name__ == "PermissionResultDeny"
     assert record["answer"].updated_input["answers"] == {"Which option?": "Minimal"}
@@ -392,6 +431,22 @@ def test_claude_private_terminal_response_uses_result_not_progress(tmp_path, mon
     assert result["raw_final_text"] == "sdk-secret-value"
     assert result["text"] == "Done [redacted]"
     assert "sdk-secret-value" not in json.dumps(events)
+
+
+@pytest.mark.parametrize("scenario", ["connect-hold", "query-hold", "hold"])
+def test_claude_deadline_covers_connection_query_and_response(tmp_path, monkeypatch, scenario):
+    record = fake_claude(monkeypatch, scenario)
+    started = time.monotonic()
+    with pytest.raises(AuditError, match="time limit"):
+        agents.run_agent(
+            request(tmp_path, agent="claude", api_key="sdk-secret-value", timeout_seconds=0.1),
+            lambda event: None,
+            lambda event: {},
+            threading.Event(),
+        )
+    assert time.monotonic() - started < 3
+    if scenario != "connect-hold":
+        assert record["closed"] is True
 
 
 def test_claude_requires_api_key_even_if_subscription_present(tmp_path, monkeypatch):

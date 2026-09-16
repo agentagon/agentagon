@@ -91,7 +91,7 @@ def test_installs_and_updates_native_plugins_without_touching_unrelated_files(tm
     assert [item["host"] for item in result["hosts"]] == ["codex", "claude-code"]
     plugin = Path(result["plugin_root"])
     assert all((plugin / "skills" / skill / "SKILL.md").is_file() for skill in installation.SKILLS)
-    assert (plugin / "skills/audit/references/braintrust.md").is_file()
+    assert (plugin / "skills/audit/references/acquisition.md").is_file()
     assert (plugin / "skills/audit/references/changes.md").is_file()
     assert (plugin / "skills/fix/references/delivery.md").is_file()
     assert (plugin / "skills/fix/references/evaluation.md").is_file()

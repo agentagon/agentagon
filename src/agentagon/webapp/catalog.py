@@ -160,16 +160,6 @@ class Catalog:
                 record,
                 expected_revision=payload.get("expected_revision", previous.get("revision", 0)),
             )
-            if changed:
-                version = {
-                    "id": _id("binding"),
-                    "agent_id": record["id"],
-                    "version": record["binding_version"],
-                    "definition": binding,
-                    "digest": digest(binding),
-                    "created_at": now(),
-                }
-                tx.put_record(project_id, "agent_bindings", version["id"], version)
         return saved
 
     def discover(self, project_id):
@@ -744,6 +734,41 @@ class Catalog:
         ]
         workspace = self.state.workspace(project_id)
         series, seen, limits = {}, set(), []
+
+        def rows(focus_id, focus_name, measurement, metrics, run):
+            execution = (
+                digest(
+                    {
+                        "profile": run["profile"],
+                        "limits": run["limits"],
+                        "scoring": run["spec"].get("scoring"),
+                    }
+                )
+                if run
+                else None
+            )
+            for name, definition in metrics.items():
+                key = f"{focus_id}:{measurement['evaluator_digest']}:{execution or 'unmeasured'}:{name}"
+                yield (
+                    name,
+                    series.setdefault(
+                        key,
+                        {
+                            "id": key,
+                            "name": name,
+                            "unit": definition["unit"],
+                            "direction": definition["direction"],
+                            "focus_id": focus_id,
+                            "focus_name": focus_name,
+                            "evaluator_id": measurement["evaluation_id"],
+                            "evaluator_digest": measurement["evaluator_digest"],
+                            "execution_digest": execution,
+                            "profile_name": run["profile_name"] if run else None,
+                            "measurements": [],
+                        },
+                    ),
+                )
+
         for focus in versions:
             measurement = focus.get("measurement")
             if not measurement:
@@ -751,43 +776,19 @@ class Catalog:
             baseline_id = measurement.get("baseline_id")
             if baseline_id and (focus["id"], baseline_id) in seen:
                 continue
-            baseline, execution = None, None
+            baseline, run = None, None
             if baseline_id:
                 seen.add((focus["id"], baseline_id))
                 try:
                     baseline, run = _completed(workspace, baseline_id)
-                    execution = digest(
-                        {
-                            "profile": run["profile"],
-                            "limits": run["limits"],
-                            "scoring": run["spec"].get("scoring"),
-                        }
-                    )
                 except (AuditError, OSError) as exc:
                     limits.append(f"Baseline {baseline_id} is unavailable: {exc}")
-            for name, definition in measurement["metrics"].items():
-                key = f"{focus['id']}:{measurement['evaluator_digest']}:{execution or 'unmeasured'}:{name}"
-                row = series.setdefault(
-                    key,
-                    {
-                        "id": key,
-                        "name": name,
-                        "unit": definition["unit"],
-                        "direction": definition["direction"],
-                        "focus_id": focus["id"],
-                        "focus_name": focus["name"],
-                        "evaluator_id": measurement["evaluation_id"],
-                        "evaluator_digest": measurement["evaluator_digest"],
-                        "execution_digest": execution,
-                        "profile_name": baseline.get("profile_name") if baseline else None,
-                        "measurements": [],
-                    },
-                )
+            for name, row in rows(
+                focus["id"], focus["name"], measurement, measurement["metrics"], run
+            ):
                 if baseline is None:
                     continue
                 value = baseline["measurement"]["metrics"].get(name)
-                if isinstance(value, dict):
-                    value = value.get("mean", value.get("value"))
                 row["measurements"].append(
                     {
                         "value": value,
@@ -828,33 +829,9 @@ class Catalog:
                     if member["focus_id"] not in focus_ids:
                         continue
                     child = load_run(workspace, member["executions"]["finalist"])
-                    execution = digest(
-                        {
-                            "profile": child["profile"],
-                            "limits": child["limits"],
-                            "scoring": child["spec"].get("scoring"),
-                        }
-                    )
-                    for name, definition in child["spec"]["metrics"].items():
-                        key = (
-                            f"{member['focus_id']}:{member['evaluator_digest']}:{execution}:{name}"
-                        )
-                        row = series.setdefault(
-                            key,
-                            {
-                                "id": key,
-                                "name": name,
-                                "unit": definition["unit"],
-                                "direction": definition["direction"],
-                                "focus_id": member["focus_id"],
-                                "focus_name": member["name"],
-                                "evaluator_id": member["evaluation_id"],
-                                "evaluator_digest": member["evaluator_digest"],
-                                "execution_digest": execution,
-                                "profile_name": child.get("profile_name"),
-                                "measurements": [],
-                            },
-                        )
+                    for name, row in rows(
+                        member["focus_id"], member["name"], member, child["spec"]["metrics"], child
+                    ):
                         row["measurements"].append(
                             {
                                 "value": member["finalist"].get(name),

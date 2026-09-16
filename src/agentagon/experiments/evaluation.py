@@ -47,7 +47,7 @@ def aggregate(spec: dict, samples: list[dict]) -> tuple[dict, dict]:
 
 
 def task_metrics(spec: dict, output: dict) -> dict:
-    """Extract declared task measurements; unrelated legacy task evidence is retained raw."""
+    """Extract only the task measurements declared by this frozen evaluator."""
     definitions = spec.get("task_metrics", {})
     if not definitions:
         return {}

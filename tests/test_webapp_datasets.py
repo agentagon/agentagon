@@ -78,7 +78,7 @@ def test_derive_preserves_structured_inputs_but_never_promotes_observed_answers(
     assert saved["items"][0]["expected_present"] is False
     assert saved["items"][0]["metadata"]["conversation_id"] == "conversation-one"
     assert datasets.derive(workspace, project, source["id"], {}) == result
-    assert state.db.get_record(project, "datasets", saved["id"])["count"] == 1
+    assert result in snapshots.list_snapshots(workspace)
     assert snapshots.load(workspace, source["id"])["items"] == [root, child]
 
 
@@ -330,7 +330,7 @@ def test_http_derivation_and_split_require_session_and_hide_reserved_payloads(re
     with running(app) as (client, _):
         token = client.headers.pop("X-Agentagon-Token")
         assert client.post(base + "/datasets/derive", json=payload).status_code == 403
-        assert state.db.list_records(project, "datasets") == []
+        assert not any(s["kind"] == "dataset" for s in snapshots.list_snapshots(workspace))
         client.headers["X-Agentagon-Token"] = token
         response = client.post(base + "/datasets/derive", json=payload)
         assert response.status_code == 200, response.text

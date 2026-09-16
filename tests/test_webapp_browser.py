@@ -82,7 +82,7 @@ class AppFixture:
         self.baselines = []
         self.datasets = []
         self.issues = []
-        self.agent_settings = {"default_agent": "codex", "concurrency": 1}
+        self.agent_settings = {"default_agent": "codex", "models": {}, "concurrency": 1}
         self.agents = [{"id": "codex", "name": "Codex", "available": True}]
         self.profile = {
             "runner": {"kind": "local"},
@@ -210,11 +210,11 @@ class AppFixture:
                 return {"focuses": self.focuses.get(agent_id, [])}
             if path.endswith("/measurement"):
                 focus = next(item for item in self.focuses[agent_id] if item["id"] == parts[7])
-                focus.update(payload)
+                focus["measurement"] = payload
                 return focus
             if path.endswith("/metrics"):
                 return self.metrics
-            if method == "PATCH":
+            if method == "POST":
                 value = next(item for item in agents if item["id"] == agent_id)
                 value.update(payload)
                 self.focuses.setdefault(agent_id, [])
@@ -317,6 +317,9 @@ class AppFixture:
                 "state": "published" if payload["publish"] else "prepared",
                 "branch": "agentagon/fix-result",
                 "delivery_id": "delivery_exact",
+                "pr": {"url": "https://github.com/example/support/pull/42"}
+                if payload["publish"]
+                else None,
                 "summary": "Independent review and required gates passed.",
                 "artifact_urls": {
                     "diff": "/api/projects/project_alpha/deliveries/delivery_one/artifacts/diff"
@@ -528,6 +531,9 @@ def test_fix_evidence_selection_and_publication_are_separate(webapp_page):
     playwright.expect(
         page.get_by_text("Draft PR publication completed.", exact=True)
     ).to_be_visible()
+    playwright.expect(page.get_by_role("link", name="Open draft PR ↗")).to_have_attribute(
+        "href", "https://github.com/example/support/pull/42"
+    )
     assert fixture.mutations[-1]["payload"] == {
         "kind": "fix",
         "source_id": "run_one",
@@ -696,7 +702,7 @@ def test_agent_authentication_and_cross_agent_model_selection(webapp_page):
         {"id": "codex", "available": True, "authenticated": False},
         {"id": "claude", "available": True},
     ]
-    fixture.agent_settings["model"] = "codex-saved-model"
+    fixture.agent_settings["models"]["codex"] = "codex-saved-model"
     page.goto("http://127.0.0.1:8765/?agent=agent_support&view=overview")
     page.get_by_role("button", name="Start audit", exact=True).click()
     playwright.expect(
@@ -1015,6 +1021,16 @@ def test_real_service_browser_project_settings_import_and_scoped_approval(tmp_pa
             playwright.expect(
                 page.get_by_role("heading", name="Answer agent", exact=True)
             ).to_be_visible()
+            saved_agent = application.catalog.agents(second["id"])[0]
+            page.get_by_role("button", name="Edit agent", exact=True).click()
+            page.get_by_label("Agent name", exact=True).fill("Reviewed answer agent")
+            page.get_by_role("button", name="Save agent", exact=True).click()
+            playwright.expect(
+                page.get_by_role("heading", name="Reviewed answer agent", exact=True)
+            ).to_be_visible()
+            edited_agent = application.catalog.agent(second["id"], saved_agent["id"])
+            assert edited_agent["name"] == "Reviewed answer agent"
+            assert edited_agent["revision"] == saved_agent["revision"] + 1
             page.get_by_role("button", name="Choose a focus", exact=True).click()
             page.get_by_label("Focus name", exact=True).fill("Answer correctly")
             page.get_by_label("Desired behavior", exact=True).fill("Inspect answer behavior")

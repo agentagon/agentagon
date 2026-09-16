@@ -280,8 +280,8 @@ def progress(audit: dict) -> dict:
         limits = limits or any(trace["completeness"] != "complete" for trace in audit["traces"])
     if audit["mode"] == "code" and not units:
         limits = True
-    limits = limits or (audit.get("trace_alignment") or {}).get("status") == "mismatch"
-    limits = limits or bool((audit.get("trace_alignment") or {}).get("warning"))
+    limits = limits or (audit["trace_alignment"] or {}).get("status") == "mismatch"
+    limits = limits or bool((audit["trace_alignment"] or {}).get("warning"))
     state = (
         "awaiting_" + pending_action
         if pending_action
@@ -294,12 +294,12 @@ def progress(audit: dict) -> dict:
         "created_at": audit["created_at"],
         "mode": audit["mode"],
         "goal": audit["goal"],
-        "workflow": "review" if audit["snapshot"].get("code_scope") == "changes" else "audit",
-        "code_scope": audit["snapshot"].get("code_scope", "full"),
-        "code_scopes": audit["snapshot"].get("scopes", ["."]),
+        "workflow": "review" if audit["snapshot"]["code_scope"] == "changes" else "audit",
+        "code_scope": audit["snapshot"]["code_scope"],
+        "code_scopes": audit["snapshot"]["scopes"],
         "skipped_code_files": len(audit["snapshot"]["skipped"]),
-        "revision": audit["snapshot"].get("revision"),
-        "trace_alignment": audit.get("trace_alignment"),
+        "revision": audit["snapshot"]["revision"],
+        "trace_alignment": audit["trace_alignment"],
         "state": state,
         "pending_action": pending_action,
         "coverage": {
@@ -407,14 +407,14 @@ def prepare(
             "generation": audit["generation"],
             "stage": stage,
             "goal": audit["goal"],
-            "code_scope": audit["snapshot"].get("code_scope", "full"),
-            "revision": audit["snapshot"].get("revision"),
-            "trace_alignment": audit.get("trace_alignment"),
+            "code_scope": audit["snapshot"]["code_scope"],
+            "revision": audit["snapshot"]["revision"],
+            "trace_alignment": audit["trace_alignment"],
             "emphasis": (
                 "Review only problems or improvements introduced or worsened by the changes. "
                 "Read related code and evals for context. Evaluate every required facet; "
                 "recommend concrete eval targets, scenarios and assertions when warranted."
-                if audit["snapshot"].get("code_scope") == "changes"
+                if audit["snapshot"]["code_scope"] == "changes"
                 else "Use the audit goal to guide investigation depth, recommendations, and presentation. "
                 "Evaluate every required facet and surface severe unrelated issues."
             ),
@@ -633,7 +633,7 @@ def submit(workspace: Workspace, audit_id: str, response_path: Path) -> dict:
 
 def _check_finding_scope(audit: dict, finding: dict, evidence: dict) -> None:
     references = [evidence[key] for key in finding["evidence"]]
-    if audit["snapshot"].get("code_scope") == "changes" and not any(
+    if audit["snapshot"]["code_scope"] == "changes" and not any(
         "change" in ref for ref in references
     ):
         raise AuditError("review findings must cite a captured code change")

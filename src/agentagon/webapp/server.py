@@ -8,14 +8,14 @@ from importlib.resources import files
 from urllib.parse import parse_qs, urlsplit
 
 from agentagon.core.records import AuditError, encoded
-from agentagon.dashboard import ASSETS
 from agentagon.webapp.jobs import public_job
 
 APP_ASSETS = {
-    **{key: value for key, value in ASSETS.items() if key != "/"},
     "/": ("webapp.html", "text/html; charset=utf-8"),
     "/webapp.js": ("webapp.js", "text/javascript; charset=utf-8"),
     "/webapp.css": ("webapp.css", "text/css; charset=utf-8"),
+    "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
+    "/logo-split-crown-96.png": ("logo-split-crown-96.png", "image/png"),
 }
 
 
@@ -225,9 +225,6 @@ def create_server(application, port=0):
             self._mutate()
 
         def do_DELETE(self):
-            self._mutate()
-
-        def do_PATCH(self):
             self._mutate()
 
         def _mutate(self):

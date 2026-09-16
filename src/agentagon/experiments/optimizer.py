@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass
 from agentagon.core.records import AuditError, encoded, load_json, validate_record
 from agentagon.experiments.budget import BudgetExhausted, BudgetLedger
 from agentagon.experiments.host_bridge import HostBridge, HostWorkPending
+from agentagon.experiments.runtime import MeasurementUnavailable
 
 GEPA_REVISION = "0632cdb5dcc052e690eab439e1b4a7e3e9cfe407"
 GEPA_VERSION = "0.1.4"
@@ -35,10 +36,6 @@ class MetaHarnessConfig:
     max_candidates_per_iter: int = 2
 
 
-class MeasurementUnavailable(BaseException):
-    """Preserve missing/failed observations instead of making up numeric scores."""
-
-
 class OptimizationTargetReached(BaseException):
     """Pause search for bounded final verification of a measured target."""
 
@@ -48,34 +45,12 @@ class _QuietLogger:
         pass
 
 
-class _AttemptPreservingEngine:
-    """A failed attempt ends its stage while other engines may still improve."""
-
-    def __init__(self, delegate):
-        self.delegate = delegate
-        self.name = delegate.name
-
-    def run(self, task, server):
-        from agentagon.experiments.runtime import Result
-
-        try:
-            return self.delegate.run(task, server)
-        except MeasurementUnavailable as exc:
-            return Result(
-                best_candidate=server.best_candidate,
-                best_score=server.best_score,
-                metadata={"measurement_failure": str(exc)},
-            )
-
-
 class NativeAutoResearchEngine:
     """Agentagon host adapter: sequential hypotheses, measured keep-or-revert."""
 
-    name = "agentagon-autoresearch"
-
-    def __init__(self, config):
-        self.propose = config.engine_config["propose"]
-        self.width = 1
+    def __init__(self, propose, width=1):
+        self.propose = propose
+        self.width = width
 
     def run(self, task, server):
         from agentagon.experiments.runtime import Result
@@ -103,12 +78,6 @@ class NativeAutoResearchEngine:
 
 class NativeMetaHarnessEngine(NativeAutoResearchEngine):
     """Agentagon host adapter: harness analysis and diverse candidate rounds."""
-
-    name = "agentagon-meta-harness"
-
-    def __init__(self, config):
-        super().__init__(config)
-        self.width = config.engine_config["max_candidates_per_iter"]
 
     def _feedback(self, history, round_number, branch):
         return {
@@ -232,7 +201,7 @@ class OptimizerCoordinator:
         """
         if type(trials_per_evaluation) is not int or trials_per_evaluation < 1:
             raise AuditError("trials per evaluation must be a positive integer")
-        from agentagon.experiments.runtime import optimize_parallel_with_server
+        from agentagon.experiments.runtime import run_stages
 
         self.ledger.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(
@@ -296,15 +265,11 @@ class OptimizerCoordinator:
                             )
                             for stage in unfinished
                         ]
-                        results = optimize_parallel_with_server(
-                            [entry[0] for entry in entries],
-                            [entry[1] for entry in entries],
-                            max_workers=config["host_concurrency"],
-                        )
+                        results = run_stages(entries, max_workers=config["host_concurrency"])
                     for stage, result in zip(unfinished, results, strict=True):
                         if not math.isfinite(result.best_score):
-                            stage["failure"] = result.metadata.get(
-                                "measurement_failure", "optimizer stage has no measured score"
+                            stage["failure"] = (
+                                result.failure or "optimizer stage has no measured score"
                             )
                         else:
                             stage["result"] = {
@@ -312,8 +277,8 @@ class OptimizerCoordinator:
                                 "score": result.best_score,
                                 "engine": stage["engine"],
                             }
-                            if result.metadata.get("measurement_failure"):
-                                stage["failure"] = result.metadata["measurement_failure"]
+                            if result.failure:
+                                stage["failure"] = result.failure
                     self.workspace.write(self.path, state)
                 state["state"] = (
                     "completed"
@@ -326,8 +291,6 @@ class OptimizerCoordinator:
                 state["state"] = "target_reached"
             except BudgetExhausted as exc:
                 state.update(state="budget_exhausted", reason=str(exc))
-            except MeasurementUnavailable as exc:
-                state.update(state="measurement_unavailable", reason=str(exc))
             self.workspace.write(self.path, state)
             return self._view(state)
 
@@ -355,7 +318,6 @@ class OptimizerCoordinator:
         from agentagon.experiments.runtime import (
             BudgetTracker,
             EvalServer,
-            OptimizeAnythingConfig,
             Task,
         )
 
@@ -538,7 +500,6 @@ class OptimizerCoordinator:
 
         server = EvalServer(
             Task(
-                name=f"{self.run_id}-{stage['id']}",
                 seed_candidate=seed,
                 objective=config["objective"],
             ),
@@ -551,41 +512,22 @@ class OptimizerCoordinator:
         if stage["engine"] == "gepa":
             from agentagon.experiments.runtime import GepaEngine
 
-            upstream_config = OptimizeAnythingConfig(
-                engine="gepa",
-                run_dir=f"{run_dir}/{stage['id']}",
-                engine_config={
-                    "engine": {
-                        "parallel": False,
-                        "use_cloudpickle": False,
-                        "seed": 0,
-                        "cache_evaluation": not count_trial,
-                        "cache_evaluation_storage": "memory" if not count_trial else "auto",
-                    },
-                    "reflection": {
-                        "reflection_lm": reflect,
-                    },
-                    "tracking": {"logger": _QuietLogger()},
+            engine = GepaEngine(
+                f"{run_dir}/{stage['id']}",
+                engine={
+                    "parallel": False,
+                    "use_cloudpickle": False,
+                    "seed": 0,
+                    "cache_evaluation": not count_trial,
+                    "cache_evaluation_storage": "memory" if not count_trial else "auto",
                 },
+                reflection={"reflection_lm": reflect},
+                tracking={"logger": _QuietLogger()},
             )
-            upstream_config = OptimizeAnythingConfig(
-                engine=_AttemptPreservingEngine(GepaEngine(upstream_config))
-            )
+        elif stage["engine"] == "autoresearch":
+            engine = NativeAutoResearchEngine(propose)
         else:
-            cls = (
-                NativeAutoResearchEngine
-                if stage["engine"] == "autoresearch"
-                else NativeMetaHarnessEngine
+            engine = NativeMetaHarnessEngine(
+                propose, config["meta_harness"]["max_candidates_per_iter"]
             )
-            native = cls(
-                OptimizeAnythingConfig(
-                    engine_config={
-                        "propose": propose,
-                        "max_candidates_per_iter": config["meta_harness"][
-                            "max_candidates_per_iter"
-                        ],
-                    }
-                )
-            )
-            upstream_config = OptimizeAnythingConfig(engine=_AttemptPreservingEngine(native))
-        return server, upstream_config
+        return server, engine
