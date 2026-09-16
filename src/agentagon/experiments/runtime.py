@@ -1,18 +1,8 @@
-"""Small in-process subset of GEPA's unreleased optimizer orchestration.
+"""Agentagon's in-process optimizer runtime.
 
-Adapted from GEPA 0632cdb5dcc052e690eab439e1b4a7e3e9cfe407 (MIT): oa/budget.py,
-oa/config.py, oa/task.py, oa/engine.py, oa/eval_server.py, oa/ensemble.py and
-oa/engines/gepa.py.
-Copyright © 2025 Lakshya A Agrawal. See THIRD_PARTY_NOTICES.txt.
-
-Only Agentagon's single-candidate, native-host path is retained. The search
-algorithm comes from the published gepa dependency. No HTTP server, external
-host launcher, dataset routing, registry or upstream example is bundled.
-
-TODO: Remove this module when a PyPI GEPA release provides the required oa APIs
-and passes test_optimizer.py and test_optimize_run.py, including replay,
-concurrency, repeated-trial budgets, failure preservation and target stopping.
-See docs/contributing/gepa-compatibility.md for the removal checklist.
+Run bounded evaluation stages with native-host proposal callbacks and parallel
+engine execution. The GEPA engine uses the published dependency for search;
+Agentagon's durable ledger owns trial admission and evidence.
 """
 
 import threading
@@ -93,7 +83,7 @@ class EvalServer:
 
 
 class GepaEngine:
-    """Bridge the published GEPA algorithm to bounded native-host callbacks."""
+    """Run GEPA search with bounded native-host callbacks."""
 
     name = "gepa"
 

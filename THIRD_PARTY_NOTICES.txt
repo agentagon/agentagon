@@ -31,11 +31,11 @@ The GitHub Octicons mark in website/templates/header.html retains its MIT
 copyright and permission notice in the template and generated HTML.
 Other dependency notices remain in their upstream distributions and assets.
 
-GEPA optimizer orchestration subset
+GEPA
 https://github.com/gepa-ai/gepa/tree/0632cdb5dcc052e690eab439e1b4a7e3e9cfe407
 
-Adapted in src/agentagon/experiments/gepa_runtime.py.
-The following MIT license applies to that copied and adapted code:
+Portions of src/agentagon/experiments/runtime.py are adapted from this revision.
+The following MIT license applies to those portions:
 
 Copyright © 2025 Lakshya A Agrawal
 

@@ -74,7 +74,7 @@ Recent traces form a separate population from fixed benchmark cases. Refresh onl
 
 ## Optimizer proposals do not authorize execution
 
-Omni uses real upstream GEPA composition with Agentagon native-host AutoResearch and Meta-Harness adapters. Host/model overrides affect authoring, independently of judge settings. One durable request/reply bridge binds proposals, grading and reviews to role, source, evaluator and scope; unavailable host work stays pending. The finite coordinator resumes recorded work without silently switching hosts.
+Omni uses Agentagon's [optimizer runtime](../../src/agentagon/experiments/runtime.py) to compose GEPA search with native-host AutoResearch and Meta-Harness adapters. Host/model overrides affect authoring, independently of judge settings. One durable request/reply bridge binds proposals, grading and reviews to role, source, evaluator and scope; unavailable host work stays pending. The finite coordinator resumes recorded work without silently switching hosts.
 
 Agentagon owns attempt history, trial admission, metric validity, gates, independent review and selection. Starting Fix allocations are 20% preparation/baseline, 60% optimization and 20% final verification. Check minimum feasibility first, move unused preparation capacity to optimization and protect verification capacity. Every actual execution, retry and final trial counts; host work counts against applicable time/cost limits. Never invent subscription prices or expand the overall limit automatically.
 

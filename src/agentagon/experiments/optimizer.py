@@ -1,4 +1,4 @@
-"""Real GEPA composition with Agentagon native-host adapters and durable replay.
+"""Coordinate optimizer engines, native-host callbacks and durable replay.
 
 Upstream selects search parents; Agentagon remains authoritative for actual
 trial admission, evidence, gates, independent verification and final selection.
@@ -20,7 +20,8 @@ from agentagon.experiments.host_bridge import HostBridge, HostWorkPending
 
 GEPA_REVISION = "0632cdb5dcc052e690eab439e1b4a7e3e9cfe407"
 GEPA_VERSION = "0.1.4"
-GEPA_RUNTIME = "agentagon-gepa-bridge-v1"
+# Persisted identity stays stable across module renames.
+RUNTIME_VERSION = "agentagon-gepa-bridge-v1"
 ENGINES = {"omni", "gepa", "autoresearch", "meta_harness"}
 
 
@@ -54,7 +55,7 @@ class _AttemptPreservingEngine:
         self.name = delegate.name
 
     def run(self, task, server):
-        from agentagon.experiments.gepa_runtime import Result
+        from agentagon.experiments.runtime import Result
 
         try:
             return self.delegate.run(task, server)
@@ -76,7 +77,7 @@ class NativeAutoResearchEngine:
         self.width = 1
 
     def run(self, task, server):
-        from agentagon.experiments.gepa_runtime import Result
+        from agentagon.experiments.runtime import Result
 
         best = task.seed_candidate
         best_score, feedback = server.evaluate(best)
@@ -185,7 +186,7 @@ class OptimizerCoordinator:
             "meta_harness": asdict(meta_harness),
             "upstream_revision": GEPA_REVISION,
             "gepa_version": GEPA_VERSION,
-            "runtime": GEPA_RUNTIME,
+            "runtime": RUNTIME_VERSION,
         }
         with self.ledger.locked():
             if self.path.exists():
@@ -230,7 +231,7 @@ class OptimizerCoordinator:
         """
         if type(trials_per_evaluation) is not int or trials_per_evaluation < 1:
             raise AuditError("trials per evaluation must be a positive integer")
-        from agentagon.experiments.gepa_runtime import optimize_parallel_with_server
+        from agentagon.experiments.runtime import optimize_parallel_with_server
 
         self.ledger.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(
@@ -246,7 +247,7 @@ class OptimizerCoordinator:
                 return self._view(state)
             if (
                 state["config"].get("gepa_version") != GEPA_VERSION
-                or state["config"].get("runtime") != GEPA_RUNTIME
+                or state["config"].get("runtime") != RUNTIME_VERSION
             ):
                 raise AuditError(
                     "optimizer runtime changed; use the original installation to resume this run"
@@ -350,7 +351,7 @@ class OptimizerCoordinator:
         trials_per_evaluation,
         stop_requested,
     ):
-        from agentagon.experiments.gepa_runtime import (
+        from agentagon.experiments.runtime import (
             BudgetTracker,
             EvalServer,
             OptimizeAnythingConfig,
@@ -478,7 +479,7 @@ class OptimizerCoordinator:
             ),
         )
         if stage["engine"] == "gepa":
-            from agentagon.experiments.gepa_runtime import GepaEngine
+            from agentagon.experiments.runtime import GepaEngine
 
             def gepa_propose(candidate, reflective_dataset, components_to_update, **kwargs):
                 updated = propose(next(iter(candidate.values())), dict(reflective_dataset))

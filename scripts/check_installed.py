@@ -12,7 +12,7 @@ from pathlib import Path
 import agentagon
 from agentagon.core.records import catalog, resource_path
 from agentagon.dashboard import ASSETS
-from agentagon.experiments.gepa_runtime import (
+from agentagon.experiments.runtime import (
     BudgetTracker,
     EvalServer,
     GepaEngine,

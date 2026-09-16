@@ -1,10 +1,10 @@
-"""The temporary GEPA subset must bound real calls without fabricating scores."""
+"""Optimizer stages bound real calls without fabricating scores."""
 
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from agentagon.experiments.gepa_runtime import (
+from agentagon.experiments.runtime import (
     BudgetTracker,
     EvalBudgetExhausted,
     EvalServer,

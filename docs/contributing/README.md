@@ -6,9 +6,6 @@ Read the [architecture walkthrough](architecture.md) for entry points and data f
 
 For the public documentation site, see [build, preview and hosting instructions](docs-site.md). Its end-user navigation starts at the [documentation introduction](../README.md).
 
-The temporary [GEPA compatibility subset](gepa-compatibility.md) has a removal
-checklist for switching back to upstream orchestration when it reaches PyPI.
-
 ## Packaging checks
 
 The wheel bundles plugin manifests, the six exposed skills and their references, contracts, the signal catalog, event helpers and dashboard assets. Packaging inputs are declared in [pyproject.toml](../../pyproject.toml) and [MANIFEST.in](../../MANIFEST.in).
