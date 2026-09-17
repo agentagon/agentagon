@@ -34,6 +34,76 @@ def focus(app, saved, item, category="correctness"):
     )
 
 
+def test_workspace_resource_contracts_and_unified_task_submission(app, tmp_path):
+    saved = project(app, tmp_path)
+    confirmed = agent(app, saved, description="Resolve support questions")
+    goal = app.save_goal(
+        saved["id"],
+        confirmed["id"],
+        {
+            "category": "correctness",
+            "objective": "Create exactly one correct ticket.",
+            "ideal_behavior": "Retries never create duplicates.",
+        },
+    )
+
+    projected = app.project_agents(saved["id"])
+    assert projected["confirmed"][0]["responsibility"] == "Resolve support questions"
+    assert "description" not in projected["confirmed"][0]
+    assert app.goals(saved["id"], confirmed["id"])["goals"] == [goal]
+    assert {item["workflow"] for item in app.skills()["skills"]} == {
+        "design",
+        "eval",
+        "baseline",
+        "fix",
+        "audit",
+    }
+    assert {item["id"] for item in app.connector_types()["connector_types"]} == {
+        "braintrust",
+        "langsmith",
+        "langfuse",
+    }
+    assert app.workflow_readiness(saved["id"], "design", confirmed["id"], goal["id"]) == {
+        "workflow": "design",
+        "workflow_version": 1,
+        "ready": True,
+        "blockers": [],
+        "next_action": "start",
+    }
+
+    app.jobs.stopping = True
+    command = {
+        "operation_id": str(uuid.uuid4()),
+        "workflow": "design",
+        "agent_id": confirmed["id"],
+        "goal_id": goal["id"],
+        "options": {},
+    }
+    submitted = app.submit_task(saved["id"], command)
+    assert app.submit_task(saved["id"], command)["id"] == submitted["id"]
+    assert submitted["workflow_version"] == 1
+    summary = app.tasks(saved["id"], {"agent_id": confirmed["id"], "goal_id": goal["id"]})
+    assert [item["id"] for item in summary["tasks"]] == [submitted["id"]]
+    detail = app.task(saved["id"], submitted["id"])
+    assert detail["workflow"] == "design"
+    assert detail["agent_name"] == "Support"
+    assert detail["goal_name"] == "Task success and correctness"
+
+    audit = app.submit_task(
+        saved["id"],
+        {
+            "operation_id": str(uuid.uuid4()),
+            "workflow": "audit",
+            "agent_id": confirmed["id"],
+            "options": {},
+        },
+    )
+    assert audit["focus_id"] is None
+    assert [item["id"] for item in app.tasks(saved["id"], {"workflow": "audit"})["tasks"]] == [
+        audit["id"]
+    ]
+
+
 def test_discovery_is_explicit_bounded_and_preserves_confirmed_identity(app, tmp_path):
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root

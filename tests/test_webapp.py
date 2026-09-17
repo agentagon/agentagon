@@ -499,6 +499,10 @@ def test_http_bootstrap_origin_host_and_project_routing(app, tmp_path):
         root = client.get("/")
         assert root.status_code == 200 and "Agentagon" in root.text
         assert "frame-ancestors 'none'" in root.headers["content-security-policy"]
+        deep = client.get(f"/projects/{saved['id']}/skills")
+        assert deep.status_code == 200 and 'id="root"' in deep.text
+        assert len(client.get("/api/skills").json()["skills"]) == 5
+        assert len(client.get("/api/connector-types").json()["connector_types"]) == 3
         assert client.get("/api/session").status_code == 403
         boot = client.get(
             "/api/session",

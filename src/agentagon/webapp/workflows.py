@@ -8,35 +8,88 @@ import sys
 
 from agentagon.core.records import AuditError, resource_path
 
-REFERENCES = {
-    "design": [
-        "skills/workflows/define-goal.md",
-        "skills/workflows/analyze-evidence.md",
-        "skills/workflows/design-measurement.md",
-        "skills/workflows/adapt-evaluation.md",
-    ],
-    "audit": ["skills/audit/references/records.md", "skills/audit/references/analysis.md"],
-    "eval": [
-        "skills/workflows/adapt-evaluation.md",
-        "skills/workflows/review-evaluation.md",
-        "skills/eval/references/authoring.md",
-        "skills/eval/references/preparation.md",
-        "skills/fix/references/evaluation.md",
-        "skills/fix/references/native-host.md",
-    ],
-    "fix": [
-        "skills/workflows/prepare-optimization-context.md",
-        "skills/workflows/review-candidate.md",
-        "skills/workflows/prepare-delivery.md",
-        "skills/eval/references/authoring.md",
-        "skills/fix/references/evaluation.md",
-        "skills/fix/references/native-host.md",
-        "skills/fix/references/roles.md",
-        "skills/fix/references/experiments.md",
-        "skills/fix/references/delivery.md",
-    ],
-    "baseline": ["skills/workflows/interpret-baseline.md", "skills/fix/references/native-host.md"],
+REGISTRY = {
+    "design": {
+        "id": "design-measurements",
+        "version": 1,
+        "name": "Design measurements",
+        "purpose": "Turn an outcome into a measurement plan you can review and accept.",
+        "requires_goal": True,
+        "inputs": ["Agent", "Goal", "Optional evidence"],
+        "outputs": ["Editable measurement plan"],
+        "references": [
+            "skills/workflows/define-goal.md",
+            "skills/workflows/analyze-evidence.md",
+            "skills/workflows/design-measurement.md",
+            "skills/workflows/adapt-evaluation.md",
+        ],
+    },
+    "eval": {
+        "id": "prepare-evaluation",
+        "version": 1,
+        "name": "Prepare an evaluation",
+        "purpose": "Create or reuse a reviewed evaluator and dataset for a goal.",
+        "requires_goal": True,
+        "inputs": ["Accepted measurement plan", "Dataset or examples"],
+        "outputs": ["Frozen evaluator"],
+        "references": [
+            "skills/workflows/adapt-evaluation.md",
+            "skills/workflows/review-evaluation.md",
+            "skills/eval/references/authoring.md",
+            "skills/eval/references/preparation.md",
+            "skills/fix/references/evaluation.md",
+            "skills/fix/references/native-host.md",
+        ],
+    },
+    "baseline": {
+        "id": "run-baseline",
+        "version": 1,
+        "name": "Run a baseline",
+        "purpose": "Measure current behavior with the goal's frozen evaluator.",
+        "requires_goal": True,
+        "inputs": ["Frozen evaluator"],
+        "outputs": ["Immutable baseline"],
+        "references": [
+            "skills/workflows/interpret-baseline.md",
+            "skills/fix/references/native-host.md",
+        ],
+    },
+    "fix": {
+        "id": "improve-agent",
+        "version": 1,
+        "name": "Improve an agent",
+        "purpose": "Search for a bounded improvement and compare verified candidates.",
+        "requires_goal": True,
+        "inputs": ["Frozen baseline", "Scope", "Budget"],
+        "outputs": ["Verified candidates", "Review package"],
+        "references": [
+            "skills/workflows/prepare-optimization-context.md",
+            "skills/workflows/review-candidate.md",
+            "skills/workflows/prepare-delivery.md",
+            "skills/eval/references/authoring.md",
+            "skills/fix/references/evaluation.md",
+            "skills/fix/references/native-host.md",
+            "skills/fix/references/roles.md",
+            "skills/fix/references/experiments.md",
+            "skills/fix/references/delivery.md",
+        ],
+    },
+    "audit": {
+        "id": "audit-agent",
+        "version": 1,
+        "name": "Audit an agent",
+        "purpose": "Inspect code or trace evidence and retain reviewable findings.",
+        "requires_goal": False,
+        "inputs": ["Agent", "Code or trace evidence"],
+        "outputs": ["Findings", "Evidence report"],
+        "references": [
+            "skills/audit/references/records.md",
+            "skills/audit/references/analysis.md",
+        ],
+    },
 }
+
+REFERENCES = {kind: definition["references"] for kind, definition in REGISTRY.items()}
 
 
 def write_context(workspace, job):

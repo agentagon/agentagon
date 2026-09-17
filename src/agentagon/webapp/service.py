@@ -64,6 +64,226 @@ class Application:
             "selected_project_id": self.selected_project_id,
         }
 
+    def skills(self):
+        from agentagon.webapp.resources import skill_definitions
+
+        return {"skills": skill_definitions()}
+
+    def connector_types(self):
+        from agentagon.webapp.resources import connector_types
+
+        return {"connector_types": connector_types()}
+
+    def assistants(self):
+        detected = self.agents()
+        return {
+            "assistants": [
+                {
+                    "id": item["id"],
+                    "name": item["name"],
+                    "available": item.get("available", False),
+                    "authenticated": item.get("authenticated"),
+                    "version": item.get("version"),
+                    "message": item.get("message"),
+                }
+                for item in detected["agents"]
+            ],
+            "defaults": detected["settings"],
+        }
+
+    def project_agents(self, project_id):
+        from agentagon.webapp.resources import agent_projection
+
+        agents = [agent_projection(item) for item in self.catalog.agents(project_id)]
+        return {
+            "agents": agents,
+            "confirmed": [item for item in agents if item["status"] == "confirmed"],
+            "suggestions": [item for item in agents if item["status"] != "confirmed"],
+        }
+
+    def project_agent(self, project_id, agent_id):
+        from agentagon.webapp.resources import agent_projection
+
+        return agent_projection(self.catalog.agent(project_id, agent_id))
+
+    def goals(self, project_id, agent_id):
+        from agentagon.webapp.resources import goal_projection
+
+        return {
+            "goals": [goal_projection(item) for item in self.catalog.focuses(project_id, agent_id)]
+        }
+
+    def goal(self, project_id, agent_id, goal_id):
+        from agentagon.webapp.resources import goal_projection
+
+        focus = self.catalog.focus(project_id, agent_id, goal_id)
+        result = goal_projection(focus)
+        result["readiness"] = self.catalog.measurement_status(project_id, agent_id, focus)
+        design = self.designs.get(project_id, agent_id, goal_id)
+        result["measurement_plan"] = design
+        return result
+
+    def save_goal(self, project_id, agent_id, payload):
+        translated = {
+            "category": payload.get("category", "custom"),
+            "goal": payload.get("objective"),
+            "target": payload.get("ideal_behavior"),
+            "source": payload.get("source", {"kind": "goal"}),
+        }
+        if translated["category"] == "custom":
+            translated["name"] = payload.get("name") or payload.get("objective")
+        return self.goal_projection(self.catalog.save_focus(project_id, agent_id, translated))
+
+    @staticmethod
+    def goal_projection(focus):
+        from agentagon.webapp.resources import goal_projection
+
+        return goal_projection(focus)
+
+    def tasks(self, project_id, filters=None):
+        from agentagon.webapp.resources import goal_projection, task_summary
+
+        filters = filters or {}
+        agents = {item["id"]: item for item in self.catalog.agents(project_id)}
+        goals = {
+            item["id"]: goal_projection(item)
+            for agent in agents.values()
+            for item in self.catalog.focuses(project_id, agent["id"])
+        }
+        records = sorted(
+            self.jobs.list(project_id),
+            key=lambda item: item.get("updated_at") or item.get("created_at", ""),
+            reverse=True,
+        )
+        for field, key in (
+            ("agent_id", "application_agent_id"),
+            ("goal_id", "focus_id"),
+            ("workflow", "kind"),
+            ("status", "state"),
+        ):
+            if filters.get(field):
+                records = [item for item in records if item.get(key) == filters[field]]
+        try:
+            offset = max(0, int(filters.get("cursor", 0)))
+            limit = min(100, max(1, int(filters.get("limit", 30))))
+        except (TypeError, ValueError) as exc:
+            raise AuditError("task pagination must use integer cursor and limit") from exc
+        page = records[offset : offset + limit]
+        next_cursor = offset + limit if offset + limit < len(records) else None
+        return {
+            "tasks": [task_summary(item, agents, goals) for item in page],
+            "next_cursor": str(next_cursor) if next_cursor is not None else None,
+        }
+
+    def task(self, project_id, task_id):
+        from agentagon.webapp.resources import goal_projection, task_detail
+
+        agents = {item["id"]: item for item in self.catalog.agents(project_id)}
+        goals = {
+            item["id"]: goal_projection(item)
+            for agent in agents.values()
+            for item in self.catalog.focuses(project_id, agent["id"])
+        }
+        return task_detail(self.jobs.get(project_id, task_id), agents, goals)
+
+    def workflow_readiness(self, project_id, workflow, agent_id=None, goal_id=None):
+        from agentagon.webapp.workflows import REGISTRY
+
+        definition = REGISTRY.get(workflow)
+        if definition is None:
+            raise AuditError("workflow not found")
+        blockers = []
+        agent = None
+        if not agent_id:
+            blockers.append({"code": "agent", "message": "Select an agent.", "action": "agent"})
+        else:
+            agent = self.catalog.agent(project_id, agent_id)
+            if agent["status"] != "confirmed":
+                blockers.append(
+                    {"code": "agent", "message": "Confirm this agent.", "action": "agent"}
+                )
+        focus = None
+        if definition["requires_goal"]:
+            if not goal_id:
+                blockers.append({"code": "goal", "message": "Select a goal.", "action": "goal"})
+            elif agent:
+                focus = self.catalog.focus(project_id, agent_id, goal_id)
+        if agent and workflow == "audit" and not agent["code_scopes"]:
+            blockers.append(
+                {
+                    "code": "evidence",
+                    "message": "Bind code or import matching traces.",
+                    "action": "evidence",
+                }
+            )
+        if agent and focus and workflow in {"eval", "baseline", "fix"}:
+            status = self.catalog.measurement_status(project_id, agent_id, focus)
+            requirement = (
+                "evaluation"
+                if workflow == "baseline"
+                else "baseline"
+                if workflow == "fix"
+                else None
+            )
+            if workflow == "eval" and not self.designs.accepted(project_id, agent_id, goal_id):
+                blockers.append(
+                    {
+                        "code": "plan",
+                        "message": "Accept the measurement plan.",
+                        "action": "define",
+                    }
+                )
+            elif requirement and not status[requirement]["ready"]:
+                blockers.append(
+                    {
+                        "code": requirement,
+                        "message": status[requirement]["reason"],
+                        "action": "measure",
+                    }
+                )
+        return {
+            "workflow": workflow,
+            "workflow_version": definition["version"],
+            "ready": not blockers,
+            "blockers": blockers,
+            "next_action": blockers[0]["action"] if blockers else "start",
+        }
+
+    def submit_task(self, project_id, payload):
+        from agentagon.webapp.workflows import REGISTRY
+
+        allowed = {
+            "operation_id",
+            "workflow",
+            "agent_id",
+            "goal_id",
+            "assistant",
+            "model",
+            "options",
+        }
+        if not isinstance(payload, dict) or set(payload) - allowed:
+            raise AuditError("unsupported task fields")
+        workflow = payload.get("workflow")
+        definition = REGISTRY.get(workflow)
+        if definition is None:
+            raise AuditError("choose a workflow")
+        readiness = self.workflow_readiness(
+            project_id, workflow, payload.get("agent_id"), payload.get("goal_id")
+        )
+        if not readiness["ready"]:
+            raise AuditError(readiness["blockers"][0]["message"])
+        body = {
+            "operation_id": payload.get("operation_id"),
+            "kind": workflow,
+            "workflow_version": definition["version"],
+            "application_agent_id": payload.get("agent_id"),
+            "focus_id": payload.get("goal_id"),
+            "agent": payload.get("assistant"),
+            "model": payload.get("model", ""),
+            "options": payload.get("options", {}),
+        }
+        return self.submit_job(project_id, body)
+
     def register(self, path):
         project = self.state.register(path)
         self.selected_project_id = project["id"]
@@ -343,12 +563,17 @@ class Application:
         payload = copy.deepcopy(payload)
         agent_id, focus_id = payload.get("application_agent_id"), payload.get("focus_id")
         if not agent_id:
-            raise AuditError("select an application agent and focus before starting this workflow")
+            raise AuditError("select an application agent before starting this workflow")
         with self.lock:
             agent = self.catalog.agent(project_id, agent_id)
             if agent["status"] != "confirmed":
                 raise AuditError("confirm this application agent before starting work")
-            focus = self.catalog.focus(project_id, agent_id, focus_id)
+            if focus_id:
+                focus = self.catalog.focus(project_id, agent_id, focus_id)
+            elif payload.get("kind") == "audit":
+                focus = None
+            else:
+                raise AuditError("select a goal before starting this workflow")
             options = payload.setdefault("options", {})
             if not isinstance(options, dict):
                 raise AuditError("workflow options must be an object")
@@ -361,20 +586,42 @@ class Application:
                 "design_context",
             }:
                 raise AuditError("workflow evidence bindings are prepared by the application")
-            payload["goal"] = payload.get("goal") or focus["goal"]
+            payload["goal"] = payload.get("goal") or (
+                focus["goal"] if focus else f"Audit {agent['name']}"
+            )
             scopes = options.get("code_scopes")
             if scopes and scopes != agent["code_scopes"]:
                 raise AuditError("update the agent binding before changing its audit code scope")
             options["code_scopes"] = agent["code_scopes"]
             for key in ("issue_id", "audit_id"):
-                if focus["source"].get(key):
+                if focus and focus["source"].get(key):
                     options.setdefault(key, focus["source"][key])
             self.catalog.validate_evidence_reference(project_id, agent_id, options)
-            plan = self.catalog.investigation(project_id, agent_id, focus_id, options)
+            if focus:
+                plan = self.catalog.investigation(project_id, agent_id, focus_id, options)
+            else:
+                plan = {
+                    "version": 1,
+                    "agent_id": agent_id,
+                    "binding_version": agent["binding_version"],
+                    "binding_digest": agent["binding_digest"],
+                    "focus_id": None,
+                    "focus_version": None,
+                    "goal": payload["goal"],
+                    "source": {"kind": "agent"},
+                    "code_scopes": agent["code_scopes"],
+                    "trace_selector": agent["trace_selector"],
+                    "trace_snapshot_id": options.get("trace_snapshot_id"),
+                    "trace_digest": None,
+                    "trace_cap": None,
+                    "rubric": "audit-v1",
+                    "limits": ["Audit covers the selected agent and bound evidence."],
+                }
+                plan["digest"] = digest(plan)
             options["investigation_plan"] = plan
             accepted = (
                 self.designs.accepted(project_id, agent_id, focus_id)
-                if payload["kind"] in {"eval", "baseline", "fix"}
+                if focus and payload["kind"] in {"eval", "baseline", "fix"}
                 else None
             )
             if payload["kind"] == "design":
@@ -417,7 +664,7 @@ class Application:
                         "Bind code before including application source in this trace-only agent's audit."
                     )
                 options.update(mode="traces", scope="traces")
-            measurement = focus.get("measurement") or {}
+            measurement = (focus.get("measurement") or {}) if focus else {}
             accepted_evaluator = accepted["evaluation"].get("evaluation_id") if accepted else None
             if (
                 payload["kind"] in {"baseline", "fix"}
