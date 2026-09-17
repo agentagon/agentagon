@@ -53,7 +53,7 @@ export type TaskSummary = {
 export type TaskDetail = TaskSummary & {
   conversation: Array<{ role?: string; text?: string; content?: string }>;
   events: Array<{ type?: string; text?: string; created_at?: string }>;
-  question?: { id: string; prompt?: string; text?: string; options?: string[] } | null;
+  question?: { id: string; kind?: string; prompt?: string; text?: string; command?: string; options?: string[] } | null;
   progress?: unknown;
   result?: Record<string, unknown> | null;
   next_action?: string | null;

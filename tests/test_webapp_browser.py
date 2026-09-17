@@ -1,4 +1,5 @@
 import os
+import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -502,9 +503,30 @@ def test_task_history_has_stable_urls_and_bound_decisions(webapp_page):
     page.wait_for_timeout(50)
     reply = fixture.mutations[-1]
     assert reply["path"] == "/api/projects/project_alpha/tasks/task_decision/reply"
+    assert uuid.UUID(reply["payload"].pop("operation_id"))
     assert reply["payload"] == {
         "question_id": "question_candidate",
-        "answer": "Use the safer verified candidate.",
+        "answer": {"text": "Use the safer verified candidate."},
+    }
+
+
+def test_task_approvals_send_an_explicit_decision(webapp_page):
+    page, fixture = webapp_page
+    task = fixture.tasks["project_alpha"][0]
+    task["question"] = {
+        "id": "question_approval",
+        "kind": "approval",
+        "text": "Approve the proposed command?",
+    }
+    page.goto("http://agentagon.test/projects/project_alpha/tasks/task_decision")
+    panel = page.get_by_role("complementary", name="Task details")
+    panel.get_by_role("button", name="Approve").click()
+    page.wait_for_timeout(50)
+    reply = fixture.mutations[-1]
+    assert uuid.UUID(reply["payload"].pop("operation_id"))
+    assert reply["payload"] == {
+        "question_id": "question_approval",
+        "answer": {"decision": "accept"},
     }
 
 
