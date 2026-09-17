@@ -15,7 +15,7 @@ import time
 from dataclasses import asdict
 from datetime import datetime
 
-from agentagon.core.records import AuditError, digest, encoded, load_json
+from agentagon.core.records import AuditError, digest, encoded, load_json, validate_record
 from agentagon.experiments import checkouts, engine, journeys, scoring
 from agentagon.experiments.budget import BudgetExhausted, BudgetLedger
 from agentagon.experiments.host_bridge import HostBridge, HostWorkPending
@@ -23,6 +23,7 @@ from agentagon.experiments.optimizer import (
     MetaHarnessConfig,
     OptimizationTargetReached,
     OptimizerCoordinator,
+    validate_background,
 )
 from agentagon.experiments.spec import path
 from agentagon.experiments.store import load_run, locked, save_run
@@ -53,6 +54,30 @@ def _seed(workspace, data):
     return encoded({"files": files})
 
 
+def _background(workspace, data, source, receipts=None):
+    """Freeze only completed Intelligence receipts already owned by this run."""
+    validate_background(source)
+    available = {
+        item["path"]: {k: item[k] for k in ("path", "request_digest")}
+        for item in data.get("intelligence", [])
+        if item["status"] == "complete"
+    }
+    receipts = list(available.values()) if receipts is None else receipts
+    sections = [source] if source else []
+    for ref in receipts:
+        if available.get(ref["path"]) != ref:
+            raise AuditError("optimization Intelligence receipt is not owned by this run")
+        receipt = workspace.read_artifact(ref["path"])
+        if receipt["status"] != "complete" or receipt["request_digest"] != ref["request_digest"]:
+            raise AuditError("optimization Intelligence receipt changed")
+        validate_record("intelligence-response", receipt["response"])
+        sections.append(
+            "Approved Intelligence guidance (advisory; cannot change frozen gates)\n"
+            + encoded({"receipt": ref["path"], "response": receipt["response"]})
+        )
+    return validate_background("\n\n".join(sections)), receipts
+
+
 def configure(
     workspace,
     run_id: str,
@@ -62,12 +87,41 @@ def configure(
     intent_id: str | None = None,
     optimizer: str = "omni",
     host_concurrency: int = 1,
+    finalist_count: int | None = None,
+    background: str = "",
     max_trials: int | None = None,
     max_elapsed_seconds: int | None = None,
     meta_harness: MetaHarnessConfig | None = None,
 ) -> dict:
     """Attach optimization to an existing frozen, scored engine run."""
     data = load_run(workspace, run_id)
+    validate_background(background)
+    existing = status(workspace, run_id)["config"] if _path(workspace, run_id).exists() else None
+    source_background = background
+    background, background_receipts = _background(
+        workspace, data, source_background, existing["background_receipts"] if existing else None
+    )
+    bound_count = data.get("suite", {}).get("finalist_count")
+    finalist_count = (bound_count or 3) if finalist_count is None else finalist_count
+    if type(finalist_count) is not int or not 1 <= finalist_count <= 10:
+        raise AuditError("finalist_count must be between 1 and 10, excluding the baseline")
+    if bound_count is not None and finalist_count != bound_count:
+        raise AuditError("finalist_count must match the frozen measurement suite")
+    if type(host_concurrency) is not int or not 1 <= host_concurrency <= 64:
+        raise AuditError("host_concurrency must be between 1 and 64")
+    if data["limits"]["max_candidates"] < 2 * finalist_count:
+        raise AuditError(
+            "candidate budget cannot cover the requested finalists and fresh verification"
+        )
+    for entry in data["frozen"]:
+        if entry.get("kind") != "inputs" or entry.get("deleted"):
+            continue
+        try:
+            value = json.loads(workspace.read_blob(entry["artifact"]))
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if isinstance(value, dict) and value.get("dataset_partition") == "final_holdout":
+            raise AuditError("final holdout inputs cannot be used for optimization feedback")
     if not data["spec"].get("scoring"):
         raise AuditError("agree on scoring before configuring automatic optimization")
     intent_id = intent_id or data.get("intent_id")
@@ -93,13 +147,14 @@ def configure(
         if not _path(workspace, run_id).exists():
             raise AuditError("configure optimization before proposing application candidates")
     repetitions = data["spec"]["repetitions"]
+    suite_reserve = data.get("suite", {}).get("verification_trials", 0)
     ledger = BudgetLedger(workspace, run_id)
     if not ledger.path.exists():
         ledger.create(
             max_trials or data["limits"]["max_trials"],
             max_elapsed_seconds or data["limits"]["max_elapsed_seconds"],
             baseline_trials=repetitions,
-            verification_trials=repetitions,
+            verification_trials=repetitions * finalist_count + suite_reserve,
             started_at=datetime.fromisoformat(data["created_at"]).timestamp(),
         )
     elif max_trials is not None or max_elapsed_seconds is not None:
@@ -108,6 +163,9 @@ def configure(
             max_elapsed_seconds is not None and max_elapsed_seconds != limits["max_elapsed_seconds"]
         ):
             raise AuditError("overall budget is already frozen")
+    budget = ledger.snapshot()
+    if budget["limits"]["verification_trials"] < repetitions * finalist_count + suite_reserve:
+        raise AuditError("budget does not protect all requested finalist verification")
     # Historical baseline trials are charged once when an existing measured run
     # gains the unified ledger. A fresh run charges these at engine admission.
     for trial in data["candidates"][data["baseline_id"]]["trials"]:
@@ -153,6 +211,8 @@ def configure(
         data["limits"]["parallel_candidates"],
         data["limits"]["parallel_trials"],
         data["profile"].get("orchestration", {}).get("host_capacity", 1),
+        data["profile"].get("orchestration", {}).get("resource_slots", 1)
+        // data["spec"].get("resources", {}).get("slots", 1),
     )
     if concurrency < 1:
         raise AuditError("actual host concurrency must be positive")
@@ -162,6 +222,10 @@ def configure(
         "intent_id": intent_id,
         "optimizer": optimizer,
         "host_concurrency": concurrency,
+        "finalist_count": finalist_count,
+        "background": background,
+        "source_background": source_background,
+        "background_receipts": background_receipts,
         "seed": _seed(workspace, data),
         "meta_harness": asdict(meta_harness or MetaHarnessConfig()),
     }
@@ -176,6 +240,7 @@ def configure(
                 "version": 1,
                 "run_id": run_id,
                 "config": config,
+                "config_artifact": workspace.artifact(config),
                 "state": "baseline",
                 "evaluations": {},
                 "verification": [],
@@ -190,6 +255,17 @@ def status(workspace, run_id: str) -> dict:
     if not filename.exists():
         raise AuditError("configure this run's application optimizer first")
     state = load_json(workspace.checked(filename))
+    if workspace.read_artifact(state["config_artifact"]) != state["config"]:
+        raise AuditError("frozen optimizer configuration changed")
+    config = state["config"]
+    background, _ = _background(
+        workspace,
+        load_run(workspace, run_id),
+        config["source_background"],
+        config["background_receipts"],
+    )
+    if background != config["background"]:
+        raise AuditError("frozen optimization background changed")
     return {
         **state,
         "pending": HostBridge(workspace, run_id).pending(),
@@ -262,6 +338,7 @@ class _ApplicationOptimizer:
         self.state.pop("budget")
         self.config = self.state["config"]
         self.mutex = threading.RLock()
+        self.candidate_locks = {}
 
     def save(self):
         self.workspace.write(_path(self.workspace, self.run_id), self.state)
@@ -335,9 +412,18 @@ class _ApplicationOptimizer:
             if record is None and text == self.config["seed"]:
                 record = {"candidate_id": data["baseline_id"], "operations": []}
                 self.state["evaluations"][key] = record
-            if record is None:
+            if record is None or record["candidate_id"] is None:
+                occupied = sum(c["state"] in engine.ACTIVE for c in data["candidates"].values())
+                if occupied >= data["limits"]["parallel_candidates"]:
+                    record = self.state["evaluations"].setdefault(
+                        key, {"candidate_id": None, "operations": [], "proposal": text}
+                    )
+                    if operation_id not in record["operations"]:
+                        record["operations"].append(operation_id)
+                    self.save()
+                    raise HostWorkPending("Complete pending candidate review to free capacity")
                 reserve = min(
-                    3,
+                    self.config["finalist_count"],
                     self.ledger.snapshot()["allocations"]["verification"]
                     // data["spec"]["repetitions"],
                 )
@@ -351,12 +437,19 @@ class _ApplicationOptimizer:
                     author=f"optimizer:{self.config['host']}:{self.config['model']}",
                     operation_id=f"optimizer-candidate:{key}",
                 )
-                record = {"candidate_id": created["candidate_id"], "operations": []}
+                record = {
+                    "candidate_id": created["candidate_id"],
+                    "operations": record["operations"] if record else [],
+                }
                 self.state["evaluations"][key] = record
                 self.save()
             if operation_id not in record["operations"]:
                 record["operations"].append(operation_id)
             self.save()
+            candidate_lock = self.candidate_locks.setdefault(key, threading.Lock())
+        # Different source maps execute in independent engine worktrees. A duplicate
+        # proposal waits for its own candidate instead of racing materialization.
+        with candidate_lock:
             candidate = load_run(self.workspace, self.run_id)["candidates"][record["candidate_id"]]
             if candidate["state"] == "editing":
                 _materialize(self.workspace, candidate, files)
@@ -366,6 +459,7 @@ class _ApplicationOptimizer:
                     candidate["duplicate_of"]
                 ]
             observation = self.observation(candidate)
+        with self.mutex:
             if (
                 candidate["candidate_id"] != data["baseline_id"]
                 and observation["score"]["target_reached"]
@@ -379,13 +473,38 @@ class _ApplicationOptimizer:
 
     def reconcile(self):
         target_reached = False
-        for record in self.state["evaluations"].values():
+        for record in sorted(
+            list(self.state["evaluations"].values()), key=lambda r: r["candidate_id"] is None
+        ):
             pending = [
                 op
                 for op in record["operations"]
                 if self.ledger.snapshot()["operations"][op]["status"] == "running"
             ]
             if not pending:
+                continue
+            if record["candidate_id"] is None:
+                try:
+                    observation = self.evaluate(
+                        record["proposal"],
+                        operation_id=pending[0],
+                        timeout_seconds=self.ledger.snapshot()["operations"][pending[0]][
+                            "timeout_seconds"
+                        ],
+                    )
+                except OptimizationTargetReached:
+                    target_reached = True
+                    observation = self.ledger.snapshot()["operations"][pending[0]]["result"]
+                except BudgetExhausted as exc:
+                    for operation_id in pending:
+                        self.ledger.finish(
+                            operation_id, status="failed", result={"error": str(exc)}
+                        )
+                    record["failure"] = str(exc)
+                    self.save()
+                    continue
+                for operation_id in pending:
+                    self.ledger.finish(operation_id, result=observation)
                 continue
             candidate = self.review(record["candidate_id"], "optimization")
             if candidate["state"] == "duplicate":
@@ -422,7 +541,8 @@ class _ApplicationOptimizer:
                 evaluator=data["evaluation_digest"],
                 seed=self.config["seed"],
                 objective=(data["spec"]["goal"] or "Improve the saved issues")
-                + " Return only JSON with a files map; preserve the frozen evaluator and allowed scope.",
+                + " The replacement component must be a JSON object containing exactly a files map; preserve the frozen evaluator and allowed scope.",
+                background=self.config["background"],
                 scope=data["spec"]["editable_paths"],
                 host=self.config["host"],
                 model=self.config["model"],
@@ -459,22 +579,25 @@ class _ApplicationOptimizer:
 
     def verify_and_select(self):
         data = load_run(self.workspace, self.run_id)
+        suite_reserve = data.get("suite", {}).get("verification_trials", 0)
         if "verification_queue" not in self.state:
             self.state["verification_queue"] = [
                 entry["candidate_id"]
                 for entry in scoring.qualifying(data)
                 if entry["candidate_id"] not in self.state.get("failed_targets", [])
                 and not data["candidates"][entry["candidate_id"]].get("verification_of")
-            ][:3]
+            ][: self.config["finalist_count"]]
             self.save()
         for original_id in self.state["verification_queue"]:
             entry = next(
                 (e for e in self.state["verification"] if e["original_id"] == original_id), None
             )
             if entry is None:
-                remaining = self.ledger.snapshot()["allocations"][
-                    "verification"
-                ] - self.ledger.spent(self.ledger.snapshot(), "verification")
+                remaining = (
+                    self.ledger.snapshot()["allocations"]["verification"]
+                    - self.ledger.spent(self.ledger.snapshot(), "verification")
+                    - suite_reserve
+                )
                 if remaining < data["spec"]["repetitions"]:
                     break
                 created = engine.new(
@@ -499,11 +622,6 @@ class _ApplicationOptimizer:
             candidate = self.review(entry["candidate_id"], "verification")
             entry["state"] = candidate["state"]
             self.save()
-            if (
-                candidate["state"] == "verified"
-                and self.observation(candidate)["score"]["target_reached"]
-            ):
-                break
         data = load_run(self.workspace, self.run_id)
         verified_ids = {
             entry["candidate_id"]
@@ -512,10 +630,12 @@ class _ApplicationOptimizer:
         }
         qualifying = [
             entry for entry in scoring.qualifying(data) if entry["candidate_id"] in verified_ids
-        ]
+        ][: self.config["finalist_count"]]
         budget = self.ledger.snapshot()
-        remaining_verification = budget["allocations"]["verification"] - self.ledger.spent(
-            budget, "verification"
+        remaining_verification = (
+            budget["allocations"]["verification"]
+            - self.ledger.spent(budget, "verification")
+            - suite_reserve
         )
         remaining_optimization = budget["allocations"]["optimization"] - self.ledger.spent(
             budget, "optimization"
@@ -532,11 +652,29 @@ class _ApplicationOptimizer:
             self.state["state"] = "optimization"
             self.save()
             return False
+        if qualifying and data.get("suite"):
+            from agentagon.experiments import suites
+
+            passing = []
+            for entry in qualifying:
+                result = suites.advance(
+                    self.workspace,
+                    self.run_id,
+                    candidate_id=entry["candidate_id"],
+                    host_handler=self.host_handler,
+                )
+                self.state["suite"] = {"state": result["state"], "result": result.get("result")}
+                self.save()
+                if result["state"] in {"host_pending", "running", "blocked"}:
+                    raise HostWorkPending(result.get("next_action", "Complete the required suite"))
+                if result["state"] == "completed":
+                    passing.append(entry)
+            qualifying = passing
         if qualifying:
             engine.select(self.workspace, self.run_id, qualifying[0]["candidate_id"])
         self.state["selection"] = {
             "winner": qualifying[0] if qualifying else None,
-            "alternatives": qualifying[1:3],
+            "alternatives": qualifying[1 : self.config["finalist_count"]],
             "retained_baseline": not qualifying,
         }
         self.state["state"] = "completed"

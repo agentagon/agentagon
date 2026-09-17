@@ -131,7 +131,6 @@ def lookup(
 ) -> dict:
     """Consult guidance for an audit, evaluation or fix run using explicit text only.
 
-    ``audit_id`` remains the positional owner ID for compatibility with audit callers.
     In ask mode, return a preview without HTTP until the host supplies its ID after
     user consent. Every outgoing request is announced on stderr before dispatch.
     """

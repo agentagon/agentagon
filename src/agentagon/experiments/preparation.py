@@ -456,6 +456,11 @@ def _snapshot(workspace: Workspace, data: dict, plan: dict) -> tuple[str, list[d
                 "deliver": any(checkouts.under(name, scope) for scope in plan["deliver_paths"]),
             }
         )
+    if any(
+        "agentagon-private" in Path(entry["path"]).parts and entry["kind"] != "inputs"
+        for entry in files
+    ):
+        raise AuditError("imported dataset files must be declared as private evaluation inputs")
     names = {entry["path"] for entry in files}
     if any(
         not any(checkouts.under(name, scope) for name in names)

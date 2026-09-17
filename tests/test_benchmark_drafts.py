@@ -8,7 +8,7 @@ from support.evaluation import BUDGET, draft, review_for
 from support.experiments import git
 
 from agentagon.cli.main import main
-from agentagon.core.records import AuditError, digest, identifier
+from agentagon.core.records import AuditError, digest
 from agentagon.dashboard import _benchmark_drafts
 from agentagon.experiments import benchmarks, preparation
 from agentagon.storage.config import Config
@@ -288,43 +288,16 @@ def test_explicit_draft_renewal_and_lost_link_resume(application, specification,
     assert changed["evaluation_id"] != resumed["evaluation_id"]
 
 
-def test_legacy_draft_without_source_revision_remains_readable_and_resumable(
-    application, specification
-):
-    _, plan = draft(application, specification)
-    supplied = assessment(["checks.py"], ["benchmark.py"])
-    supplied["goal"], supplied["plan"] = specification["goal"], plan
-    saved = benchmarks.draft(application, supplied)
-    legacy = benchmarks.load(application, saved["benchmark_id"])
-    legacy["snapshot"].pop("source_revision")
-    legacy["snapshot_digest"] = digest(legacy["snapshot"])
-    legacy["benchmark_id"] = identifier("benchmark", str(application.root), legacy["snapshot"])
+def test_missing_draft_source_revision_is_rejected(application):
+    saved = benchmarks.draft(application, assessment(["app.json"], ["benchmark.py"]))
+    record = benchmarks.load(application, saved["benchmark_id"])
+    record["snapshot"].pop("source_revision")
+    record["snapshot_digest"] = digest(record["snapshot"])
     application.write(
-        benchmarks._directory(application, legacy["benchmark_id"]) / "state.json", legacy
+        benchmarks._directory(application, saved["benchmark_id"]) / "state.json", record
     )
-    assert benchmarks.status(application, legacy["benchmark_id"])["state"] == "draft"
-    started = benchmarks.prepare(
-        application, legacy["benchmark_id"], "local", BUDGET, author="author"
-    )
-    repeated = benchmarks.prepare(
-        application, legacy["benchmark_id"], "local", BUDGET, author="author"
-    )
-    assert started["evaluation_id"] == repeated["evaluation_id"]
-    assert repeated["reused"]
-    (application.root / "new-source.txt").write_text("New committed application input")
-    git(application.root, "add", "new-source.txt")
-    git(
-        application.root,
-        "-c",
-        "user.name=Test",
-        "-c",
-        "user.email=test@localhost",
-        "commit",
-        "-qm",
-        "Change application source",
-    )
-    current = benchmarks.status(application, legacy["benchmark_id"])
-    assert "source_changed" in {item["code"] for item in current["readiness"]["missing"]}
+    with pytest.raises(AuditError, match="missing its source revision"):
+        benchmarks.status(application, saved["benchmark_id"])
 
 
 def test_changed_draft_cannot_prepare_and_corrupted_evidence_cannot_load(application):

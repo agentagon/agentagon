@@ -4,6 +4,7 @@ import threading
 import time
 
 import pytest
+from support.optimizer import candidate_text, proposal_response
 
 from agentagon.core.records import AuditError
 from agentagon.experiments.budget import BudgetExhausted, BudgetLedger
@@ -139,7 +140,7 @@ def test_host_requests_binding_claim_cancel_and_judging(workspace):
     assert len(bridge.snapshot()["requests"]) == 2
 
 
-def coordinator(workspace, *, concurrency=1, engine="omni"):
+def coordinator(workspace, *, concurrency=1, engine="omni", background=""):
     ledger = BudgetLedger(workspace, RUN)
     ledger.create(40, 300)
     # Fake baseline and release its unused preparation budget.
@@ -152,6 +153,7 @@ def coordinator(workspace, *, concurrency=1, engine="omni"):
         evaluator="frozen-eval",
         seed="0",
         objective="increase integer",
+        background=background,
         scope=["candidate"],
         host="codex",
         model="current-model",
@@ -186,7 +188,7 @@ def test_real_omni_all_engines_fresh_refine_and_concurrency(workspace, monkeypat
 
     def host(request):
         host_calls.append(request)
-        return {"candidate": str(int(request["payload"]["candidate"]) + 1)}
+        return proposal_response(request, str(int(candidate_text(request)) + 1))
 
     result = optimizer.advance(evaluate, host_handler=host)
     assert result["state"] == "completed"
@@ -212,8 +214,12 @@ def test_real_omni_all_engines_fresh_refine_and_concurrency(workspace, monkeypat
     assert len(evaluations) == len(set(evaluations))
 
 
-def test_real_gepa_host_pending_restart_never_repeats_work(workspace):
-    optimizer = coordinator(workspace, engine="gepa")
+@pytest.mark.parametrize("concurrency", [1, 2])
+def test_real_gepa_host_pending_restart_never_repeats_work(workspace, concurrency):
+    background = "Approved evidence: retries must preserve idempotency.\nSource: immutable evidence snapshot."
+    optimizer = coordinator(
+        workspace, engine="gepa", background=background, concurrency=concurrency
+    )
     evaluations = []
 
     def evaluate(candidate, **kwargs):
@@ -226,17 +232,23 @@ def test_real_gepa_host_pending_restart_never_repeats_work(workspace):
     assert OptimizerCoordinator(workspace, RUN).advance(evaluate)["state"] == "host_pending"
     assert evaluations == original_evaluations
     request = pending["pending"][0]
+    assert request["payload"]["protocol"] == "gepa-reflection-v1"
+    assert "## Optimization Goal\n\nincrease integer" in request["payload"]["prompt"]
+    assert "## Current Component" in request["payload"]["prompt"]
+    assert "## Evaluation Results" in request["payload"]["prompt"]
+    assert background in request["payload"]["prompt"]
+    assert "candidate" not in request["payload"]
     optimizer.bridge.start(request["request_id"])
     assert OptimizerCoordinator(workspace, RUN).advance(evaluate)["state"] == "host_pending"
     optimizer.bridge.reply(
         request["request_id"],
-        {"candidate": "1"},
+        proposal_response(request, "1"),
         host=request["host"],
         model=request["model"],
         binding_digest=request["binding_digest"],
     )
     result = OptimizerCoordinator(workspace, RUN).advance(
-        evaluate, host_handler=lambda req: {"candidate": str(int(req["payload"]["candidate"]) + 1)}
+        evaluate, host_handler=lambda req: proposal_response(req, str(int(candidate_text(req)) + 1))
     )
     assert result["state"] == "completed"
     assert len(evaluations) == len(set(evaluations))
@@ -244,6 +256,118 @@ def test_real_gepa_host_pending_restart_never_repeats_work(workspace):
         len(result["budget"]["operations"])
         == len(evaluations) + len(optimizer.bridge.snapshot()["requests"]) + 1
     )
+
+
+def test_gepa_default_extractor_receives_raw_native_response(workspace, monkeypatch):
+    from gepa.strategies.instruction_proposal import InstructionProposalSignature
+
+    seen = []
+    extract = InstructionProposalSignature.output_extractor
+
+    def recording_extract(text):
+        seen.append(text)
+        return extract(text)
+
+    monkeypatch.setattr(InstructionProposalSignature, "output_extractor", recording_extract)
+    background = "Approved evidence: preserve request idempotency."
+    optimizer = coordinator(workspace, engine="gepa", background=background)
+    replies = []
+
+    def host(request):
+        assert background in request["payload"]["prompt"]
+        response = proposal_response(request, str(int(candidate_text(request)) + 1))
+        replies.append(response["text"])
+        return response
+
+    result = optimizer.advance(
+        lambda candidate, **kwargs: {
+            "state": "measured",
+            "value": int(candidate),
+            "eligible": True,
+        },
+        host_handler=host,
+    )
+    assert result["state"] == "completed"
+    assert seen == replies
+    assert all(text.startswith("```\n") for text in seen)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [{"candidate": "unsupported old contract"}, {"text": ""}, {"text": "valid", "score": 100}],
+)
+def test_invalid_reflection_response_retains_evidence_without_redispatch(workspace, response):
+    optimizer = coordinator(workspace, engine="gepa")
+    calls = []
+
+    def host(request):
+        calls.append(request)
+        return response
+
+    result = optimizer.advance(
+        lambda candidate, **kwargs: {
+            "state": "measured",
+            "value": int(candidate),
+            "eligible": True,
+        },
+        host_handler=host,
+    )
+    assert (
+        result["stages"][0]["failure"]
+        == "native GEPA reflection returned an invalid response contract"
+    )
+    assert len(calls) == 1
+    saved = optimizer.bridge.snapshot()["requests"][calls[0]["request_id"]]
+    assert saved["response"] == response
+    optimizer.advance(
+        lambda *args, **kwargs: pytest.fail("unexpected reexecution"), host_handler=host
+    )
+    assert len(calls) == 1
+
+
+def test_gepa_multimodal_prompt_is_explicitly_unsupported(workspace, monkeypatch):
+    from gepa.strategies.instruction_proposal import InstructionProposalSignature
+
+    monkeypatch.setattr(
+        InstructionProposalSignature,
+        "prompt_renderer",
+        lambda values: [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,fixture"}}
+                ],
+            }
+        ],
+    )
+    optimizer = coordinator(workspace, engine="gepa")
+    result = optimizer.advance(
+        lambda candidate, **kwargs: {"state": "measured", "value": 0, "eligible": True},
+        host_handler=lambda request: pytest.fail("unsupported prompt dispatched"),
+    )
+    assert "multimodal prompts are not supported" in result["stages"][0]["failure"]
+    assert optimizer.bridge.snapshot()["requests"] == {}
+
+
+def test_gepa_uncertain_host_failure_is_pending_without_upstream_redispatch(workspace):
+    optimizer = coordinator(workspace, engine="gepa")
+    calls = []
+
+    def host(request):
+        calls.append(request["request_id"])
+        raise RuntimeError("host disconnected after starting")
+
+    def evaluate(candidate, **kwargs):
+        return {"state": "measured", "value": 0, "eligible": True}
+
+    first = optimizer.advance(evaluate, host_handler=host)
+    assert first["state"] == "host_pending"
+    assert len(first["pending"]) == 1
+    assert first["pending"][0]["state"] == "running"
+    second = optimizer.advance(evaluate, host_handler=host)
+    assert second["state"] == "host_pending"
+    assert len(calls) == 1
+    assert [item["request_id"] for item in second["pending"]] == calls
 
 
 def test_resume_rejects_changed_runtime_without_executing_or_rewriting_evidence(workspace):

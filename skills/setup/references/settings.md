@@ -2,7 +2,7 @@
 
 Use this procedure for ordinary settings, credentials, telemetry, Intelligence and trace onboarding. All commands use `agentagon --workspace CODEBASE setup`; use `--scope user` for user-wide defaults and `--scope project` for the resolved application directory or Git checkout root.
 
-Update values with `--scope SCOPE --set KEY VALUE`; use `--unset KEY` to expose the next applicable default. Repeat options for different keys. Default Intelligence access to user scope and provider connections to project scope unless the user says otherwise. Verify the effective settings afterward and report the scope changed.
+Update values with `--scope SCOPE --set KEY VALUE`; use `--unset KEY` to expose the next applicable default. Repeat options for different keys. Default Intelligence access to user scope and CLI trace defaults to project scope unless the user says otherwise. Verify the effective settings afterward and report the scope changed.
 
 Supported settings:
 

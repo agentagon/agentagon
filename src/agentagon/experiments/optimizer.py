@@ -8,21 +8,31 @@ recorded calls in a fresh upstream engine, never deserializing host pickle data.
 """
 
 import fcntl
+import json
 import math
 import os
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 
-from agentagon.core.records import AuditError, load_json
+from agentagon.core.records import AuditError, digest, encoded, load_json, validate_record
 from agentagon.experiments.budget import BudgetExhausted, BudgetLedger
 from agentagon.experiments.host_bridge import HostBridge, HostWorkPending
+from agentagon.experiments.runtime import MeasurementUnavailable
 
 GEPA_REVISION = "0632cdb5dcc052e690eab439e1b4a7e3e9cfe407"
 GEPA_VERSION = "0.1.4"
 # Persisted identity stays stable across module renames.
-RUNTIME_VERSION = "agentagon-gepa-bridge-v1"
+RUNTIME_VERSION = "agentagon-gepa-reflection-v3"
 ENGINES = {"omni", "gepa", "autoresearch", "meta_harness"}
+MAX_BACKGROUND_BYTES = 128 * 1024
+
+
+def validate_background(background):
+    if not isinstance(background, str) or len(background.encode("utf-8")) > MAX_BACKGROUND_BYTES:
+        raise AuditError("optimization background must be text of at most 128 KiB")
+    return background
 
 
 @dataclass(frozen=True)
@@ -34,10 +44,6 @@ class MetaHarnessConfig:
     max_candidates_per_iter: int = 2
 
 
-class MeasurementUnavailable(BaseException):
-    """Preserve missing/failed observations instead of making up numeric scores."""
-
-
 class OptimizationTargetReached(BaseException):
     """Pause search for bounded final verification of a measured target."""
 
@@ -47,34 +53,12 @@ class _QuietLogger:
         pass
 
 
-class _AttemptPreservingEngine:
-    """A failed attempt ends its stage while other engines may still improve."""
-
-    def __init__(self, delegate):
-        self.delegate = delegate
-        self.name = delegate.name
-
-    def run(self, task, server):
-        from agentagon.experiments.runtime import Result
-
-        try:
-            return self.delegate.run(task, server)
-        except MeasurementUnavailable as exc:
-            return Result(
-                best_candidate=server.best_candidate,
-                best_score=server.best_score,
-                metadata={"measurement_failure": str(exc)},
-            )
-
-
 class NativeAutoResearchEngine:
     """Agentagon host adapter: sequential hypotheses, measured keep-or-revert."""
 
-    name = "agentagon-autoresearch"
-
-    def __init__(self, config):
-        self.propose = config.engine_config["propose"]
-        self.width = 1
+    def __init__(self, propose, width=1):
+        self.propose = propose
+        self.width = width
 
     def run(self, task, server):
         from agentagon.experiments.runtime import Result
@@ -103,12 +87,6 @@ class NativeAutoResearchEngine:
 class NativeMetaHarnessEngine(NativeAutoResearchEngine):
     """Agentagon host adapter: harness analysis and diverse candidate rounds."""
 
-    name = "agentagon-meta-harness"
-
-    def __init__(self, config):
-        super().__init__(config)
-        self.width = config.engine_config["max_candidates_per_iter"]
-
     def _feedback(self, history, round_number, branch):
         return {
             "method": "analyze-harness-and-diversify",
@@ -136,14 +114,16 @@ class OptimizerCoordinator:
         scope: list[str],
         host: str,
         model: str,
+        background: str = "",
         engine: str = "omni",
         host_concurrency: int = 1,
         meta_harness: MetaHarnessConfig | None = None,
     ) -> dict:
         if engine not in ENGINES:
             raise AuditError("optimizer must be omni, gepa, autoresearch or meta_harness")
-        if type(host_concurrency) is not int or host_concurrency < 1:
-            raise AuditError("actual host concurrency must be a positive integer")
+        validate_background(background)
+        if type(host_concurrency) is not int or not 1 <= host_concurrency <= 64:
+            raise AuditError("actual host concurrency must be between 1 and 64")
         if not all(
             isinstance(v, str) and v.strip()
             for v in (source, evaluator, seed, objective, host, model)
@@ -178,6 +158,7 @@ class OptimizerCoordinator:
             "evaluator": evaluator,
             "seed": seed,
             "objective": objective,
+            "background": background,
             "scope": scope,
             "host": host,
             "model": model,
@@ -231,7 +212,7 @@ class OptimizerCoordinator:
         """
         if type(trials_per_evaluation) is not int or trials_per_evaluation < 1:
             raise AuditError("trials per evaluation must be a positive integer")
-        from agentagon.experiments.runtime import optimize_parallel_with_server
+        from agentagon.experiments.runtime import run_stages
 
         self.ledger.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(
@@ -295,15 +276,11 @@ class OptimizerCoordinator:
                             )
                             for stage in unfinished
                         ]
-                        results = optimize_parallel_with_server(
-                            [entry[0] for entry in entries],
-                            [entry[1] for entry in entries],
-                            max_workers=config["host_concurrency"],
-                        )
+                        results = run_stages(entries, max_workers=config["host_concurrency"])
                     for stage, result in zip(unfinished, results, strict=True):
                         if not math.isfinite(result.best_score):
-                            stage["failure"] = result.metadata.get(
-                                "measurement_failure", "optimizer stage has no measured score"
+                            stage["failure"] = (
+                                result.failure or "optimizer stage has no measured score"
                             )
                         else:
                             stage["result"] = {
@@ -311,8 +288,8 @@ class OptimizerCoordinator:
                                 "score": result.best_score,
                                 "engine": stage["engine"],
                             }
-                            if result.metadata.get("measurement_failure"):
-                                stage["failure"] = result.metadata["measurement_failure"]
+                            if result.failure:
+                                stage["failure"] = result.failure
                     self.workspace.write(self.path, state)
                 state["state"] = (
                     "completed"
@@ -325,8 +302,6 @@ class OptimizerCoordinator:
                 state["state"] = "target_reached"
             except BudgetExhausted as exc:
                 state.update(state="budget_exhausted", reason=str(exc))
-            except MeasurementUnavailable as exc:
-                state.update(state="measurement_unavailable", reason=str(exc))
             self.workspace.write(self.path, state)
             return self._view(state)
 
@@ -354,11 +329,12 @@ class OptimizerCoordinator:
         from agentagon.experiments.runtime import (
             BudgetTracker,
             EvalServer,
-            OptimizeAnythingConfig,
             Task,
         )
 
-        counters = {"proposal": 0, "evaluation": 0}
+        counters = {"proposal": 0}
+        evaluation_locks = {}
+        evaluation_lock_guard = threading.Lock()
         route = config["meta_harness"] if stage["engine"] == "meta_harness" else {}
         host, model = route.get("host") or config["host"], route.get("model") or config["model"]
 
@@ -381,6 +357,7 @@ class OptimizerCoordinator:
                     "candidate": candidate,
                     "feedback": feedback,
                     "objective": config["objective"],
+                    "background": config["background"],
                 },
             )
             if request["state"] == "pending" and host_handler is not None:
@@ -399,12 +376,107 @@ class OptimizerCoordinator:
                 )
             return proposed
 
-        def evaluate(candidate, example=None, **kwargs):
+        def reflect(prompt, *, index=None):
             if stop_requested.is_set():
                 raise OptimizationTargetReached()
-            index = counters["evaluation"]
-            counters["evaluation"] += 1
-            operation_id = f"optimizer:{stage['id']}:evaluation:{index}"
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise MeasurementUnavailable(
+                    "native GEPA reflection requires a text prompt; multimodal prompts are not supported"
+                )
+            if len(prompt.encode("utf-8")) > 8 * 1024 * 1024:
+                raise MeasurementUnavailable(
+                    "GEPA reflection prompt exceeds the native transport limit"
+                )
+            if index is None:
+                index = counters["proposal"]
+                counters["proposal"] += 1
+            try:
+                request = self.bridge.request(
+                    f"{stage['id']}:reflection:{index}",
+                    source=config["source"],
+                    evaluator=config["evaluator"],
+                    role="proposal",
+                    scope=config["scope"],
+                    host=host,
+                    model=model,
+                    payload={
+                        "protocol": "gepa-reflection-v1",
+                        "engine": "gepa",
+                        "stage": stage["id"],
+                        "prompt": prompt,
+                    },
+                )
+            except AuditError as exc:
+                # Upstream retries ordinary reflection exceptions. A changed
+                # durable binding must instead stop this stage, without redispatch.
+                raise MeasurementUnavailable(str(exc)) from exc
+            if request["state"] == "pending" and host_handler is not None:
+                with semaphore:
+                    try:
+                        request = self.bridge.fulfill(request, host_handler)
+                    except Exception as exc:
+                        # A claimed callback may already have started a native
+                        # turn. Stop upstream retries and collect that exact call.
+                        raise HostWorkPending(request["request_id"]) from exc
+            if request["state"] == "cancelled":
+                raise MeasurementUnavailable("native GEPA reflection was cancelled")
+            if request["state"] != "completed":
+                raise HostWorkPending(request["request_id"])
+            if request.get("deadline_exceeded"):
+                raise BudgetExhausted("native GEPA reflection exceeded its admitted deadline")
+            try:
+                validate_record("host-reflection", request["response"], definition="response")
+            except AuditError as exc:
+                raise MeasurementUnavailable(
+                    "native GEPA reflection returned an invalid response contract"
+                ) from exc
+            text = request["response"].get("text")
+            if (
+                not isinstance(text, str)
+                or not text.strip()
+                or len(text.encode("utf-8")) > 8 * 1024 * 1024
+            ):
+                raise MeasurementUnavailable(
+                    "native GEPA reflection must return bounded raw final text"
+                )
+            return text
+
+        def batch_complete(messages_list):
+            prompts = []
+            for messages in messages_list:
+                if (
+                    not isinstance(messages, list)
+                    or len(messages) != 1
+                    or messages[0].get("role") != "user"
+                    or not isinstance(messages[0].get("content"), str)
+                ):
+                    raise MeasurementUnavailable(
+                        "native GEPA batch requires text-only rendered prompts"
+                    )
+                prompts.append(messages[0]["content"])
+            # Reserve deterministic identities in upstream input order before any
+            # transport threads run. Return raw responses in that same order.
+            start = counters["proposal"]
+            counters["proposal"] += len(prompts)
+            with ThreadPoolExecutor(max_workers=config["host_concurrency"]) as pool:
+                futures = [
+                    pool.submit(reflect, prompt, index=start + i)
+                    for i, prompt in enumerate(prompts)
+                ]
+                return [future.result() for future in futures]
+
+        reflect.batch_complete = batch_complete
+
+        def evaluate(candidate, example=None, **kwargs):
+            with evaluation_lock_guard:
+                lock = evaluation_locks.setdefault(digest(candidate), threading.Lock())
+            with lock:
+                return evaluate_one(candidate, example, **kwargs)
+
+        def evaluate_one(candidate, example=None, **kwargs):
+            if stop_requested.is_set():
+                raise OptimizationTargetReached()
+            operation_id = f"optimizer:{stage['id']}:evaluation:{digest(candidate)}"
             binding = {
                 "candidate": candidate,
                 "evaluator": config["evaluator"],
@@ -441,7 +513,10 @@ class OptimizerCoordinator:
                     except OptimizationTargetReached:
                         stop_requested.set()
                         raise
-                    except BudgetExhausted:
+                    except BudgetExhausted as exc:
+                        self.ledger.finish(
+                            operation_id, status="failed", result={"error": str(exc)}
+                        )
                         raise
                     except Exception as exc:
                         self.ledger.finish(
@@ -464,13 +539,18 @@ class OptimizerCoordinator:
                     )
                 # Gates remain in the durable observation and final selection.
                 # Feasibility is not a made-up numeric penalty.
-                return float(value), {"observation": observation, "operation_id": operation_id}
+                # Upstream renders mapping insertion order into its exact prompt.
+                # Match freshly returned observations to their serialized replay.
+                return float(value), {
+                    "observation": json.loads(encoded(observation)),
+                    "operation_id": operation_id,
+                }
 
         server = EvalServer(
             Task(
-                name=f"{self.run_id}-{stage['id']}",
                 seed_candidate=seed,
                 objective=config["objective"],
+                background=config["background"],
             ),
             evaluate,
             # Replayed seeds are already measured by the enclosing application pipeline.
@@ -479,48 +559,29 @@ class OptimizerCoordinator:
             ),
         )
         if stage["engine"] == "gepa":
+            from gepa.strategies.proposal_sampling import PxNSampling
+
             from agentagon.experiments.runtime import GepaEngine
 
-            def gepa_propose(candidate, reflective_dataset, components_to_update, **kwargs):
-                updated = propose(next(iter(candidate.values())), dict(reflective_dataset))
-                return {key: updated for key in components_to_update}
-
-            upstream_config = OptimizeAnythingConfig(
-                engine="gepa",
-                run_dir=f"{run_dir}/{stage['id']}",
-                engine_config={
-                    "engine": {
-                        "parallel": False,
-                        "use_cloudpickle": False,
-                        "seed": 0,
-                        "cache_evaluation": not count_trial,
-                        "cache_evaluation_storage": "memory" if not count_trial else "auto",
-                    },
-                    "reflection": {
-                        "reflection_lm": None,
-                        "custom_candidate_proposer": gepa_propose,
-                    },
-                    "tracking": {"logger": _QuietLogger()},
+            engine = GepaEngine(
+                f"{run_dir}/{stage['id']}",
+                engine={
+                    "parallel": config["host_concurrency"] > 1,
+                    "max_workers": config["host_concurrency"],
+                    "sampling_strategy": PxNSampling(p=1, n=config["host_concurrency"]),
+                    "use_cloudpickle": False,
+                    "seed": 0,
+                    "max_candidate_proposals": stage["max_evals"],
+                    "cache_evaluation": not count_trial,
+                    "cache_evaluation_storage": "memory" if not count_trial else "auto",
                 },
+                reflection={"reflection_lm": reflect},
+                tracking={"logger": _QuietLogger()},
             )
-            upstream_config = OptimizeAnythingConfig(
-                engine=_AttemptPreservingEngine(GepaEngine(upstream_config))
-            )
+        elif stage["engine"] == "autoresearch":
+            engine = NativeAutoResearchEngine(propose)
         else:
-            cls = (
-                NativeAutoResearchEngine
-                if stage["engine"] == "autoresearch"
-                else NativeMetaHarnessEngine
+            engine = NativeMetaHarnessEngine(
+                propose, config["meta_harness"]["max_candidates_per_iter"]
             )
-            native = cls(
-                OptimizeAnythingConfig(
-                    engine_config={
-                        "propose": propose,
-                        "max_candidates_per_iter": config["meta_harness"][
-                            "max_candidates_per_iter"
-                        ],
-                    }
-                )
-            )
-            upstream_config = OptimizeAnythingConfig(engine=_AttemptPreservingEngine(native))
-        return server, upstream_config
+        return server, engine

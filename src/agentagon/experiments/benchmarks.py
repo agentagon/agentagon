@@ -200,6 +200,8 @@ def load(workspace: Workspace, benchmark_id: str) -> dict:
         raise AuditError("benchmark draft origin mismatch")
     if digest(data["snapshot"]) != data["snapshot_digest"]:
         raise AuditError("benchmark draft evidence changed")
+    if "source_revision" not in data["snapshot"]:
+        raise AuditError("benchmark draft is missing its source revision; create a new draft")
     for entry in data["snapshot"]["files"]:
         file = workspace.checked(workspace.root / entry["artifact"])
         if hashlib.sha256(file.read_bytes()).hexdigest() != entry["digest"]:
@@ -230,7 +232,7 @@ def _readiness(
             missing.append({"code": code, "action": action})
     try:
         current_revision = checkouts.clean_revision(workspace.root)
-        expected_revision = origin_revision or data["snapshot"].get("source_revision")
+        expected_revision = origin_revision or data["snapshot"]["source_revision"]
         if expected_revision is not None and current_revision != expected_revision:
             missing.append(
                 {

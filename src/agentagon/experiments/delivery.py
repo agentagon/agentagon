@@ -55,6 +55,10 @@ def _selected(workspace: Workspace, data: dict, candidate_id: str | None) -> dic
     if not candidate:
         raise AuditError("selected candidate is missing from the run")
     engine._verified_evidence(workspace, data, candidate)
+    if data.get("suite"):
+        from agentagon.experiments import suites
+
+        suites.verify_selection(workspace, data["run_id"], candidate["candidate_id"])
     if data.get("optimizer_configured") and not candidate.get("verification_of"):
         raise AuditError("optimizer delivery requires reserved final verification")
     if data["spec"].get("scoring"):
@@ -294,13 +298,26 @@ def _safe_snapshot(workspace: Workspace, revision: str) -> None:
     for name in checkouts.paths(workspace.root, revision):
         path = Path(name)
         if (
-            ".agentagon" in path.parts
+            any(part in path.parts for part in (".agentagon", "agentagon-private"))
             or path.name == ".env"
             or path.name.startswith(".env.")
             and path.name not in {".env.example", ".env.sample"}
             or path.suffix in {".pem", ".key", ".p12"}
         ):
             raise AuditError("delivery snapshot contains a private state or credential path")
+
+
+def _reviewed_delivery(data: dict, delivery_id: str | None, binding: dict) -> None:
+    """Bind browser publication to the package reviewed before opening its dialog."""
+    if delivery_id is None:
+        return
+    record = data.get("deliveries", {}).get(delivery_id) if isinstance(delivery_id, str) else None
+    if (
+        not record
+        or record.get("version") != 1
+        or any(record.get(key) != value for key, value in binding.items())
+    ):
+        raise AuditError("prepared delivery changed; prepare and review the current package again")
 
 
 def _prepare(
@@ -503,6 +520,7 @@ def ship(
     base: str | None = None,
     publish: bool = False,
     eval_parent_id: str | None = None,
+    prepared_delivery_id: str | None = None,
 ) -> dict:
     """Prepare locally; only an explicit publish request may push and create a draft PR.
 
@@ -526,6 +544,21 @@ def ship(
                 "finish cleanup verification and comparison before preparing or publishing delivery"
             )
         candidate = _selected(workspace, data, candidate_id)
+        _reviewed_delivery(
+            data,
+            prepared_delivery_id,
+            {
+                "run_id": run_id,
+                "candidate_id": candidate["candidate_id"],
+                "branch": data["selected"]["branch"],
+                "source_revision": candidate["source_revision"],
+                "source_digest": candidate["source_digest"],
+                "base_revision": data["origin_revision"],
+                "evaluation_digest": data["evaluation_digest"],
+                "inputs_digest": data["inputs_digest"],
+                "profile_digest": data["profile_digest"],
+            },
+        )
         parent = (
             _eval_parent(workspace, data, candidate, eval_parent_id) if eval_parent_id else None
         )
@@ -713,6 +746,7 @@ def deliver(
     base: str | None = None,
     publish: bool = False,
     eval_parent_id: str | None = None,
+    prepared_delivery_id: str | None = None,
 ) -> dict:
     """Package one selected measured candidate, frozen eval, or reviewed patch locally."""
     if sum(value is not None for value in (run_id, evaluation_id, patch_id)) != 1:
@@ -727,6 +761,7 @@ def deliver(
             base=base,
             publish=publish,
             eval_parent_id=eval_parent_id,
+            prepared_delivery_id=prepared_delivery_id,
         )
     if eval_parent_id:
         raise AuditError("an eval parent applies only to a verified application run")
@@ -743,6 +778,17 @@ def deliver(
             return _evaluation_source(workspace, data)
 
         source = revalidate()
+        _reviewed_delivery(
+            data,
+            prepared_delivery_id,
+            {
+                "source_kind": "patch" if patch_id else "evaluation",
+                "source_id": source_id,
+                "base_revision": data["origin_revision"],
+                **source,
+                "evidence_digest": digest(data["review"]) if patch_id else data["package_digest"],
+            },
+        )
         _safe_snapshot(workspace, source["source_revision"])
         if source["source_digest"] == checkouts.tree(workspace.root, data["origin_revision"]):
             raise AuditError("reviewed source has no changes to deliver")

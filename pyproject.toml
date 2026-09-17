@@ -28,6 +28,8 @@ Changelog = "https://github.com/agentagon/agentagon/releases"
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff==0.16.6", "build>=1.2"]
 browser = ["playwright==1.57.0"]
+claude = ["claude-agent-sdk>=0.2.140,<0.3"]
+credentials = ["keyring>=25,<26"]
 e2b = ["e2b==2.46.4"]
 
 [project.scripts]
@@ -57,6 +59,7 @@ agentagon = ["dashboard_assets/*"]
 "share/agentagon/skills/fix/references" = ["skills/fix/references/*.md"]
 "share/agentagon/skills/eval/references" = ["skills/eval/references/*.md"]
 "share/agentagon/skills/eval/helpers" = ["skills/eval/helpers/*.py", "skills/eval/helpers/*.cjs"]
+"share/agentagon/skills/workflows" = ["skills/workflows/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

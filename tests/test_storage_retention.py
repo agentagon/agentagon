@@ -125,14 +125,18 @@ def test_running_worker_prevents_transient_cleanup(workspace):
     assert not list((attempt / "job").glob("*.log"))
 
 
-def test_binary_artifacts_validate_content_and_keep_legacy_read_support(workspace):
+def test_binary_artifacts_validate_content_and_reject_inline_saved_evidence(workspace):
     content = b"retained bytes"
     entry = {
         "bytes": len(content),
         "sha256": hashlib.sha256(content).hexdigest(),
         "content_base64": base64.b64encode(content).decode(),
     }
-    assert evidence.artifact_bytes(workspace, entry) == content
+    with pytest.raises(AuditError, match="content is invalid"):
+        evidence.artifact_bytes(workspace, entry)
+    inline_result = workspace.artifact({"evidence": {"artifacts": [entry]}})
+    with pytest.raises(AuditError, match="content is invalid"):
+        evidence.read_result(workspace, inline_result)
     compact = {k: v for k, v in entry.items() if k != "content_base64"}
     compact["content_path"] = workspace.blob(content, ".bin")
     assert evidence.artifact_bytes(workspace, compact) == content
@@ -205,7 +209,7 @@ def test_finished_worktree_preserves_changes_after_sealing(application, specific
     assert checkout.exists()
 
 
-def test_dashboard_downloads_retained_binary_and_legacy_artifacts(application, specification):
+def test_dashboard_downloads_retained_binary_artifacts(application, specification):
     argv = artifact_request()["commands"][0]["argv"]
     argv[-1] = argv[-1].replace('"score":17', '"latency":100,"quality":0.8')
     specification["benchmark"] = {"argv": argv}
@@ -225,16 +229,6 @@ def test_dashboard_downloads_retained_binary_and_legacy_artifacts(application, s
     binary.write_bytes(b"tampered")
     with pytest.raises(AuditError, match="checksum"):
         engine.select(application, started["run_id"], candidate["candidate_id"])
-    binary.write_bytes(content)
-    # Exercise a historical inline result without rewriting the original evidence.
-    entry["content_base64"] = base64.b64encode(content).decode()
-    entry.pop("content_path")
-    legacy = application.artifact(retained)
-    data = store.load_run(application, started["run_id"])
-    data["candidates"][candidate["candidate_id"]]["trials"][0]["artifact"] = legacy
-    application.write(store.run_dir(application, started["run_id"]) / "state.json", data)
-    with running(application) as server:
-        assert http_request(server, url)[2] == content
 
 
 def test_reports_are_explicit_snapshots_and_reads_do_not_generate_them(application, specification):

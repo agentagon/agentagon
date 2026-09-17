@@ -14,7 +14,7 @@ Fetch exactly the saved IDs and their descendants, exhausting body pages. Resume
 
 ## Download and retain evidence
 
-Use the provider's official CLI recipe, pin its resolved version and inspect its version/help. Consult linked official documentation for differences; use the SDK/API when the CLI cannot express the root window, pagination or descendant fetch. Keep acquisition scripts in the ignored audit workspace and preserve native rows except agreed redaction.
+Prefer the web app's Connections and trace-import workflow for Braintrust, LangSmith and Langfuse. For host-managed exports, inspect the provider's current API or SDK documentation: [Braintrust](https://www.braintrust.dev/docs/reference/sql/query-structure), [LangSmith](https://docs.langchain.com/langsmith/export-traces), [Langfuse](https://langfuse.com/docs/api-and-data-platform/features/observations-api), or [Phoenix](https://arize.com/docs/phoenix/sdk-api-reference/rest-api/api-reference/traces/list-traces-for-a-project). Keep acquisition scripts in the ignored audit workspace and preserve native rows except agreed redaction.
 
 For transient rate/network failures, honor Retry-After and retry at most three times. Correct authentication or unsupported-query errors before retrying. Checkpoint completed IDs; resume only missing IDs, retaining partial exports and failures.
 

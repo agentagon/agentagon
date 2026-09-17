@@ -339,21 +339,23 @@ class Workspace:
         }
 
     def verify_snapshot(self, snapshot: dict) -> None:
-        if snapshot.get("code_scope") == "full":
+        scope = snapshot.get("code_scope")
+        if scope == "full":
             current = self.snapshot(snapshot["scopes"])
             if current["revision"] != snapshot["revision"]:
                 raise AuditError("Git baseline changed; start a new audit")
             if (
                 current["files"] != snapshot["files"]
                 or current["skipped"] != snapshot["skipped"]
-                or current["local_changes"]
-                != snapshot.get("local_changes", current["local_changes"])
+                or current["local_changes"] != snapshot["local_changes"]
             ):
                 raise AuditError("code input changed; start a new audit")
-        elif snapshot.get("code_scope") == "changes":
+        elif scope == "changes":
             current = self.changes(snapshot["scopes"])
             if current["fingerprint"] != snapshot["fingerprint"]:
                 raise AuditError("local changes changed; start a new review")
+        else:
+            raise AuditError("unsupported snapshot scope; start a new audit")
 
     def verify_code(self, evidence: dict) -> None:
         if "change" in evidence:

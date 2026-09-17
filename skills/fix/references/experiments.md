@@ -1,6 +1,6 @@
 # Measured experiments
 
-The primary [Fix journey](../SKILL.md) uses Omni and the accepted score/gates. These low-level procedures retain execution/review invariants and compatibility for historical manual or policy-driven runs; they do not replace the new optimizer with greedy or top-k search.
+The primary [Fix journey](../SKILL.md) uses Omni and the accepted score/gates. These low-level procedures expose manual candidate editing, execution and review for explicit CLI use.
 
 ## Coordinate the active host task
 
@@ -51,7 +51,7 @@ Submit an `insights` control with that template in `response`. On failure or exp
 
 ## Finish with a verified selection
 
-Run `fix report RUN_ID`, inspect the exported snapshot, and present the verified frontier, original-baseline comparisons, hard-constraint results, issue-specific evidence, uncertainty and full paths returned in `markdown` and `json`. For the current journey, use the highest-scoring independently verified candidate that passes all gates and establishes improvement over baseline; show the next two qualifying alternatives and preserve user override. Legacy runs without an agreed score retain explicit user selection. Then run `fix select RUN_ID CANDIDATE_ID` and export again with `fix report RUN_ID` before returning the reviewable branch and updated report. Follow the [report lifecycle](contract.md#command-lifecycle) when later operations change the run.
+Run `fix report RUN_ID`, inspect the exported snapshot, and present the verified frontier, original-baseline comparisons, hard-constraint results, issue-specific evidence, uncertainty and full paths returned in `markdown` and `json`. For the current journey, use the highest-scoring independently verified candidate that passes all gates and establishes improvement over baseline; show up to the accepted finalist count and preserve user override. Runs without an agreed score require explicit user selection. Then run `fix select RUN_ID CANDIDATE_ID` and export again with `fix report RUN_ID` before returning the reviewable branch and updated report. Follow the [report lifecycle](contract.md#command-lifecycle) when later operations change the run.
 
 Selection does not apply changes to the origin checkout, merge, publish, create a PR or automatically resolve audit issues. Use [delivery](delivery.md) to prepare delivery and, when authorized, publish the exact selected branch as a GitHub draft PR. A branch can improve a metric without resolving a particular issue. Record separately authorized issue decisions through `audit issues update`; verified resolution requires the engine-bound evidence and application checks enforced by that command. Use [evaluation preparation](evaluation.md) for a missing or unsuitable benchmark; changing a frozen evaluator requires a new evaluation version and fix run.
 

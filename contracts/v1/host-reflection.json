@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$ref": "#/$defs/request",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "engine", "stage", "prompt"],
+      "properties": {
+        "protocol": {"const": "gepa-reflection-v1"},
+        "engine": {"const": "gepa"},
+        "stage": {"type": "string", "minLength": 1},
+        "prompt": {"type": "string", "minLength": 1, "maxLength": 8388608}
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1, "maxLength": 8388608}
+      }
+    }
+  }
+}

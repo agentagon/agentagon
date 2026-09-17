@@ -40,6 +40,7 @@ def start(
     model: str,
     goal: str | None = None,
     code_scope: str = "full",
+    request_id: str | None = None,
 ) -> dict:
     workspace.require_initialized()
     if code_scope not in {"full", "changes"}:
@@ -69,8 +70,36 @@ def start(
             raise AuditError("trace limit must be a positive integer or all")
     elif any(value is not None for value in (source, project, start_time, end_time, limit)):
         raise AuditError("code-only audits do not accept trace acquisition parameters")
+    if request_id is not None and (
+        not isinstance(request_id, str) or not 1 <= len(request_id) <= 200
+    ):
+        raise AuditError("audit request ID must be 1–200 characters")
+    invocation = digest(
+        {
+            "mode": mode,
+            "source": source,
+            "project": project,
+            "start_time": start_time,
+            "end_time": end_time,
+            "limit": limit,
+            "scopes": scopes,
+            "host": host,
+            "model": model,
+            "goal": goal,
+            "code_scope": code_scope,
+        }
+    )
     with workspace.locked():
-        audit_id = identifier("audit", uuid4().hex)
+        audit_id = (
+            identifier("audit", str(workspace.root), request_id)
+            if request_id is not None
+            else identifier("audit", uuid4().hex)
+        )
+        if request_id is not None and workspace.audit_path(audit_id).exists():
+            audit = workspace.read_audit(audit_id)
+            if audit.get("invocation_digest") != invocation:
+                raise AuditError("audit request identity was reused with different settings")
+            return progress(audit)
         snapshot = workspace.snapshot(scopes, code_scope=code_scope)
         if code_scope == "changes" and not snapshot["changes"] and not snapshot["skipped"]:
             raise AuditError("no local changes in the selected scope; no review was started")
@@ -135,6 +164,7 @@ def start(
             "groups": [],
             "packets": {},
             "submissions": [],
+            **({"invocation_digest": invocation} if request_id is not None else {}),
         }
         workspace.save_audit(audit)
         return progress(audit)
@@ -250,8 +280,8 @@ def progress(audit: dict) -> dict:
         limits = limits or any(trace["completeness"] != "complete" for trace in audit["traces"])
     if audit["mode"] == "code" and not units:
         limits = True
-    limits = limits or (audit.get("trace_alignment") or {}).get("status") == "mismatch"
-    limits = limits or bool((audit.get("trace_alignment") or {}).get("warning"))
+    limits = limits or (audit["trace_alignment"] or {}).get("status") == "mismatch"
+    limits = limits or bool((audit["trace_alignment"] or {}).get("warning"))
     state = (
         "awaiting_" + pending_action
         if pending_action
@@ -264,12 +294,12 @@ def progress(audit: dict) -> dict:
         "created_at": audit["created_at"],
         "mode": audit["mode"],
         "goal": audit["goal"],
-        "workflow": "review" if audit["snapshot"].get("code_scope") == "changes" else "audit",
-        "code_scope": audit["snapshot"].get("code_scope", "full"),
-        "code_scopes": audit["snapshot"].get("scopes", ["."]),
+        "workflow": "review" if audit["snapshot"]["code_scope"] == "changes" else "audit",
+        "code_scope": audit["snapshot"]["code_scope"],
+        "code_scopes": audit["snapshot"]["scopes"],
         "skipped_code_files": len(audit["snapshot"]["skipped"]),
-        "revision": audit["snapshot"].get("revision"),
-        "trace_alignment": audit.get("trace_alignment"),
+        "revision": audit["snapshot"]["revision"],
+        "trace_alignment": audit["trace_alignment"],
         "state": state,
         "pending_action": pending_action,
         "coverage": {
@@ -377,14 +407,14 @@ def prepare(
             "generation": audit["generation"],
             "stage": stage,
             "goal": audit["goal"],
-            "code_scope": audit["snapshot"].get("code_scope", "full"),
-            "revision": audit["snapshot"].get("revision"),
-            "trace_alignment": audit.get("trace_alignment"),
+            "code_scope": audit["snapshot"]["code_scope"],
+            "revision": audit["snapshot"]["revision"],
+            "trace_alignment": audit["trace_alignment"],
             "emphasis": (
                 "Review only problems or improvements introduced or worsened by the changes. "
                 "Read related code and evals for context. Evaluate every required facet; "
                 "recommend concrete eval targets, scenarios and assertions when warranted."
-                if audit["snapshot"].get("code_scope") == "changes"
+                if audit["snapshot"]["code_scope"] == "changes"
                 else "Use the audit goal to guide investigation depth, recommendations, and presentation. "
                 "Evaluate every required facet and surface severe unrelated issues."
             ),
@@ -603,7 +633,7 @@ def submit(workspace: Workspace, audit_id: str, response_path: Path) -> dict:
 
 def _check_finding_scope(audit: dict, finding: dict, evidence: dict) -> None:
     references = [evidence[key] for key in finding["evidence"]]
-    if audit["snapshot"].get("code_scope") == "changes" and not any(
+    if audit["snapshot"]["code_scope"] == "changes" and not any(
         "change" in ref for ref in references
     ):
         raise AuditError("review findings must cite a captured code change")

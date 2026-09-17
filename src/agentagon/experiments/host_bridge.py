@@ -11,7 +11,7 @@ import os
 import time
 from contextlib import contextmanager
 
-from agentagon.core.records import AuditError, digest, identifier, load_json
+from agentagon.core.records import AuditError, digest, identifier, load_json, validate_record
 from agentagon.experiments.budget import STAGES, BudgetLedger
 
 
@@ -76,6 +76,10 @@ class HostBridge:
             payload.get(k) for k in ("trial_id", "evidence_digest", "rubric_version")
         ):
             raise AuditError("judging must bind actual trial evidence and the frozen rubric")
+        if payload.get("protocol") == "gepa-reflection-v1":
+            if role != "proposal":
+                raise AuditError("GEPA reflection requires the proposal role")
+            validate_record("host-reflection", payload)
         request_id = identifier("host", self.run_id, key)
         binding = {
             "key": key,
@@ -151,6 +155,51 @@ class HostBridge:
             )
             self.workspace.write(self.path, state)
             return {**request, "replay": admission["replay"]}
+
+    def bind_session(self, request_id: str, *, session_id: str, model: str) -> dict:
+        """Bind a native reflection to one actual session before authoring begins."""
+        with self.locked():
+            state = self.snapshot()
+            request = self._get(state, request_id)
+            if (
+                request["state"] != "running"
+                or request["payload"].get("protocol") != "gepa-reflection-v1"
+            ):
+                raise AuditError("only a running GEPA reflection can bind a native session")
+            if not isinstance(session_id, str) or not session_id or model != request["model"]:
+                raise AuditError("reflection session or model does not match the requested host")
+            native = {"session_id": session_id, "model": model}
+            if request.get("native_session") not in (None, native):
+                raise AuditError("reflection resumed a different native session")
+            if any(
+                other["request_id"] != request_id
+                and other.get("native_session", {}).get("session_id") == session_id
+                for other in state["requests"].values()
+            ):
+                raise AuditError("each reflection requires a dedicated native session")
+            request["native_session"] = native
+            self.workspace.write(self.path, state)
+            return request
+
+    def checkpoint_output(self, request_id: str, text: str) -> dict:
+        """Retain exact private terminal output before replying to the logical call."""
+        if (
+            not isinstance(text, str)
+            or not text.strip()
+            or len(text.encode("utf-8")) > 8 * 1024 * 1024
+        ):
+            raise AuditError("reflection requires bounded nonempty terminal text")
+        with self.locked():
+            state = self.snapshot()
+            request = self._get(state, request_id)
+            if request["state"] != "running" or not request.get("native_session"):
+                raise AuditError("reflection output requires its running native session")
+            artifact = self.workspace.artifact({"text": text})
+            if request.get("terminal_output") not in (None, artifact):
+                raise AuditError("saved reflection terminal output cannot be replaced")
+            request["terminal_output"] = artifact
+            self.workspace.write(self.path, state)
+            return request
 
     def reply(
         self,

@@ -14,25 +14,22 @@ class EvalBudgetExhausted(Exception):
     """The current optimizer stage has used its evaluation allowance."""
 
 
+class MeasurementUnavailable(BaseException):
+    """Preserve missing/failed observations instead of making up numeric scores."""
+
+
 @dataclass
 class Result:
     best_candidate: str
     best_score: float
-    metadata: dict = field(default_factory=dict)
+    failure: str | None = None
 
 
 @dataclass
 class Task:
-    name: str
     seed_candidate: str
     objective: str
-
-
-@dataclass
-class OptimizeAnythingConfig:
-    engine: object = None
-    run_dir: str | None = None
-    engine_config: dict = field(default_factory=dict)
+    background: str = ""
 
 
 @dataclass
@@ -58,7 +55,7 @@ class BudgetTracker:
 
 
 class EvalServer:
-    """Serialize stage evaluations; Agentagon's ledger owns durable evidence."""
+    """Admit bounded concurrent evaluations; Agentagon's ledger owns durable evidence."""
 
     def __init__(self, task, evaluate, budget):
         self.task = task
@@ -71,27 +68,24 @@ class EvalServer:
     def evaluate(self, candidate, example=None, **kwargs):
         with self._lock:
             self.budget.check()
-            try:
-                score, info = self.eval_fn(candidate, example, **kwargs)
-            except Exception:
-                self.budget.used += 1
-                raise
             self.budget.used += 1
+        score, info = self.eval_fn(candidate, example, **kwargs)
+        with self._lock:
             if score > self.best_score:
                 self.best_candidate, self.best_score = candidate, score
-            return score, {**info, "_budget": self.budget.status()}
+        # Scheduling-dependent counters must not enter upstream reflection feedback:
+        # replay must assemble exactly the same prompt regardless of completion order.
+        return score, info
 
 
 class GepaEngine:
     """Run GEPA search with bounded native-host callbacks."""
 
-    name = "gepa"
-
-    def __init__(self, config):
+    def __init__(self, run_dir, **settings):
         from gepa.optimize_anything import GEPAConfig
 
-        self.config = GEPAConfig(**config.engine_config)
-        self.config.engine.run_dir = config.run_dir
+        self.config = GEPAConfig(**settings)
+        self.config.engine.run_dir = run_dir
 
     def run(self, task, server):
         from gepa.optimize_anything import optimize_anything
@@ -102,6 +96,7 @@ class GepaEngine:
                 seed_candidate=task.seed_candidate,
                 evaluator=server.evaluate,
                 objective=task.objective,
+                background=task.background,
                 config=self.config,
             )
         except EvalBudgetExhausted:
@@ -110,10 +105,7 @@ class GepaEngine:
             result = self._load_result()
         if result is None:
             return Result(server.best_candidate, server.best_score)
-        best = result.best_candidate
-        if isinstance(best, dict):
-            best = next(iter(best.values()), "")
-        return Result(best, result.val_aggregate_scores[result.best_idx])
+        return Result(result.best_candidate, result.val_aggregate_scores[result.best_idx])
 
     def _load_result(self):
         from gepa.core.result import GEPAResult
@@ -131,17 +123,17 @@ class GepaEngine:
             return None
 
 
-def optimize_parallel_with_server(servers, configs, *, max_workers):
+def run_stages(stages, *, max_workers):
     """Run caller-owned stages in input order with bounded concurrency."""
-    if not configs or len(servers) != len(configs):
-        raise ValueError("each optimizer stage needs one server and one engine")
 
     def run(entry):
-        server, config = entry
+        server, engine = entry
         try:
-            return config.engine.run(server.task, server)
+            return engine.run(server.task, server)
         except EvalBudgetExhausted:
             return Result(server.best_candidate, server.best_score)
+        except MeasurementUnavailable as exc:
+            return Result(server.best_candidate, server.best_score, failure=str(exc))
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        return list(pool.map(run, zip(servers, configs, strict=True)))
+        return list(pool.map(run, stages))

@@ -4,7 +4,27 @@ These decisions explain the workflow boundaries contributors should preserve. Co
 
 <span id="separate-triggers-define-the-evidence-scope"></span>
 
-## Three primary journeys preserve explicit evidence scope
+## The local web app is the primary interface
+
+Bare `agentagon` opens a local web app and registers the current project, reusing a running service when available. `agentagon app` is an explicit alias. Named subcommands and optional skills remain available. The project opens to an application-agent inventory; Goals leads to an accepted measurement plan, Eval, a baseline and Fix within the selected agent and focus. Metrics, Traces and settings support that journey. Audit is a separate CLI/skill workflow; existing audits and findings remain readable evidence. The project selector does not combine evidence across checkouts.
+
+The local backend owns provider connections scoped to one registered project and explicitly started coding-agent sessions. Opening project pages does not launch agents or acquire trace or dataset records; explicit project discovery and import dialogs may query provider catalogs. Codex uses an app-owned app-server session and exposes the installed backend's available models for selection. Claude uses the optional Agent SDK with API-key access and a separate model setting. Neither adapter takes over an unrelated terminal conversation. Workflow procedures are bundled runtime inputs and do not require skill installation.
+
+Closing the browser leaves tasks running in the service. Service shutdown or lost ownership leaves work interrupted; restarting requires explicit resumption using saved identities. Permission requests wait for an explicit answer. A task's saved settings, evidence and total budget survive resumption; restarting must not silently enlarge its allowance. Publication, merge and deployment remain separate actions.
+
+The supported app is local and loopback-only. Hosted access, organizations, tenant isolation and remote coding-agent connections are deferred; the local service must not be exposed as a hosted backend.
+
+## Application agents preserve focused intent
+
+An application agent has a stable identity within a project and versioned code scopes, shared dependencies and trace selectors. Discovery proposes evidence-backed bindings for confirmation; its bounded scan is not an exhaustive inventory. Codex and Claude are coding backends, distinct from these application agents.
+
+Versioned focuses record the user's objective, source evidence and accepted measurements. An investigation freezes the selected agent binding, focus and evidence scope. Focus changes emphasis without narrowing the required audit rubric or resolving unrelated historical issues. Trace-only diagnosis cannot silently expand into a full-code audit or authorize source edits.
+
+Measurement proposals are editable drafts until explicit acceptance. Each accepted version pins scoring, required behaviors, evidence analysis and native evaluation choices. A goal does not require production traces: unavailable evidence or instrumentation remains a visible prerequisite. Reusing a frozen evaluator cannot change its scoring or substitute different inputs.
+
+Accepted metric definitions, references and guardrails remain attached to their focus versions. A new focus cannot turn a missing measurement into a pass or erase prior accepted checks. A focused Fix binds the required suite across active focuses and agents affected by permitted changes, then verifies each reference/finalist pair with every required frozen evaluator. The requested finalist count is one to ten, defaults to three and excludes the baseline; budget admission reserves the corresponding verification work. Selection and delivery require complete evidence for that exact candidate. Failed guards disqualify a candidate; incomplete evidence cannot establish improvement.
+
+## Workflow entry points preserve explicit evidence scope
 
 `ag:init` onboards an application, agrees on behaviors/scoring/limits, prepares reusable evals and establishes a baseline. `ag:fix` improves the saved goal or named issue through measurement, independent verification and draft delivery. `ag:dashboard` inspects history, explicitly reruns baselines and manages existing settings. Audit and Eval remain independently discoverable deep dives. Setup, review and delivery are shared supporting procedures.
 
@@ -34,19 +54,33 @@ CLI validation checks record structure, required coverage, allowed values and ev
 
 Before using these judgments as performance metrics, calibrate them on representative traces labeled by human reviewers, including incomplete evidence, intermediate turns, scope changes, valid refusals and recovered failures. Measure disagreements, false alarms and missed defects per facet, retaining unknown and not-applicable coverage separately. Recheck after changing the rubric or judge. Passing CLI tests demonstrates contract behavior, not empirical validity of model judgments.
 
-## One config file, two settings scopes
+<span id="one-config-file-two-settings-scopes"></span>
+
+## Configuration separates preferences from evidence
 
 Shared user defaults reduce repeated setup; checkout overrides keep project-specific choices separate. Distinct worktrees have distinct project entries. Explicit invocation choices take precedence over saved configuration.
 
-Keep credentials as references and runtime evidence in the checkout's ignored `.agentagon/` directory. Separating settings from run records lets users change future defaults while existing work retains its saved evidence and execution settings. See [configuration](../audit.md#first-audit-and-setup).
+SQLite in the sibling app-state directory is authoritative for app metadata: project registrations, application agents and bindings, focuses, project connections, coding-agent settings, jobs, events and approvals. Engine records, immutable imported evidence, artifacts and Git work areas remain in the checkout's ignored `.agentagon/` directory. Generated task context files are read projections, not independent mutable job state. Backups need both database and project artifacts.
+
+Use short transactions for metadata; keep model calls, provider requests, Git operations and measurements outside them. Job acceptance binds the raw submission before derived defaults, so retries return the same task even when surrounding settings change. Persist native session and request identities; uncertain external execution must be reconciled rather than duplicated. A database transaction does not make external effects exactly once.
+
+No legacy app-state import, compatibility writer or migration layer is required. Project connections are explicit and are not synthesized from CLI trace settings. The app still uses user/project configuration precedence for execution settings. Provider credentials automatically prefer a supported OS store, with session memory as the fallback; retain only references in app metadata. CLI and execution credentials remain environment references. Changing future defaults does not rewrite a run's frozen settings. See [configuration](../settings.md) and [app state](../app.md#keep-or-resume-work).
+
+## Provider imports are immutable inputs
+
+Braintrust, LangSmith and Langfuse connections read explicitly selected traces and datasets. Saving a connection does not authorize background collection, instrumentation or provider write-back. Retain selection bounds, provider/version identity, acquisition provenance and completeness; partial pagination or missing trace children remain visible limits.
+
+Imported datasets start as drafts. Preserve structured inputs, conversation ordering and reference provenance; observed production outputs do not become ground truth. Missing expectations need an accepted correctness rule. Refresh creates a new snapshot, and changing benchmark data requires a new evaluator version. Private imports remain outside delivered source and cannot bypass execution, sensitivity or independent-review gates. See [the import workflow](../app.md#connect-traces-and-datasets).
+
+Trace-derived drafts and grouped development/final splits retain provenance and related-case boundaries. Development inputs can be materialized for evaluator preparation. Final use requires explicit handling and a separately reviewed evaluator; a split alone is not a sealed holdout or evidence of independent generalization.
 
 ## Dashboard covers one checkout
 
-The dashboard reads the same saved records as CLI status and reports. Its checkout scope makes the relationship between source, findings and experiments explicit. Opening it shows existing progress without starting an audit or model service.
+The legacy `agentagon dashboard` viewer reads the same saved records as CLI status and reports. Its checkout scope makes the relationship between source, findings and experiments explicit. Opening it shows existing progress without starting an audit or model service. The multi-project web app routes each selected project's reads to those same checkout records.
 
-Init, Audit, Eval and Fix open it automatically through the [shared dashboard lifecycle](../../skills/dashboard/references/lifecycle.md). The coding host owns the background process, browser tab and active selection, reusing them within a session. Direct CLI operations and standalone Setup do not implicitly launch a browser. An unavailable dashboard does not block the evidence workflow.
+The optional skills open the viewer through the [shared dashboard lifecycle](../../skills/dashboard/references/lifecycle.md). In that path, the coding host owns its background process, browser tab and active selection. Named workflow subcommands and standalone Setup do not implicitly launch a browser; bare `agentagon` and `agentagon app` explicitly launch the primary app. An unavailable viewer does not block the evidence workflow.
 
-Controls are opt-in and use the CLI's validated operations. Work requiring the coding agent remains queued until the active host acknowledges it. See [inspection](../audit.md#review-resume-and-inspect) and [controls](../reference/fix.md#dashboard-controls-and-delivery).
+Legacy viewer controls remain opt-in and use the CLI's validated operations. Its host work remains queued until the active coding host acknowledges it. The primary app has its own explicit task actions and exact-origin/session validation. See [inspection](../audit.md#review-resume-and-inspect) and [legacy controls](../reference/fix.md#dashboard-controls-and-delivery).
 
 ## Intelligence requests require explicit consent
 
@@ -58,7 +92,7 @@ Only an explicit Agentagon `full_access` setting skips approval prompts. It neve
 
 The host authors candidates and supplies independent reviews; the engine freezes execution inputs, records measurements and applies constraints. Freezing the benchmark before the baseline keeps comparisons consistent. Search policies and retained lessons guide exploration without replacing execution or review.
 
-The accepted quality score ranks candidates while required behaviors and limits remain separate pass/fail gates. Select the highest-scoring independently verified candidate that establishes improvement over baseline and satisfies every gate; preserve user choice among verified alternatives. Report the winner and next two qualifying alternatives when available. Retain the baseline if improvement is not established. Failed and dominated experiments remain useful evidence. Historical policy-driven runs retain their original records and explicit selection behavior.
+The accepted quality score ranks candidates while required behaviors and limits remain separate pass/fail gates. Select the highest-scoring independently verified candidate that establishes improvement over baseline and satisfies every gate; preserve user choice among the configured number of verified alternatives. Retain the baseline if improvement is not established. Failed and dominated experiments remain useful evidence.
 
 Selection, publication, merging and deployment are separate actions. A selected branch is reviewable before publication, and changes introduced during delivery need fresh verification. See [measured fixes](../fix.md), [evaluation preparation](../eval.md) and the [shipping procedure](../../skills/fix/references/delivery.md).
 
@@ -76,9 +110,13 @@ Recent traces form a separate population from fixed benchmark cases. Refresh onl
 
 Omni uses Agentagon's [optimizer runtime](../../src/agentagon/experiments/runtime.py) to compose GEPA search with native-host AutoResearch and Meta-Harness adapters. Host/model overrides affect authoring, independently of judge settings. One durable request/reply bridge binds proposals, grading and reviews to role, source, evaluator and scope; unavailable host work stays pending. The finite coordinator resumes recorded work without silently switching hosts.
 
+GEPA uses its upstream default proposer through a callable `reflection_lm`; Agentagon supplies no custom candidate proposer. Forward the fully assembled upstream text prompt exactly, then return the raw final text for upstream extraction. A dedicated native session serves each logical reflection request and resumes only that saved identity. Keep raw terminal artifacts separate from sanitized browser progress. Persist completed responses for replay and reject unsupported prompt types rather than flattening them. Candidate validation, execution budgets and independent reviews remain Agentagon's responsibility. AutoResearch and Meta-Harness retain their own proposal contracts.
+
+Accepted evidence analysis is frozen before baseline execution and supplied as upstream optimization background. Completed, consented Intelligence receipts may extend this background before configuration freezes; that operation performs no lookup. GEPA batch sampling uses its upstream proposer and ordered prompt transport. Independent candidate work runs in isolated worktrees; short admission and state-update locks must not serialize whole evaluations.
+
 Agentagon owns attempt history, trial admission, metric validity, gates, independent review and selection. Starting Fix allocations are 20% preparation/baseline, 60% optimization and 20% final verification. Check minimum feasibility first, move unused preparation capacity to optimization and protect verification capacity. Every actual execution, retry and final trial counts; host work counts against applicable time/cost limits. Never invent subscription prices or expand the overall limit automatically.
 
-The starting Omni schedule spends three quarters of optimization capacity on exploration, evenly divided across the three engines, then one quarter on fresh GEPA refinement. Respect actual host concurrency. Advanced standalone engines remain available; old search policies remain compatibility features rather than primary journey choices.
+The starting Omni schedule spends three quarters of optimization capacity on exploration, evenly divided across the three engines, then one quarter on fresh GEPA refinement. Respect actual host concurrency. Advanced standalone engines remain additional options.
 
 ## Delivery preserves the evaluator/application relationship
 

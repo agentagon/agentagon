@@ -16,11 +16,12 @@ from agentagon.experiments.runtime import (
     BudgetTracker,
     EvalServer,
     GepaEngine,
-    OptimizeAnythingConfig,
     Task,
 )
 from agentagon.installation import SKILLS
 from agentagon.usage import track
+from agentagon.webapp.server import APP_ASSETS
+from agentagon.webapp.workflows import REFERENCES
 
 assert Path(agentagon.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()), (
     "Run this check with the wheel installed in a fresh virtual environment."
@@ -47,28 +48,22 @@ assert catalog()
 assert resource_path("skills/eval/references/authoring.md").is_file()
 for suffix in ("py", "cjs"):
     assert resource_path(f"skills/eval/helpers/agentagon_events.{suffix}").read_bytes()
-for name, _ in ASSETS.values():
+for name, _ in {**ASSETS, **APP_ASSETS}.values():
     assert files("agentagon").joinpath("dashboard_assets", name).read_bytes()
+for references in REFERENCES.values():
+    for reference in references:
+        assert resource_path(reference).read_bytes()
 assert callable(track)
 with tempfile.TemporaryDirectory(prefix="agentagon-gepa-check-") as directory:
     server = EvalServer(
-        Task("installed-wheel", "0", "increase score"),
+        Task("0", "increase score"),
         lambda candidate, example, **kwargs: (float(candidate), {}),
         BudgetTracker(4),
     )
     engine = GepaEngine(
-        OptimizeAnythingConfig(
-            run_dir=directory,
-            engine_config={
-                "engine": {"parallel": False, "use_cloudpickle": False, "seed": 0},
-                "reflection": {
-                    "reflection_lm": None,
-                    "custom_candidate_proposer": lambda candidate, data, keys, **kwargs: {
-                        key: "1" for key in keys
-                    },
-                },
-            },
-        )
+        directory,
+        engine={"parallel": False, "use_cloudpickle": False, "seed": 0},
+        reflection={"reflection_lm": lambda prompt: "```\n1\n```"},
     )
     result = engine.run(server.task, server)
     assert result.best_candidate == "1" and result.best_score == 1.0

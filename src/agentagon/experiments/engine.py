@@ -9,6 +9,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -150,6 +151,13 @@ def _candidate(data: dict, candidate_id: str | None) -> dict:
     return data["candidates"][candidate_id]
 
 
+def _baseline_checks(data: dict, candidate: dict) -> bool:
+    return (
+        candidate["candidate_id"] == data["baseline_id"]
+        and data.get("measurement_role") != "finalist"
+    )
+
+
 def _owned(workspace: Workspace, data: dict, relative: str) -> Path:
     path = workspace.checked(workspace.root / relative)
     if not path.resolve().is_relative_to(run_dir(workspace, data["run_id"]).resolve()):
@@ -217,6 +225,8 @@ def start(
     expected_revision: str | None = None,
     budget_id: str | None = None,
     execution_profile: dict | None = None,
+    source_revision: str | None = None,
+    measurement_role: str | None = None,
 ) -> dict:
     workspace.require_initialized()
     spec = copy.deepcopy(spec)
@@ -246,6 +256,14 @@ def start(
         raise AuditError("benchmark resource requirements exceed the saved resource capacity")
     policy = search.validate_policy(profile.get("search", {}), spec)
     revision = checkouts.clean_revision(workspace.root)
+    if source_revision is not None:
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", source_revision):
+            raise AuditError("measurement source must be an exact committed revision")
+        if checkouts.git(workspace.root, "cat-file", "-t", source_revision) != "commit":
+            raise AuditError("measurement source must be a commit")
+        revision = source_revision
+    if measurement_role not in {None, "reference", "finalist"}:
+        raise AuditError("invalid isolated measurement role")
     if expected_revision is not None and revision != expected_revision:
         raise AuditError("source changed since this measurement was requested")
     from agentagon.storage.issues import list_issues
@@ -265,6 +283,7 @@ def start(
                 saved["spec"] != spec
                 or saved["profile"] != profile
                 or saved["origin_revision"] != revision
+                or saved.get("measurement_role") != measurement_role
             ):
                 raise AuditError("measurement identity already belongs to different inputs")
             return status(workspace, run_id, baseline_id)
@@ -326,6 +345,7 @@ def start(
             "continuations": [],
             "cleanup_pending": False,
             **({"budget_id": budget_id} if budget_id else {}),
+            **({"measurement_role": measurement_role} if measurement_role else {}),
         }
         search.set_policy(data, policy)
         _save(workspace, data)
@@ -612,7 +632,7 @@ def _request(data: dict, candidate: dict, trial_id: str, repetition: int) -> dic
             + timedelta(seconds=data["limits"]["max_elapsed_seconds"])
         ).isoformat(),
         "commands": evaluation.commands(
-            data["profile"], data["spec"], baseline=candidate["candidate_id"] == data["baseline_id"]
+            data["profile"], data["spec"], baseline=_baseline_checks(data, candidate)
         ),
     }
 
@@ -706,7 +726,7 @@ def _validate_result(
         )
         or request["commands"]
         != evaluation.commands(
-            data["profile"], data["spec"], baseline=candidate["candidate_id"] == data["baseline_id"]
+            data["profile"], data["spec"], baseline=_baseline_checks(data, candidate)
         )
         or type(trial["repetition"]) is not int
         or not 0 <= trial["repetition"] < data["spec"]["repetitions"]
@@ -753,9 +773,7 @@ def _validate_result(
         else:
             definition = definitions[expected["id"]]
             wanted = (
-                definition["baseline_expected"]
-                if candidate["candidate_id"] == data["baseline_id"]
-                else "pass"
+                definition["baseline_expected"] if _baseline_checks(data, candidate) else "pass"
             )
             # Deliberate assertion failures use 1. Usage, collection and signal failures
             # must not establish reproduction (for example, pytest exits 2 through 5).
@@ -995,9 +1013,11 @@ def _accept_review(workspace: Workspace, data: dict, candidate: dict, review: di
     candidate["state"] = "verified" if passing else "rejected"
 
 
-def _retry_cleanup(workspace: Workspace, run_id: str) -> None:
+def _retry_cleanup(workspace: Workspace, run_id: str, candidate_id: str | None = None) -> None:
     data = load_run(workspace, run_id)
     for candidate in data["candidates"].values():
+        if candidate_id is not None and candidate["candidate_id"] != candidate_id:
+            continue
         for trial in candidate["trials"]:
             if not trial.get("cleanup_pending") or trial["state"] in {"running", "interrupted"}:
                 continue
@@ -1034,7 +1054,7 @@ def run(
     data = load_run(workspace, run_id)
     candidate_id = _candidate(data, candidate_id)["candidate_id"]
     with _driver(workspace, run_id, candidate_id):
-        _retry_cleanup(workspace, run_id)
+        _retry_cleanup(workspace, run_id, candidate_id)
         with locked(workspace, run_id):
             data = load_run(workspace, run_id)
             _continue(data, continue_run, limits)
@@ -1250,6 +1270,10 @@ def _select_locked(workspace: Workspace, data: dict, candidate_id: str) -> None:
     run_id = data["run_id"]
     candidate = _candidate(data, candidate_id)
     _verified_evidence(workspace, data, candidate)
+    if data.get("suite"):
+        from agentagon.experiments import suites
+
+        suites.verify_selection(workspace, run_id, candidate_id)
     if data.get("optimizer_configured") and not candidate.get("verification_of"):
         raise AuditError("optimizer selection requires reserved final verification")
     if data["spec"].get("scoring"):
@@ -1295,20 +1319,36 @@ def select_best(workspace: Workspace, run_id: str) -> dict:
         if not data["spec"].get("scoring"):
             raise AuditError("automatic selection requires agreed scoring")
         ranked = qualifying(data)
+        finalist_count = 3
         if data.get("optimizer_configured"):
+            from agentagon.experiments import optimize_run
+
+            finalist_count = optimize_run.status(workspace, run_id)["config"]["finalist_count"]
             ranked = [
                 entry
                 for entry in ranked
                 if data["candidates"][entry["candidate_id"]].get("verification_of")
             ]
-        for entry in ranked[:3]:
+        if data.get("suite"):
+            from agentagon.experiments import suites
+
+            finalists = suites.status(workspace, run_id)["finalists"]
+            ranked = [
+                entry
+                for entry in ranked
+                if finalists.get(entry["candidate_id"], {}).get("state") == "completed"
+            ]
+            for entry in ranked:
+                suites.verify_selection(workspace, run_id, entry["candidate_id"])
+        ranked = ranked[:finalist_count]
+        for entry in ranked:
             _verified_evidence(workspace, data, data["candidates"][entry["candidate_id"]])
         if ranked:
             _select_locked(workspace, data, ranked[0]["candidate_id"])
         return {
             "run_id": run_id,
             "winner": ranked[0] if ranked else None,
-            "alternatives": ranked[1:3],
+            "alternatives": ranked[1:],
             "retained_baseline": not ranked,
         }
 

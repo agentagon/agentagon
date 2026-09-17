@@ -19,7 +19,7 @@ def test_concurrent_requests_cannot_exceed_stage_allowance():
         calls.append(candidate)
         return float(candidate), {"candidate": candidate}
 
-    server = EvalServer(Task("check", "0", "increase score"), evaluate, BudgetTracker(3))
+    server = EvalServer(Task("0", "increase score"), evaluate, BudgetTracker(3))
 
     def attempt(candidate):
         try:
@@ -42,7 +42,7 @@ def test_failed_evaluation_consumes_attempt_without_becoming_a_zero_score():
             raise RuntimeError("execution failed")
         return -1.0, {}
 
-    server = EvalServer(Task("check", "seed", "increase score"), evaluate, BudgetTracker(2))
+    server = EvalServer(Task("seed", "increase score"), evaluate, BudgetTracker(2))
     server.evaluate("measured")
     with pytest.raises(RuntimeError, match="execution failed"):
         server.evaluate("failed")
