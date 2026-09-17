@@ -1,10 +1,12 @@
 """Agent identity, focused evidence and retained measurement history."""
 
 import copy
+import json
 import uuid
 
 import pytest
 from test_baselines import complete, frozen
+from test_webapp import connection as save_connection
 from test_webapp import project, running
 
 from agentagon.core.records import AuditError
@@ -32,6 +34,76 @@ def focus(app, saved, item, category="correctness"):
     )
 
 
+def test_workspace_resource_contracts_and_unified_task_submission(app, tmp_path):
+    saved = project(app, tmp_path)
+    confirmed = agent(app, saved, description="Resolve support questions")
+    goal = app.save_goal(
+        saved["id"],
+        confirmed["id"],
+        {
+            "category": "correctness",
+            "objective": "Create exactly one correct ticket.",
+            "ideal_behavior": "Retries never create duplicates.",
+        },
+    )
+
+    projected = app.project_agents(saved["id"])
+    assert projected["confirmed"][0]["responsibility"] == "Resolve support questions"
+    assert "description" not in projected["confirmed"][0]
+    assert app.goals(saved["id"], confirmed["id"])["goals"] == [goal]
+    assert {item["workflow"] for item in app.skills()["skills"]} == {
+        "design",
+        "eval",
+        "baseline",
+        "fix",
+        "audit",
+    }
+    assert {item["id"] for item in app.connector_types()["connector_types"]} == {
+        "braintrust",
+        "langsmith",
+        "langfuse",
+    }
+    assert app.workflow_readiness(saved["id"], "design", confirmed["id"], goal["id"]) == {
+        "workflow": "design",
+        "workflow_version": 1,
+        "ready": True,
+        "blockers": [],
+        "next_action": "start",
+    }
+
+    app.jobs.stopping = True
+    command = {
+        "operation_id": str(uuid.uuid4()),
+        "workflow": "design",
+        "agent_id": confirmed["id"],
+        "goal_id": goal["id"],
+        "options": {},
+    }
+    submitted = app.submit_task(saved["id"], command)
+    assert app.submit_task(saved["id"], command)["id"] == submitted["id"]
+    assert submitted["workflow_version"] == 1
+    summary = app.tasks(saved["id"], {"agent_id": confirmed["id"], "goal_id": goal["id"]})
+    assert [item["id"] for item in summary["tasks"]] == [submitted["id"]]
+    detail = app.task(saved["id"], submitted["id"])
+    assert detail["workflow"] == "design"
+    assert detail["agent_name"] == "Support"
+    assert detail["goal_name"] == "Task success and correctness"
+
+    audit = app.submit_task(
+        saved["id"],
+        {
+            "operation_id": str(uuid.uuid4()),
+            "workflow": "audit",
+            "agent_id": confirmed["id"],
+            "options": {},
+        },
+    )
+    assert audit["focus_id"] is None
+    assert [item["id"] for item in app.tasks(saved["id"], {"workflow": "audit"})["tasks"]] == [
+        audit["id"]
+    ]
+
+
 def test_discovery_is_explicit_bounded_and_preserves_confirmed_identity(app, tmp_path):
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root
@@ -42,6 +114,7 @@ def test_discovery_is_explicit_bounded_and_preserves_confirmed_identity(app, tmp
     discovered = app.catalog.discover(saved["id"])
     assert len(discovered["agents"]) == 2
     suggested = discovered["agents"][0]
+    assert suggested["description"] == ""
     confirmed = app.save_application_agent(
         saved["id"], {"status": "confirmed", "name": "Customer support"}, suggested["id"]
     )
@@ -54,6 +127,165 @@ def test_discovery_is_explicit_bounded_and_preserves_confirmed_identity(app, tmp
         assert app2.catalog.agent(saved["id"], confirmed["id"])["name"] == "Customer support"
     finally:
         app2.close()
+
+
+def test_discovery_excludes_non_application_sources_and_retires_old_suggestions(app, tmp_path):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    (root / "app.py").write_text('from agents import Agent\nsupport = Agent(name="Support")\n')
+    excluded = [
+        "docs/archive/reference.py",
+        "examples/demo.py",
+        "fixtures/agent.py",
+        "tests/test_agent.py",
+        "vendor/package/agent.py",
+    ]
+    for path in excluded:
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('assistant = Agent(name="Assistant")\n')
+    legacy = app.catalog.save_agent(
+        saved["id"],
+        {
+            "name": "Legacy example",
+            "code_scopes": ["examples/demo.py"],
+            "status": "suggested",
+        },
+        suggestion={"discovery_key": "legacy-example"},
+    )
+    assert app.catalog.agents(saved["id"]) == []
+
+    discovered = app.catalog.discover(saved["id"])
+
+    assert [agent["name"] for agent in discovered["agents"]] == ["Support"]
+    assert discovered["scanned_files"] == 1
+    assert app.catalog.agent(saved["id"], legacy["id"])["status"] == "suggested"
+
+
+def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
+    app, tmp_path, monkeypatch
+):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    (root / "app.py").write_text(
+        'from agents import Agent\nsupport = Agent(name="Support")\nresearch = Agent(name="Research")\n'
+    )
+    (root / "helper.py").write_text('from agents import Agent\nhelper = Agent(name="Helper")\n')
+    calls = []
+
+    def execute(request, *_args):
+        calls.append(request)
+        candidates = json.loads(request["prompt"].split("Candidates: ", 1)[1])
+        return {
+            "state": "completed",
+            "raw_final_text": json.dumps(
+                {
+                    "candidates": [
+                        {
+                            **candidate,
+                            "name": "Customer support"
+                            if candidate["name"] == "Support"
+                            else candidate["name"],
+                            "keep": candidate["name"] != "Helper",
+                        }
+                        for candidate in candidates
+                    ]
+                }
+            ),
+        }
+
+    app.jobs.execute = execute
+    monkeypatch.setattr(
+        app,
+        "agents",
+        lambda: {
+            "agents": [{"id": "codex", "available": True, "authenticated": True, "name": "Codex"}],
+            "settings": {},
+        },
+    )
+
+    discovered = app.discover_application_agents(
+        saved["id"],
+        {
+            "preferences": {
+                "coding_review": True,
+                "trace_metadata": False,
+                "trace_cap": 100,
+                "trace_connection_id": None,
+            }
+        },
+    )
+
+    assert discovered["preferences"]["seen"] is True
+    assert discovered["enrichment"]["coding_review"] == {"reviewed": 3, "kept": 2}
+    assert [agent["name"] for agent in discovered["agents"]] == [
+        "Customer support",
+        "Research",
+    ]
+    assert calls[0]["sandbox"] == "read-only"
+    assert calls[0]["response_mode"] == "raw-final"
+
+    discovered_again = app.discover_application_agents(saved["id"], {})
+    assert [agent["name"] for agent in discovered_again["agents"]] == [
+        "Customer support",
+        "Research",
+    ]
+    assert discovered_again["enrichment"]["coding_review"] == {"reviewed": 2, "kept": 2}
+
+
+def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    (root / "support_router.py").write_text(
+        'from agents import Agent\nsupport = Agent(name="Support Router")\n'
+    )
+    selections = []
+
+    class Provider:
+        def __init__(self, *_args):
+            pass
+
+        def test(self):
+            return {
+                "status": "connected",
+                "projects": [{"id": "remote", "name": "Production traces"}],
+            }
+
+        def trace_metadata(self, selection):
+            selections.append(selection)
+            return {
+                "items": [
+                    {
+                        "trace_id": "trace-1",
+                        "name": "Support Router",
+                        "metadata": {"environment": "production"},
+                    }
+                ]
+            }
+
+    app.provider_factory = Provider
+    source = save_connection(app, saved["id"])
+    app.test_connection(saved["id"], source["id"])
+
+    discovered = app.discover_application_agents(
+        saved["id"],
+        {
+            "preferences": {
+                "coding_review": False,
+                "trace_metadata": True,
+                "trace_cap": 100,
+                "trace_connection_id": source["id"],
+            }
+        },
+    )
+
+    assert discovered["enrichment"]["trace_metadata"] == {"sampled": 1, "matched": 1}
+    assert selections[0]["cap"] == 100
+    assert discovered["agents"][0]["trace_selector"] == {}
+    trace_evidence = next(
+        item for item in discovered["agents"][0]["evidence"] if item["kind"] == "trace_metadata"
+    )
+    assert trace_evidence["trace_id"] == "trace-1"
 
 
 def test_agents_and_focuses_do_not_cross_projects_or_agent_boundaries(app, tmp_path):
@@ -542,7 +774,7 @@ def test_discovery_excludes_non_application_paths_at_any_depth_and_saved_suggest
     assert {item["id"] for item in result["agents"]} == {manual["id"], confirmed["id"]}
     assert result["discovered"] == 0
     assert app.catalog.agent(saved["id"], automatic["id"])["status"] == "suggested"
-    assert "excluded" in " ".join(result["limitations"])
+    assert "skipped" in " ".join(result["limitations"])
 
 
 def test_discovery_is_bounded_and_skips_generated_symlink_and_local_framework_shadow(

@@ -1,6 +1,7 @@
 """Local app integration: safe routing, imports, settings and launcher compatibility."""
 
 import json
+import os
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -459,7 +460,7 @@ def test_cli_trace_settings_do_not_create_app_connections(app, tmp_path):
     assert Config().effective(workspace.root)["traces"]["source"] == "braintrust"
 
 
-def test_settings_preserve_scope_and_reject_stale_revision(app, tmp_path):
+def test_settings_preserve_scope_direct_intelligence_key_and_reject_stale_revision(app, tmp_path):
     first, second = project(app, tmp_path), project(app, tmp_path, "other")
     original = app.settings(first["id"])
     app.update_settings(
@@ -471,6 +472,20 @@ def test_settings_preserve_scope_and_reject_stale_revision(app, tmp_path):
         },
     )
     assert app.settings(second["id"])["settings"]["traces"]["state"] == "unset"
+    updated = app.update_settings(
+        first["id"],
+        {
+            "scope": "project",
+            "values": {"intelligence.mode": "ask"},
+            "intelligence_api_key": "private-intelligence-key",
+        },
+    )
+    assert updated["intelligence_key_configured"] is True
+    reference = app._intelligence_refs[first["id"]]
+    assert app.credentials.resolve(reference) == "private-intelligence-key"
+    assert "private-intelligence-key" not in os.environ.values()
+    assert app.settings(second["id"])["intelligence_key_configured"] is False
+    assert "private-intelligence-key" not in json.dumps(updated)
     with pytest.raises(AuditError, match="changed"):
         app.update_settings(
             first["id"],
@@ -484,6 +499,10 @@ def test_http_bootstrap_origin_host_and_project_routing(app, tmp_path):
         root = client.get("/")
         assert root.status_code == 200 and "Agentagon" in root.text
         assert "frame-ancestors 'none'" in root.headers["content-security-policy"]
+        deep = client.get(f"/projects/{saved['id']}/skills")
+        assert deep.status_code == 200 and 'id="root"' in deep.text
+        assert len(client.get("/api/skills").json()["skills"]) == 5
+        assert len(client.get("/api/connector-types").json()["connector_types"]) == 3
         assert client.get("/api/session").status_code == 403
         boot = client.get(
             "/api/session",

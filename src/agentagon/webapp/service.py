@@ -1,18 +1,20 @@
 """Application operations shared by the browser and local launcher."""
 
 import copy
+import json
 import os
 import re
 import subprocess
 import threading
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from agentagon.core.records import AuditError, digest, load_json, now
 from agentagon.dashboard import _audits, _detail, _run_detail, _run_summary, _runs, _summary
 from agentagon.storage.changes import git_bytes
-from agentagon.storage.config import Config
+from agentagon.storage.config import Config, credential
 from agentagon.storage.issues import list_issues
 from agentagon.telemetry.normalize import redact
 from agentagon.webapp import snapshots
@@ -38,6 +40,7 @@ class Application:
         self.jobs.verify_result = self.completed_job
         self.previews = {}
         self.connection_discoveries = {}
+        self._intelligence_refs = {}
         self.lock = threading.RLock()
         self.selected_project_id = None
 
@@ -60,6 +63,226 @@ class Application:
             "projects": [self.project_info(p) for p in self.state.read()["projects"].values()],
             "selected_project_id": self.selected_project_id,
         }
+
+    def skills(self):
+        from agentagon.webapp.resources import skill_definitions
+
+        return {"skills": skill_definitions()}
+
+    def connector_types(self):
+        from agentagon.webapp.resources import connector_types
+
+        return {"connector_types": connector_types()}
+
+    def assistants(self):
+        detected = self.agents()
+        return {
+            "assistants": [
+                {
+                    "id": item["id"],
+                    "name": item["name"],
+                    "available": item.get("available", False),
+                    "authenticated": item.get("authenticated"),
+                    "version": item.get("version"),
+                    "message": item.get("message"),
+                }
+                for item in detected["agents"]
+            ],
+            "defaults": detected["settings"],
+        }
+
+    def project_agents(self, project_id):
+        from agentagon.webapp.resources import agent_projection
+
+        agents = [agent_projection(item) for item in self.catalog.agents(project_id)]
+        return {
+            "agents": agents,
+            "confirmed": [item for item in agents if item["status"] == "confirmed"],
+            "suggestions": [item for item in agents if item["status"] != "confirmed"],
+        }
+
+    def project_agent(self, project_id, agent_id):
+        from agentagon.webapp.resources import agent_projection
+
+        return agent_projection(self.catalog.agent(project_id, agent_id))
+
+    def goals(self, project_id, agent_id):
+        from agentagon.webapp.resources import goal_projection
+
+        return {
+            "goals": [goal_projection(item) for item in self.catalog.focuses(project_id, agent_id)]
+        }
+
+    def goal(self, project_id, agent_id, goal_id):
+        from agentagon.webapp.resources import goal_projection
+
+        focus = self.catalog.focus(project_id, agent_id, goal_id)
+        result = goal_projection(focus)
+        result["readiness"] = self.catalog.measurement_status(project_id, agent_id, focus)
+        design = self.designs.get(project_id, agent_id, goal_id)
+        result["measurement_plan"] = design
+        return result
+
+    def save_goal(self, project_id, agent_id, payload):
+        translated = {
+            "category": payload.get("category", "custom"),
+            "goal": payload.get("objective"),
+            "target": payload.get("ideal_behavior"),
+            "source": payload.get("source", {"kind": "goal"}),
+        }
+        if translated["category"] == "custom":
+            translated["name"] = payload.get("name") or payload.get("objective")
+        return self.goal_projection(self.catalog.save_focus(project_id, agent_id, translated))
+
+    @staticmethod
+    def goal_projection(focus):
+        from agentagon.webapp.resources import goal_projection
+
+        return goal_projection(focus)
+
+    def tasks(self, project_id, filters=None):
+        from agentagon.webapp.resources import goal_projection, task_summary
+
+        filters = filters or {}
+        agents = {item["id"]: item for item in self.catalog.agents(project_id)}
+        goals = {
+            item["id"]: goal_projection(item)
+            for agent in agents.values()
+            for item in self.catalog.focuses(project_id, agent["id"])
+        }
+        records = sorted(
+            self.jobs.list(project_id),
+            key=lambda item: item.get("updated_at") or item.get("created_at", ""),
+            reverse=True,
+        )
+        for field, key in (
+            ("agent_id", "application_agent_id"),
+            ("goal_id", "focus_id"),
+            ("workflow", "kind"),
+            ("status", "state"),
+        ):
+            if filters.get(field):
+                records = [item for item in records if item.get(key) == filters[field]]
+        try:
+            offset = max(0, int(filters.get("cursor", 0)))
+            limit = min(100, max(1, int(filters.get("limit", 30))))
+        except (TypeError, ValueError) as exc:
+            raise AuditError("task pagination must use integer cursor and limit") from exc
+        page = records[offset : offset + limit]
+        next_cursor = offset + limit if offset + limit < len(records) else None
+        return {
+            "tasks": [task_summary(item, agents, goals) for item in page],
+            "next_cursor": str(next_cursor) if next_cursor is not None else None,
+        }
+
+    def task(self, project_id, task_id):
+        from agentagon.webapp.resources import goal_projection, task_detail
+
+        agents = {item["id"]: item for item in self.catalog.agents(project_id)}
+        goals = {
+            item["id"]: goal_projection(item)
+            for agent in agents.values()
+            for item in self.catalog.focuses(project_id, agent["id"])
+        }
+        return task_detail(self.jobs.get(project_id, task_id), agents, goals)
+
+    def workflow_readiness(self, project_id, workflow, agent_id=None, goal_id=None):
+        from agentagon.webapp.workflows import REGISTRY
+
+        definition = REGISTRY.get(workflow)
+        if definition is None:
+            raise AuditError("workflow not found")
+        blockers = []
+        agent = None
+        if not agent_id:
+            blockers.append({"code": "agent", "message": "Select an agent.", "action": "agent"})
+        else:
+            agent = self.catalog.agent(project_id, agent_id)
+            if agent["status"] != "confirmed":
+                blockers.append(
+                    {"code": "agent", "message": "Confirm this agent.", "action": "agent"}
+                )
+        focus = None
+        if definition["requires_goal"]:
+            if not goal_id:
+                blockers.append({"code": "goal", "message": "Select a goal.", "action": "goal"})
+            elif agent:
+                focus = self.catalog.focus(project_id, agent_id, goal_id)
+        if agent and workflow == "audit" and not agent["code_scopes"]:
+            blockers.append(
+                {
+                    "code": "evidence",
+                    "message": "Bind code or import matching traces.",
+                    "action": "evidence",
+                }
+            )
+        if agent and focus and workflow in {"eval", "baseline", "fix"}:
+            status = self.catalog.measurement_status(project_id, agent_id, focus)
+            requirement = (
+                "evaluation"
+                if workflow == "baseline"
+                else "baseline"
+                if workflow == "fix"
+                else None
+            )
+            if workflow == "eval" and not self.designs.accepted(project_id, agent_id, goal_id):
+                blockers.append(
+                    {
+                        "code": "plan",
+                        "message": "Accept the measurement plan.",
+                        "action": "define",
+                    }
+                )
+            elif requirement and not status[requirement]["ready"]:
+                blockers.append(
+                    {
+                        "code": requirement,
+                        "message": status[requirement]["reason"],
+                        "action": "measure",
+                    }
+                )
+        return {
+            "workflow": workflow,
+            "workflow_version": definition["version"],
+            "ready": not blockers,
+            "blockers": blockers,
+            "next_action": blockers[0]["action"] if blockers else "start",
+        }
+
+    def submit_task(self, project_id, payload):
+        from agentagon.webapp.workflows import REGISTRY
+
+        allowed = {
+            "operation_id",
+            "workflow",
+            "agent_id",
+            "goal_id",
+            "assistant",
+            "model",
+            "options",
+        }
+        if not isinstance(payload, dict) or set(payload) - allowed:
+            raise AuditError("unsupported task fields")
+        workflow = payload.get("workflow")
+        definition = REGISTRY.get(workflow)
+        if definition is None:
+            raise AuditError("choose a workflow")
+        readiness = self.workflow_readiness(
+            project_id, workflow, payload.get("agent_id"), payload.get("goal_id")
+        )
+        if not readiness["ready"]:
+            raise AuditError(readiness["blockers"][0]["message"])
+        body = {
+            "operation_id": payload.get("operation_id"),
+            "kind": workflow,
+            "workflow_version": definition["version"],
+            "application_agent_id": payload.get("agent_id"),
+            "focus_id": payload.get("goal_id"),
+            "agent": payload.get("assistant"),
+            "model": payload.get("model", ""),
+            "options": payload.get("options", {}),
+        }
+        return self.submit_job(project_id, body)
 
     def register(self, path):
         project = self.state.register(path)
@@ -114,6 +337,139 @@ class Application:
 
     def application_agents(self, project_id):
         return {"agents": self.catalog.agents(project_id)}
+
+    def discover_application_agents(self, project_id, payload):
+        if not isinstance(payload, dict) or set(payload) - {"preferences"}:
+            raise AuditError("unsupported discovery fields")
+        preferences = self.catalog.discovery_preferences(project_id)
+        if "preferences" in payload:
+            preferences = self.catalog.save_discovery_preferences(
+                project_id, payload["preferences"]
+            )
+        elif not preferences["seen"]:
+            preferences = self.catalog.save_discovery_preferences(project_id, {})
+        result = self.catalog.discover(project_id)
+        enrichment = {}
+        if preferences["coding_review"]:
+            try:
+                enrichment["coding_review"] = self._review_discovered_agents(project_id)
+            except AuditError as exc:
+                result["limitations"].append(f"Coding-agent review unavailable: {exc}")
+        if preferences["trace_metadata"]:
+            try:
+                enrichment["trace_metadata"] = self._match_recent_trace_metadata(
+                    project_id, preferences
+                )
+            except AuditError as exc:
+                result["limitations"].append(f"Trace metadata matching unavailable: {exc}")
+        result.update(
+            agents=self.catalog.agents(project_id),
+            preferences=self.catalog.discovery_preferences(project_id),
+            enrichment=enrichment,
+        )
+        return result
+
+    def _review_discovered_agents(self, project_id):
+        candidates = [
+            {"id": agent["id"], "file": agent["code_scopes"][0], "name": agent["name"]}
+            for agent in self.catalog.agents(project_id)
+            if agent["status"] == "suggested" and len(agent.get("code_scopes", [])) == 1
+        ]
+        if not candidates:
+            return {"reviewed": 0, "kept": 0}
+        if len(candidates) > 100:
+            raise AuditError("more than 100 suggestions require manual review")
+        settings = self.state.read()["agents"]
+        selected = settings.get("default_agent", "codex")
+        capability = next(
+            (item for item in self.agents()["agents"] if item["id"] == selected), None
+        )
+        if (
+            not capability
+            or not capability.get("available")
+            or capability.get("authenticated") is not True
+        ):
+            raise AuditError(f"{selected.title()} is not authenticated")
+        prompt = (
+            "Review the following deterministic application-agent suggestions in this repository. "
+            "Work read-only. Inspect only the listed files and their nearby imports. Return JSON only, "
+            "with exactly one item per input candidate and no new candidates: "
+            '{"candidates":[{"id":"agent_id","file":"path","name":"Agent name","keep":true}]}. '
+            "Keep a candidate only when the file defines an application agent entrypoint rather than a "
+            "library helper, test, example, documentation, or dependency. Preserve each id and file string "
+            "exactly. "
+            "Use a concise user-facing name. Candidates: "
+            + json.dumps(candidates, ensure_ascii=False)
+        )
+        request = {
+            "agent": selected,
+            "model": settings.get("models", {}).get(selected, ""),
+            "cwd": str(self.state.workspace(project_id).root),
+            "prompt": prompt,
+            "sandbox": "read-only",
+            "timeout_seconds": 120,
+            "response_mode": "raw-final",
+        }
+        executable = settings.get(selected + "_executable")
+        if executable:
+            request["executable"] = executable
+        if selected == "claude":
+            reference = settings.get("claude_api_key_ref") or (
+                "env:ANTHROPIC_API_KEY" if os.environ.get("ANTHROPIC_API_KEY") else None
+            )
+            if not reference:
+                raise AuditError("Claude credentials are unavailable")
+            request["api_key"] = self.credentials.resolve(reference)
+        outcome = self.jobs.execute(
+            request,
+            lambda _event: None,
+            lambda _question: {"decision": "decline"},
+            threading.Event(),
+        )
+        if not isinstance(outcome, dict) or outcome.get("state") != "completed":
+            raise AuditError("the coding-agent review did not complete")
+        text = outcome.get("raw_final_text")
+        if not isinstance(text, str):
+            raise AuditError("the coding-agent review returned no structured result")
+        try:
+            response = json.loads(text)
+        except json.JSONDecodeError:
+            raise AuditError("the coding-agent review returned invalid JSON") from None
+        if not isinstance(response, dict) or set(response) != {"candidates"}:
+            raise AuditError("the coding-agent review returned an invalid result")
+        return self.catalog.apply_coding_review(project_id, response["candidates"])
+
+    def _match_recent_trace_metadata(self, project_id, preferences):
+        connection_id = preferences.get("trace_connection_id")
+        connection = self.connection(connection_id, project_id) if connection_id else None
+        if connection is None:
+            available = sorted(
+                (
+                    item
+                    for item in self.state.read()["connections"].values()
+                    if item.get("project_id") == project_id
+                    and item.get("status") == "connected"
+                    and item.get("project")
+                ),
+                key=lambda item: item["id"],
+            )
+            connection = available[0] if available else None
+        if (
+            connection is None
+            or connection.get("status") != "connected"
+            or not connection.get("project")
+        ):
+            raise AuditError("choose a tested trace connection with a provider project")
+        end = datetime.now(UTC)
+        selection = {
+            "project": connection["project"],
+            "start": (end - timedelta(days=7)).isoformat(),
+            "end": end.isoformat(),
+            "cap": preferences["trace_cap"],
+            "filters": {},
+        }
+        sample = self.provider_factory(connection, self.credentials).trace_metadata(selection)
+        return self.catalog.apply_trace_metadata(project_id, connection, sample.get("items", []))
 
     def save_application_agent(self, project_id, payload, agent_id=None):
         selector = payload.get("trace_selector", {})
@@ -207,12 +563,17 @@ class Application:
         payload = copy.deepcopy(payload)
         agent_id, focus_id = payload.get("application_agent_id"), payload.get("focus_id")
         if not agent_id:
-            raise AuditError("select an application agent and focus before starting this workflow")
+            raise AuditError("select an application agent before starting this workflow")
         with self.lock:
             agent = self.catalog.agent(project_id, agent_id)
             if agent["status"] != "confirmed":
                 raise AuditError("confirm this application agent before starting work")
-            focus = self.catalog.focus(project_id, agent_id, focus_id)
+            if focus_id:
+                focus = self.catalog.focus(project_id, agent_id, focus_id)
+            elif payload.get("kind") == "audit":
+                focus = None
+            else:
+                raise AuditError("select a goal before starting this workflow")
             options = payload.setdefault("options", {})
             if not isinstance(options, dict):
                 raise AuditError("workflow options must be an object")
@@ -225,20 +586,42 @@ class Application:
                 "design_context",
             }:
                 raise AuditError("workflow evidence bindings are prepared by the application")
-            payload["goal"] = payload.get("goal") or focus["goal"]
+            payload["goal"] = payload.get("goal") or (
+                focus["goal"] if focus else f"Audit {agent['name']}"
+            )
             scopes = options.get("code_scopes")
             if scopes and scopes != agent["code_scopes"]:
                 raise AuditError("update the agent binding before changing its audit code scope")
             options["code_scopes"] = agent["code_scopes"]
             for key in ("issue_id", "audit_id"):
-                if focus["source"].get(key):
+                if focus and focus["source"].get(key):
                     options.setdefault(key, focus["source"][key])
             self.catalog.validate_evidence_reference(project_id, agent_id, options)
-            plan = self.catalog.investigation(project_id, agent_id, focus_id, options)
+            if focus:
+                plan = self.catalog.investigation(project_id, agent_id, focus_id, options)
+            else:
+                plan = {
+                    "version": 1,
+                    "agent_id": agent_id,
+                    "binding_version": agent["binding_version"],
+                    "binding_digest": agent["binding_digest"],
+                    "focus_id": None,
+                    "focus_version": None,
+                    "goal": payload["goal"],
+                    "source": {"kind": "agent"},
+                    "code_scopes": agent["code_scopes"],
+                    "trace_selector": agent["trace_selector"],
+                    "trace_snapshot_id": options.get("trace_snapshot_id"),
+                    "trace_digest": None,
+                    "trace_cap": None,
+                    "rubric": "audit-v1",
+                    "limits": ["Audit covers the selected agent and bound evidence."],
+                }
+                plan["digest"] = digest(plan)
             options["investigation_plan"] = plan
             accepted = (
                 self.designs.accepted(project_id, agent_id, focus_id)
-                if payload["kind"] in {"eval", "baseline", "fix"}
+                if focus and payload["kind"] in {"eval", "baseline", "fix"}
                 else None
             )
             if payload["kind"] == "design":
@@ -281,7 +664,7 @@ class Application:
                         "Bind code before including application source in this trace-only agent's audit."
                     )
                 options.update(mode="traces", scope="traces")
-            measurement = focus.get("measurement") or {}
+            measurement = (focus.get("measurement") or {}) if focus else {}
             accepted_evaluator = accepted["evaluation"].get("evaluation_id") if accepted else None
             if (
                 payload["kind"] in {"baseline", "fix"}
@@ -423,7 +806,7 @@ class Application:
 
     def remove_project(self, project_id):
         with self.lock, self.jobs.condition:
-            self.state.project(project_id)
+            self.state.workspace(project_id)
             if any(key[0] == project_id for key in self.jobs.active):
                 raise AuditError("pause or cancel this project's tasks before removing it")
             if any(j["state"] in ACTIVE for j in self.jobs.list(project_id)):
@@ -440,6 +823,9 @@ class Application:
             for connection in connections:
                 for reference in connection["credentials"].values():
                     self.credentials.delete(reference)
+            reference = self._intelligence_refs.pop(project_id, None)
+            if reference:
+                self.credentials.delete(reference)
             return result
 
     def overview(self, project_id):
@@ -482,6 +868,7 @@ class Application:
             "datasets": [s for s in imported if s["kind"] == "dataset"],
             "dataset_splits": self.state.db.list_records(project_id, "dataset_splits"),
             "traces": [s for s in imported if s["kind"] == "traces"],
+            "discovery": self.catalog.discovery_preferences(project_id),
             "settings": self.settings(project_id),
         }
 
@@ -661,10 +1048,14 @@ class Application:
         workspace = self.state.workspace(project_id)
         config = Config()
         effective = config.effective(workspace.root)
+        intelligence_reference = self._intelligence_refs.get(project_id)
         return {
             "settings": effective,
             "profiles": effective["profiles"],
-            "revision": digest(effective),
+            "intelligence_key_configured": bool(
+                intelligence_reference or credential(effective, "intelligence")
+            ),
+            "revision": digest([effective, intelligence_reference]),
             "scope": "project",
         }
 
@@ -802,8 +1193,20 @@ class Application:
             "profile_name",
             "profile",
             "expected_revision",
+            "intelligence_api_key",
         }:
             raise AuditError("unsupported settings fields")
+        intelligence_key = payload.get("intelligence_api_key")
+        if intelligence_key is not None:
+            if scope != "project":
+                raise AuditError("Intelligence API keys must be configured for one project")
+            if (
+                not isinstance(intelligence_key, str)
+                or not intelligence_key.strip()
+                or len(intelligence_key) > 16384
+            ):
+                raise AuditError("Intelligence API key must be a nonempty string")
+            intelligence_key = intelligence_key.strip()
         with self.lock:
             if (
                 payload.get("expected_revision")
@@ -815,14 +1218,27 @@ class Application:
                     scope, payload["profile_name"], payload.get("profile"), workspace.root
                 )
             else:
-                values, unset = payload.get("values", {}), payload.get("unset", [])
+                values, unset = copy.deepcopy(payload.get("values", {})), payload.get("unset", [])
                 if (
                     not isinstance(values, dict)
                     or not isinstance(unset, list)
                     or not all(isinstance(k, str) for k in unset)
                 ):
                     raise AuditError("settings require values and an unset list")
-                Config().update(scope, workspace.root, values, tuple(unset))
+                reference = None
+                if intelligence_key:
+                    reference = self.credentials.set(intelligence_key, "session")
+                try:
+                    Config().update(scope, workspace.root, values, tuple(unset))
+                except Exception:
+                    if reference:
+                        self.credentials.delete(reference)
+                    raise
+                if reference:
+                    previous_reference = self._intelligence_refs.get(project_id)
+                    self._intelligence_refs[project_id] = reference
+                    if previous_reference:
+                        self.credentials.delete(previous_reference)
         return self.settings(project_id)
 
     def connection(self, connection_id, project_id):
@@ -1232,3 +1648,6 @@ class Application:
         with self.lock:
             for discovery_id in list(self.connection_discoveries):
                 self._discard_discovery(discovery_id)
+        for reference in self._intelligence_refs.values():
+            self.credentials.delete(reference)
+        self._intelligence_refs.clear()

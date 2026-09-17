@@ -59,7 +59,7 @@ Removing an override exposes the next applicable value. Re-read `agentagon setup
 | `intelligence.access_presented` | `true` or `false`; user scope. Remembers whether optional access was discussed. |
 | `telemetry.enabled` | `true` or `false`; user scope. Projects cannot override it. |
 
-Secrets belong in environment variables or a credential store, not configuration JSON, command arguments, or chat. Save only the variable name. The coding host and the process running the CLI need access to that environment.
+Secrets belong in environment variables or a credential store, not configuration JSON, command arguments, or chat. CLI configuration saves only the variable name. The web app accepts an Intelligence key directly, keeps it only for the running app session and saves a generated reference instead of the secret.
 
 ## Configure execution before evaluations or fixes
 

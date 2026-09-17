@@ -33,6 +33,10 @@ MAX_SECONDS = 90
 PAGE_SIZE = 100
 _SERVICE = "agentagon.webapp"
 _REFERENCE = re.compile(r"^(session|keyring):[0-9a-f]{32}$")
+_TRACE_METADATA_KEY = re.compile(
+    r"agent|service|workflow|environment|deployment|project|session|name|tag", re.I
+)
+_TRACE_CONTENT_KEY = re.compile(r"input|output|prompt|content|message|error", re.I)
 _LANGSMITH_TRACE_FIELDS = [
     "id",
     "trace_id",
@@ -85,6 +89,41 @@ def _text(value, label, *, maximum=2048):
     ):
         raise ProviderError(f"{label} must be a nonempty, bounded string")
     return value.strip()
+
+
+def _trace_metadata_record(row, trace_id):
+    result = {"trace_id": trace_id}
+    for key in ("id", "name", "run_type", "type", "environment", "start_time", "startTime"):
+        value = row.get(key)
+        if isinstance(value, (str, int, float, bool)) and len(str(value)) <= 500:
+            result[key] = value
+    tags = row.get("tags")
+    if isinstance(tags, list):
+        result["tags"] = [str(value)[:200] for value in tags[:30] if isinstance(value, str)]
+    metadata = {}
+
+    def collect(value, prefix="", depth=0):
+        if depth > 3 or len(metadata) >= 50 or not isinstance(value, dict):
+            return
+        for key, item in value.items():
+            if not isinstance(key, str) or _TRACE_CONTENT_KEY.search(key):
+                continue
+            name = f"{prefix}.{key}" if prefix else key
+            if _TRACE_METADATA_KEY.search(key):
+                if isinstance(item, (str, int, float, bool)) and len(str(item)) <= 500:
+                    metadata[name] = item
+                elif isinstance(item, list) and all(
+                    isinstance(entry, (str, int, float, bool)) for entry in item[:30]
+                ):
+                    metadata[name] = [str(entry)[:200] for entry in item[:30]]
+            if isinstance(item, dict):
+                collect(item, name, depth + 1)
+
+    for key in ("metadata", "extra", "trace_context", "span_attributes"):
+        collect(row.get(key), key)
+    if metadata:
+        result["metadata"] = metadata
+    return result
 
 
 class CredentialStore:
@@ -717,15 +756,19 @@ class ProviderClient:
             )
         return items, complete, reason, {"version": version, "snapshot_consistent": True, **extra}
 
-    def _traces(self, selection):
+    def _trace_roots(self, selection, *, metadata=False):
         project, cap = selection["project"], selection["cap"]
         start, end, filters = selection["start"], selection["end"], selection["filters"]
+        table = None
         if self.provider == "braintrust":
             table = f"project_logs({json.dumps(project)})"
             condition = f"is_root = true AND metrics.start >= {timestamp_ns(start) / 1e9} AND metrics.start < {timestamp_ns(end) / 1e9}"
             if filters:
                 condition += f" AND ({filters})"
-            query = f"SELECT root_span_id, span_id, metrics FROM {table} WHERE {condition} LIMIT {cap + 1}"
+            fields = "root_span_id, span_id, metrics"
+            if metadata:
+                fields += ", span_attributes, metadata"
+            query = f"SELECT {fields} FROM {table} WHERE {condition} LIMIT {cap + 1}"
             data = self._request("POST", "/btql", json={"query": query, "fmt": "json"})
             roots = self._rows(data, "data")
             selected = list(
@@ -740,7 +783,9 @@ class ProviderClient:
                 "is_root": True,
                 "start_time": start,
                 "filter": f"and({upper},{filters})" if filters else upper,
-                "select": ["id", "trace_id", "start_time"],
+                "select": ["id", "trace_id", "start_time", "name", "run_type", "tags", "extra"]
+                if metadata
+                else ["id", "trace_id", "start_time"],
             }
             roots, complete, reason = self._pages(
                 "POST", "/runs/query", "runs", body=body, cap=cap, style="cursor"
@@ -752,7 +797,7 @@ class ProviderClient:
                 "/api/public/v2/observations",
                 "data",
                 params={
-                    "fields": "core",
+                    "fields": "core,basic,time,metadata,trace_context" if metadata else "core",
                     "parentObservationId": "",
                     "fromStartTime": start,
                     "toStartTime": end,
@@ -763,6 +808,43 @@ class ProviderClient:
             )
             selected = list(dict.fromkeys(row.get("traceId") for row in roots))
         selected = [_text(value, "trace ID") for value in selected[:cap]]
+        return roots[:cap], selected, complete, reason, table
+
+    def trace_metadata(self, selection):
+        self._begin()
+        selection = self._selection("traces", selection)
+        try:
+            roots, selected, complete, reason, _table = self._trace_roots(selection, metadata=True)
+        except _LimitReached:
+            raise ProviderError("Trace metadata lookup reached its request limit") from None
+        items = []
+        seen = set()
+        for row in roots:
+            trace_id = (
+                row.get("root_span_id") or row.get("span_id")
+                if self.provider == "braintrust"
+                else row.get("trace_id") or row.get("id")
+                if self.provider == "langsmith"
+                else row.get("traceId")
+            )
+            if trace_id in seen or trace_id not in selected:
+                continue
+            seen.add(trace_id)
+            items.append(_trace_metadata_record(row, trace_id))
+        return self._clean(
+            {
+                "items": items,
+                "completeness": {
+                    "complete": complete,
+                    "reason": reason,
+                    "count": len(items),
+                },
+            }
+        )
+
+    def _traces(self, selection):
+        project = selection["project"]
+        _roots, selected, complete, reason, table = self._trace_roots(selection)
         items, details_complete = [], True
         for trace_id in selected:
             remaining = MAX_SPANS - len(items)

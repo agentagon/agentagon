@@ -129,6 +129,12 @@ def create_server(application, port=0):
                     )
                 elif path == "/api/session":
                     self._bootstrap()
+                elif not path.startswith("/api/"):
+                    self._respond(
+                        200,
+                        files("agentagon").joinpath("dashboard_assets", "webapp.html").read_bytes(),
+                        "text/html; charset=utf-8",
+                    )
                 elif not self._read_allowed():
                     self._json(403, {"error": "Invalid application session or origin."})
                 else:
@@ -172,6 +178,12 @@ def create_server(application, port=0):
                 return {"application": "agentagon", "version": 1}
             if parts == ["api", "projects"]:
                 return application.projects()
+            if parts == ["api", "skills"]:
+                return application.skills()
+            if parts == ["api", "connector-types"]:
+                return application.connector_types()
+            if parts == ["api", "assistants"]:
+                return application.assistants()
             if parts == ["api", "agents"]:
                 return application.agents()
             if parts == ["api", "agents", "codex", "models"]:
@@ -179,6 +191,39 @@ def create_server(application, port=0):
             if len(parts) >= 4 and parts[:2] == ["api", "projects"]:
                 project_id, resource = parts[2:4]
                 application.state.project(project_id)
+                if resource == "agents":
+                    if len(parts) == 4:
+                        return application.project_agents(project_id)
+                    agent_id = parts[4]
+                    if len(parts) == 5:
+                        return application.project_agent(project_id, agent_id)
+                    if len(parts) == 6 and parts[5] == "overview":
+                        return application.agent_overview(project_id, agent_id)
+                    if len(parts) >= 6 and parts[5] == "goals":
+                        if len(parts) == 6:
+                            return application.goals(project_id, agent_id)
+                        if len(parts) == 7:
+                            return application.goal(project_id, agent_id, parts[6])
+                if resource == "connectors" and len(parts) == 4:
+                    return application.connections(project_id)
+                if resource == "tasks":
+                    if len(parts) == 4:
+                        query = {
+                            key: value[0]
+                            for key, value in parse_qs(urlsplit(self.path).query).items()
+                            if len(value) == 1
+                        }
+                        return application.tasks(project_id, query)
+                    if len(parts) == 5:
+                        return application.task(project_id, parts[4])
+                if resource == "workflows" and len(parts) == 6 and parts[5] == "readiness":
+                    query = parse_qs(urlsplit(self.path).query)
+                    return application.workflow_readiness(
+                        project_id,
+                        parts[4],
+                        query.get("agent_id", [None])[0],
+                        query.get("goal_id", [None])[0],
+                    )
                 if resource == "connections":
                     if len(parts) == 4:
                         return application.connections(project_id)
@@ -268,6 +313,8 @@ def create_server(application, port=0):
                 return application.remove_project(parts[2])
             if len(parts) == 5 and parts[:2] == ["api", "projects"] and parts[3] == "connections":
                 return application.disconnect(parts[2], parts[4])
+            if len(parts) == 5 and parts[:2] == ["api", "projects"] and parts[3] == "connectors":
+                return application.disconnect(parts[2], parts[4])
             raise AuditError("operation not found")
 
         def _post(self, parts, body):
@@ -277,9 +324,30 @@ def create_server(application, port=0):
                 return application.clone_project(body)
             if parts == ["api", "agents"]:
                 return application.save_agents(body)
+            if parts == ["api", "assistants"]:
+                return application.save_agents(body)
             if len(parts) >= 4 and parts[:2] == ["api", "projects"]:
                 project_id, resource = parts[2:4]
                 application.state.project(project_id)
+                if resource == "agents":
+                    if len(parts) == 4:
+                        return application.save_application_agent(project_id, body)
+                    if len(parts) == 5:
+                        return application.save_application_agent(project_id, body, parts[4])
+                    if len(parts) == 6 and parts[5] == "goals":
+                        return application.save_goal(project_id, parts[4], body)
+                if resource == "connectors":
+                    if len(parts) == 4:
+                        return application.save_connection(project_id, body)
+                    if len(parts) == 5 and parts[4] == "discover":
+                        return application.discover_connection(project_id, body)
+                    if len(parts) == 6 and parts[5] == "test":
+                        return application.test_connection(project_id, parts[4])
+                if resource == "tasks":
+                    if len(parts) == 4:
+                        return application.submit_task(project_id, body)
+                    if len(parts) == 6:
+                        return application.jobs.control(project_id, parts[4], parts[5], body)
                 if resource == "connections":
                     if len(parts) == 4:
                         return application.save_connection(project_id, body)
@@ -297,7 +365,7 @@ def create_server(application, port=0):
                         return application.save_application_agent(project_id, body)
                     if len(parts) == 5:
                         if parts[4] == "discover":
-                            return application.catalog.discover(project_id)
+                            return application.discover_application_agents(project_id, body)
                         return application.save_application_agent(project_id, body, parts[4])
                     if len(parts) == 6 and parts[5] == "focuses":
                         return application.catalog.save_focus(project_id, parts[4], body)

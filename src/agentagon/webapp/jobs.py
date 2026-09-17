@@ -121,6 +121,7 @@ class JobManager:
             "options",
             "application_agent_id",
             "focus_id",
+            "workflow_version",
         }:
             raise AuditError("unsupported task fields")
         operation = operation_id(payload.get("operation_id"))
@@ -248,6 +249,7 @@ class JobManager:
                 "application_agent_id": payload.get("application_agent_id"),
                 "focus_id": payload.get("focus_id"),
                 "kind": kind,
+                "workflow_version": payload.get("workflow_version", 1),
                 "goal": goal.strip(),
                 "agent": agent,
                 "model": model,
