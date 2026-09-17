@@ -1,18 +1,20 @@
 """Application operations shared by the browser and local launcher."""
 
 import copy
+import json
 import os
 import re
 import subprocess
 import threading
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from agentagon.core.records import AuditError, digest, load_json, now
 from agentagon.dashboard import _audits, _detail, _run_detail, _run_summary, _runs, _summary
 from agentagon.storage.changes import git_bytes
-from agentagon.storage.config import Config
+from agentagon.storage.config import Config, credential
 from agentagon.storage.issues import list_issues
 from agentagon.telemetry.normalize import redact
 from agentagon.webapp import snapshots
@@ -38,6 +40,7 @@ class Application:
         self.jobs.verify_result = self.completed_job
         self.previews = {}
         self.connection_discoveries = {}
+        self._intelligence_envs = set()
         self.lock = threading.RLock()
         self.selected_project_id = None
 
@@ -114,6 +117,139 @@ class Application:
 
     def application_agents(self, project_id):
         return {"agents": self.catalog.agents(project_id)}
+
+    def discover_application_agents(self, project_id, payload):
+        if not isinstance(payload, dict) or set(payload) - {"preferences"}:
+            raise AuditError("unsupported discovery fields")
+        preferences = self.catalog.discovery_preferences(project_id)
+        if "preferences" in payload:
+            preferences = self.catalog.save_discovery_preferences(
+                project_id, payload["preferences"]
+            )
+        elif not preferences["seen"]:
+            preferences = self.catalog.save_discovery_preferences(project_id, {})
+        result = self.catalog.discover(project_id)
+        enrichment = {}
+        if preferences["coding_review"]:
+            try:
+                enrichment["coding_review"] = self._review_discovered_agents(project_id)
+            except AuditError as exc:
+                result["limitations"].append(f"Coding-agent review unavailable: {exc}")
+        if preferences["trace_metadata"]:
+            try:
+                enrichment["trace_metadata"] = self._match_recent_trace_metadata(
+                    project_id, preferences
+                )
+            except AuditError as exc:
+                result["limitations"].append(f"Trace metadata matching unavailable: {exc}")
+        result.update(
+            agents=self.catalog.agents(project_id),
+            preferences=self.catalog.discovery_preferences(project_id),
+            enrichment=enrichment,
+        )
+        return result
+
+    def _review_discovered_agents(self, project_id):
+        candidates = [
+            {"id": agent["id"], "file": agent["code_scopes"][0], "name": agent["name"]}
+            for agent in self.catalog.agents(project_id)
+            if agent["status"] == "suggested" and len(agent.get("code_scopes", [])) == 1
+        ]
+        if not candidates:
+            return {"reviewed": 0, "kept": 0}
+        if len(candidates) > 100:
+            raise AuditError("more than 100 suggestions require manual review")
+        settings = self.state.read()["agents"]
+        selected = settings.get("default_agent", "codex")
+        capability = next(
+            (item for item in self.agents()["agents"] if item["id"] == selected), None
+        )
+        if (
+            not capability
+            or not capability.get("available")
+            or capability.get("authenticated") is not True
+        ):
+            raise AuditError(f"{selected.title()} is not authenticated")
+        prompt = (
+            "Review the following deterministic application-agent suggestions in this repository. "
+            "Work read-only. Inspect only the listed files and their nearby imports. Return JSON only, "
+            "with exactly one item per input candidate and no new candidates: "
+            '{"candidates":[{"id":"agent_id","file":"path","name":"Agent name","keep":true}]}. '
+            "Keep a candidate only when the file defines an application agent entrypoint rather than a "
+            "library helper, test, example, documentation, or dependency. Preserve each id and file string "
+            "exactly. "
+            "Use a concise user-facing name. Candidates: "
+            + json.dumps(candidates, ensure_ascii=False)
+        )
+        request = {
+            "agent": selected,
+            "model": settings.get("models", {}).get(selected, ""),
+            "cwd": str(self.state.workspace(project_id).root),
+            "prompt": prompt,
+            "sandbox": "read-only",
+            "timeout_seconds": 120,
+            "response_mode": "raw-final",
+        }
+        executable = settings.get(selected + "_executable")
+        if executable:
+            request["executable"] = executable
+        if selected == "claude":
+            reference = settings.get("claude_api_key_ref") or (
+                "env:ANTHROPIC_API_KEY" if os.environ.get("ANTHROPIC_API_KEY") else None
+            )
+            if not reference:
+                raise AuditError("Claude credentials are unavailable")
+            request["api_key"] = self.credentials.resolve(reference)
+        outcome = self.jobs.execute(
+            request,
+            lambda _event: None,
+            lambda _question: {"decision": "decline"},
+            threading.Event(),
+        )
+        if not isinstance(outcome, dict) or outcome.get("state") != "completed":
+            raise AuditError("the coding-agent review did not complete")
+        text = outcome.get("raw_final_text")
+        if not isinstance(text, str):
+            raise AuditError("the coding-agent review returned no structured result")
+        try:
+            response = json.loads(text)
+        except json.JSONDecodeError:
+            raise AuditError("the coding-agent review returned invalid JSON") from None
+        if not isinstance(response, dict) or set(response) != {"candidates"}:
+            raise AuditError("the coding-agent review returned an invalid result")
+        return self.catalog.apply_coding_review(project_id, response["candidates"])
+
+    def _match_recent_trace_metadata(self, project_id, preferences):
+        connection_id = preferences.get("trace_connection_id")
+        connection = self.connection(connection_id, project_id) if connection_id else None
+        if connection is None:
+            available = sorted(
+                (
+                    item
+                    for item in self.state.read()["connections"].values()
+                    if item.get("project_id") == project_id
+                    and item.get("status") == "connected"
+                    and item.get("project")
+                ),
+                key=lambda item: item["id"],
+            )
+            connection = available[0] if available else None
+        if (
+            connection is None
+            or connection.get("status") != "connected"
+            or not connection.get("project")
+        ):
+            raise AuditError("choose a tested trace connection with a provider project")
+        end = datetime.now(UTC)
+        selection = {
+            "project": connection["project"],
+            "start": (end - timedelta(days=7)).isoformat(),
+            "end": end.isoformat(),
+            "cap": preferences["trace_cap"],
+            "filters": {},
+        }
+        sample = self.provider_factory(connection, self.credentials).trace_metadata(selection)
+        return self.catalog.apply_trace_metadata(project_id, connection, sample.get("items", []))
 
     def save_application_agent(self, project_id, payload, agent_id=None):
         selector = payload.get("trace_selector", {})
@@ -423,7 +559,7 @@ class Application:
 
     def remove_project(self, project_id):
         with self.lock, self.jobs.condition:
-            self.state.project(project_id)
+            workspace = self.state.workspace(project_id)
             if any(key[0] == project_id for key in self.jobs.active):
                 raise AuditError("pause or cancel this project's tasks before removing it")
             if any(j["state"] in ACTIVE for j in self.jobs.list(project_id)):
@@ -433,6 +569,7 @@ class Application:
                 for c in self.state.read()["connections"].values()
                 if c["project_id"] == project_id
             ]
+            key_env = Config().effective(workspace.root)["intelligence"]["api_key_env"]
             result = self.state.remove(project_id)
             for discovery_id, draft in list(self.connection_discoveries.items()):
                 if draft["connection"]["project_id"] == project_id:
@@ -440,6 +577,9 @@ class Application:
             for connection in connections:
                 for reference in connection["credentials"].values():
                     self.credentials.delete(reference)
+            if key_env in self._intelligence_envs:
+                os.environ.pop(key_env, None)
+                self._intelligence_envs.discard(key_env)
             return result
 
     def overview(self, project_id):
@@ -482,6 +622,7 @@ class Application:
             "datasets": [s for s in imported if s["kind"] == "dataset"],
             "dataset_splits": self.state.db.list_records(project_id, "dataset_splits"),
             "traces": [s for s in imported if s["kind"] == "traces"],
+            "discovery": self.catalog.discovery_preferences(project_id),
             "settings": self.settings(project_id),
         }
 
@@ -664,6 +805,7 @@ class Application:
         return {
             "settings": effective,
             "profiles": effective["profiles"],
+            "intelligence_key_configured": bool(credential(effective, "intelligence")),
             "revision": digest(effective),
             "scope": "project",
         }
@@ -802,8 +944,20 @@ class Application:
             "profile_name",
             "profile",
             "expected_revision",
+            "intelligence_api_key",
         }:
             raise AuditError("unsupported settings fields")
+        intelligence_key = payload.get("intelligence_api_key")
+        if intelligence_key is not None:
+            if scope != "project":
+                raise AuditError("Intelligence API keys must be configured for one project")
+            if (
+                not isinstance(intelligence_key, str)
+                or not intelligence_key.strip()
+                or len(intelligence_key) > 16384
+            ):
+                raise AuditError("Intelligence API key must be a nonempty string")
+            intelligence_key = intelligence_key.strip()
         with self.lock:
             if (
                 payload.get("expected_revision")
@@ -815,14 +969,25 @@ class Application:
                     scope, payload["profile_name"], payload.get("profile"), workspace.root
                 )
             else:
-                values, unset = payload.get("values", {}), payload.get("unset", [])
+                values, unset = copy.deepcopy(payload.get("values", {})), payload.get("unset", [])
                 if (
                     not isinstance(values, dict)
                     or not isinstance(unset, list)
                     or not all(isinstance(k, str) for k in unset)
                 ):
                     raise AuditError("settings require values and an unset list")
+                previous_env = Config().effective(workspace.root)["intelligence"]["api_key_env"]
+                key_env = None
+                if intelligence_key:
+                    key_env = "AGENTAGON_INTELLIGENCE_" + uuid.uuid4().hex.upper()
+                    values["intelligence.api_key_env"] = key_env
                 Config().update(scope, workspace.root, values, tuple(unset))
+                if key_env:
+                    os.environ[key_env] = intelligence_key
+                    self._intelligence_envs.add(key_env)
+                    if previous_env in self._intelligence_envs:
+                        os.environ.pop(previous_env, None)
+                        self._intelligence_envs.discard(previous_env)
         return self.settings(project_id)
 
     def connection(self, connection_id, project_id):
@@ -1232,3 +1397,6 @@ class Application:
         with self.lock:
             for discovery_id in list(self.connection_discoveries):
                 self._discard_discovery(discovery_id)
+        for name in self._intelligence_envs:
+            os.environ.pop(name, None)
+        self._intelligence_envs.clear()

@@ -297,7 +297,7 @@ def create_server(application, port=0):
                         return application.save_application_agent(project_id, body)
                     if len(parts) == 5:
                         if parts[4] == "discover":
-                            return application.catalog.discover(project_id)
+                            return application.discover_application_agents(project_id, body)
                         return application.save_application_agent(project_id, body, parts[4])
                     if len(parts) == 6 and parts[5] == "focuses":
                         return application.catalog.save_focus(project_id, parts[4], body)

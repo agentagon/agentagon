@@ -13,7 +13,7 @@ The app runs on your computer and binds to loopback. Hosted access and team acco
 
 ## Select an application agent and focus
 
-The project opens to **Agents**. Discover suggestions from code and imported traces, confirm their boundaries, or add an agent manually. Discovery recognizes supported framework imports and skips documentation, examples, tests, dependencies and generated code. It does not run application code; dynamic factories and unrecognized frameworks may need a manual entry. Review each suggested code scope and trace selector before using it. Separate checkouts, including Git worktrees, remain separate projects.
+The project opens to **Agents**. Discovery recognizes supported framework imports and skips documentation, examples, tests, dependencies and generated code. On the first discovery, choose whether to supplement the local scan with a read-only coding-agent review or recent root-trace metadata from a tested provider connection. These choices are saved per project under **Discovery options**. Coding-agent review can rename or exclude suggestions but cannot confirm them. Trace matching reads at most 100 metadata-only roots from the last seven days; it does not fetch inputs, outputs or child spans, and a match establishes identity context rather than behavioral correctness. Confirm suggested boundaries or add an agent manually. Separate checkouts, including Git worktrees, remain separate projects.
 
 An **application agent** is the workflow you are investigating, such as a support agent. A **coding agent** is Codex or Claude, which Agentagon uses to perform the work. One project can contain several application agents and shared dependencies.
 

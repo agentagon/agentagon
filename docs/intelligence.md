@@ -14,7 +14,7 @@ Once configured, **ag:audit** and **ag:fix** can consult Intelligence, including
 
 ## Configure access
 
-Request access through [hello@agentagon.ai](mailto:hello@agentagon.ai), then ask **ag:setup** to configure it using the issued service origin and your key’s environment-variable name. Keep the key itself outside chat and `.agentagon/`.
+Request access through [hello@agentagon.ai](mailto:hello@agentagon.ai). In the web app, enter the issued service origin and API key under **Settings → Privacy**. The key stays in the running app process; only a generated reference is saved, so restart requires entering the key again. Keep the key outside chat and `.agentagon/`.
 
 ??? details "Direct CLI configuration"
 

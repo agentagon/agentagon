@@ -496,6 +496,78 @@ def test_trace_import_fetches_children_outside_root_window(provider):
     assert result["completeness"]["trace_details_complete"]
 
 
+@pytest.mark.parametrize("provider", ["braintrust", "langsmith", "langfuse"])
+def test_trace_metadata_reads_roots_without_inputs_or_outputs(provider):
+    calls = []
+
+    def handler(request):
+        body = json.loads(request.content) if request.content else {}
+        calls.append((request, body))
+        if provider == "braintrust":
+            assert "is_root = true" in body["query"]
+            payload = {
+                "data": [
+                    {
+                        "root_span_id": "trace-1",
+                        "metadata": {"agent_name": "Support router"},
+                        "input": "private input",
+                    }
+                ]
+            }
+        elif provider == "langsmith":
+            assert body["is_root"] is True
+            assert "inputs" not in body["select"] and "outputs" not in body["select"]
+            payload = {
+                "runs": [
+                    {
+                        "trace_id": "trace-1",
+                        "name": "Support router",
+                        "extra": {"metadata": {"agent_name": "Support router"}},
+                        "inputs": "private input",
+                    }
+                ]
+            }
+        else:
+            assert "io" not in request.url.params["fields"]
+            payload = {
+                "data": [
+                    {
+                        "traceId": "trace-1",
+                        "name": "Support router",
+                        "metadata": {"agent_name": "Support router"},
+                        "input": "private input",
+                    }
+                ]
+            }
+        return httpx.Response(200, json=payload)
+
+    result = client(provider, handler).trace_metadata(trace_selection())
+
+    assert len(calls) == 1
+    assert result["items"][0]["trace_id"] == "trace-1"
+    assert "private input" not in json.dumps(result)
+    assert result["completeness"]["count"] == 1
+
+
+def test_trace_metadata_deduplicates_root_rows_without_mislabeling_them():
+    def handler(_request):
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"root_span_id": "trace-1", "metadata": {"agent_name": "First"}},
+                    {"root_span_id": "trace-1", "metadata": {"agent_name": "Duplicate"}},
+                    {"root_span_id": "trace-2", "metadata": {"agent_name": "Second"}},
+                ]
+            },
+        )
+
+    result = client("braintrust", handler).trace_metadata(trace_selection())
+
+    assert [item["trace_id"] for item in result["items"]] == ["trace-1", "trace-2"]
+    assert result["items"][1]["metadata"]["metadata.agent_name"] == "Second"
+
+
 def test_repeated_cursor_is_partial_not_an_infinite_loop():
     def handler(request):
         return httpx.Response(

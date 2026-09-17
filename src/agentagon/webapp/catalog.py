@@ -2,6 +2,7 @@
 
 import copy
 import math
+import re
 import uuid
 from pathlib import Path
 
@@ -24,10 +25,52 @@ FOCUSES = {
 EXCLUDED = {".git", ".agentagon", ".venv", "venv", "node_modules", "__pycache__", "dist", "build"}
 MAX_DISCOVERY_IMPORTS = 50
 MAX_DISCOVERY_IMPORT_BYTES = 20_000_000
+DISCOVERY_PREFERENCES_ID = "preferences"
+DISCOVERY_PREFERENCES = {
+    "version": 1,
+    "seen": False,
+    "coding_review": False,
+    "trace_metadata": False,
+    "trace_cap": 100,
+    "trace_connection_id": None,
+}
+_GENERIC_AGENT_TERMS = {
+    "agent",
+    "assistant",
+    "graph",
+    "main",
+    "service",
+    "workflow",
+}
 
 
 def _id(prefix):
     return prefix + "_" + uuid.uuid4().hex[:24]
+
+
+def _metadata_strings(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key)
+            yield from _metadata_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _metadata_strings(item)
+    elif isinstance(value, (str, int, float, bool)):
+        yield str(value)
+
+
+def _agent_terms(agent):
+    values = [agent.get("name", "")]
+    for scope in agent.get("code_scopes", []):
+        path = Path(scope)
+        values.extend((path.stem, path.parent.name))
+    return {
+        term
+        for value in values
+        for term in re.findall(r"[a-z0-9]+", value.casefold())
+        if len(term) >= 4 and term not in _GENERIC_AGENT_TERMS
+    }
 
 
 def _text(value, label, limit=4000, *, empty=False):
@@ -95,7 +138,8 @@ class Catalog:
             (
                 agent
                 for agent in self.state.db.list_records(project_id, "application_agents")
-                if not (
+                if agent["status"] != "archived"
+                and not (
                     agent["status"] == "suggested"
                     and agent.get("discovery_key")
                     and agent["code_scopes"]
@@ -104,6 +148,161 @@ class Catalog:
             ),
             key=lambda a: (a["status"] != "confirmed", a["name"].lower()),
         )
+
+    def discovery_preferences(self, project_id):
+        self.state.project(project_id)
+        saved = self.state.db.get_record(
+            project_id, "discovery_preferences", DISCOVERY_PREFERENCES_ID
+        )
+        return {**DISCOVERY_PREFERENCES, **(saved or {})}
+
+    def save_discovery_preferences(self, project_id, payload):
+        if not isinstance(payload, dict) or set(payload) - {
+            "coding_review",
+            "trace_metadata",
+            "trace_cap",
+            "trace_connection_id",
+        }:
+            raise AuditError("invalid discovery preferences")
+        current = self.discovery_preferences(project_id)
+        coding_review = payload.get("coding_review", False)
+        trace_metadata = payload.get("trace_metadata", False)
+        trace_cap = payload.get("trace_cap", 100)
+        connection_id = payload.get("trace_connection_id")
+        if type(coding_review) is not bool or type(trace_metadata) is not bool:
+            raise AuditError("discovery choices must be enabled or disabled")
+        if type(trace_cap) is not int or not 1 <= trace_cap <= 100:
+            raise AuditError("trace metadata cap must be between 1 and 100")
+        if connection_id is not None:
+            identifier(connection_id, "connection")
+        record = {
+            **current,
+            "version": 1,
+            "seen": True,
+            "coding_review": coding_review,
+            "trace_metadata": trace_metadata,
+            "trace_cap": trace_cap,
+            "trace_connection_id": connection_id,
+        }
+        return self.state.db.put_record(
+            project_id,
+            "discovery_preferences",
+            DISCOVERY_PREFERENCES_ID,
+            record,
+            expected_revision=current.get("revision", 0),
+        )
+
+    def apply_coding_review(self, project_id, reviews):
+        if not isinstance(reviews, list) or len(reviews) > 100:
+            raise AuditError("coding-agent discovery review is invalid")
+        suggestions = {
+            agent["id"]: agent
+            for agent in self.agents(project_id)
+            if agent["status"] == "suggested" and len(agent.get("code_scopes", [])) == 1
+        }
+        updates = []
+        seen = set()
+        for review in reviews:
+            if not isinstance(review, dict) or set(review) != {"id", "file", "name", "keep"}:
+                raise AuditError("coding-agent discovery review is invalid")
+            candidate_id = review["id"]
+            if (
+                candidate_id in seen
+                or candidate_id not in suggestions
+                or type(review["keep"]) is not bool
+            ):
+                raise AuditError("coding-agent discovery review does not match the local scan")
+            record = suggestions[candidate_id]
+            if review["file"] != record["code_scopes"][0]:
+                raise AuditError("coding-agent discovery review does not match the local scan")
+            seen.add(candidate_id)
+            name = _text(review["name"], "agent name", 160)
+            evidence = [
+                item
+                for item in record.get("evidence", [])
+                if not isinstance(item, dict) or item.get("kind") != "coding_agent_review"
+            ]
+            evidence.append(
+                {"kind": "coding_agent_review", "decision": "keep" if review["keep"] else "exclude"}
+            )
+            updates.append(
+                {
+                    **record,
+                    "name": name,
+                    "status": "suggested" if review["keep"] else "archived",
+                    "evidence": evidence,
+                }
+            )
+        if seen != set(suggestions):
+            raise AuditError("coding-agent discovery review omitted local suggestions")
+        if updates:
+            with self.state.db.transaction() as tx:
+                for record in updates:
+                    tx.put_record(
+                        project_id,
+                        "application_agents",
+                        record["id"],
+                        record,
+                        expected_revision=record["revision"],
+                    )
+        return {"reviewed": len(updates), "kept": sum(r["status"] == "suggested" for r in updates)}
+
+    def apply_trace_metadata(self, project_id, connection, traces):
+        if not isinstance(traces, list) or len(traces) > 100:
+            raise AuditError("trace metadata sample is invalid")
+        available = []
+        for trace in traces:
+            if not isinstance(trace, dict):
+                continue
+            text = " ".join(_metadata_strings(trace)).casefold()
+            if text:
+                available.append((trace, text))
+        matches = 0
+        updates = []
+        used = set()
+        for agent in self.agents(project_id):
+            if agent["status"] != "suggested" or not agent.get("code_scopes"):
+                continue
+            terms = _agent_terms(agent)
+            scored = []
+            for index, (trace, text) in enumerate(available):
+                if index in used:
+                    continue
+                hits = [term for term in terms if term in text]
+                score = sum(len(term) for term in hits)
+                if hits and (len(hits) >= 2 or max(map(len, hits)) >= 6):
+                    scored.append((score, index, trace, hits))
+            if not scored:
+                continue
+            _score, index, trace, hits = max(scored, key=lambda item: item[0])
+            used.add(index)
+            evidence = [
+                item
+                for item in agent.get("evidence", [])
+                if not isinstance(item, dict) or item.get("kind") != "trace_metadata"
+            ]
+            evidence.append(
+                {
+                    "kind": "trace_metadata",
+                    "connection_id": connection["id"],
+                    "provider": connection["provider"],
+                    "trace_id": trace.get("trace_id") or trace.get("id"),
+                    "matched_on": hits,
+                }
+            )
+            updates.append({**agent, "evidence": evidence})
+            matches += 1
+        if updates:
+            with self.state.db.transaction() as tx:
+                for record in updates:
+                    tx.put_record(
+                        project_id,
+                        "application_agents",
+                        record["id"],
+                        record,
+                        expected_revision=record["revision"],
+                    )
+        return {"sampled": len(traces), "matched": matches}
 
     def agent(self, project_id, agent_id):
         self.state.project(project_id)
@@ -172,7 +371,9 @@ class Catalog:
     def discover(self, project_id):
         workspace = self.state.workspace(project_id)
         existing = {
-            a.get("discovery_key"): a for a in self.agents(project_id) if a.get("discovery_key")
+            a.get("discovery_key"): a
+            for a in self.state.db.list_records(project_id, "application_agents")
+            if a.get("discovery_key")
         }
         found = {}
         candidates, coverage, limits = discovery.scan(workspace.root)
@@ -201,7 +402,7 @@ class Catalog:
                     project_id,
                     {
                         "name": entry["name"],
-                        "description": f"Discovered {entry['call']} entrypoint in {entry['path']}. Confirm its code and trace boundaries.",
+                        "description": "",
                         "code_scopes": [entry["path"]],
                         "status": "suggested",
                     },
@@ -211,7 +412,8 @@ class Catalog:
                         "evidence": [{"kind": "code", **entry}],
                     },
                 )
-            found[existing[key]["id"]] = existing[key]
+            if existing[key]["status"] != "archived":
+                found[existing[key]["id"]] = existing[key]
         trace_items = 0
         trace_snapshots = 0
         import_count, import_bytes = 0, 0
@@ -255,7 +457,8 @@ class Catalog:
                     selector["project"] = record["selection"]["project"]
                 key = digest(selector)
                 if key in existing:
-                    found[existing[key]["id"]] = existing[key]
+                    if existing[key]["status"] != "archived":
+                        found[existing[key]["id"]] = existing[key]
                     continue
                 evidence = {"kind": "traces", "snapshot_id": record["id"]}
                 matches = [
@@ -286,7 +489,7 @@ class Catalog:
                         project_id,
                         {
                             "name": name,
-                            "description": "Discovered in imported traces. Confirm its code binding and trace selector.",
+                            "description": "",
                             "trace_selector": selector,
                             "status": "suggested",
                         },
@@ -312,8 +515,6 @@ class Catalog:
                 "trace_items": trace_items,
             },
             "limitations": [
-                "Discovery only recognizes supported framework imports and imported trace identities. Confirm suggestions or add an agent manually.",
-                "Documentation, examples, tests, dependencies and generated code are excluded. Dynamic factories, re-exports and ambiguous JavaScript bindings may be missed.",
                 *(
                     ["Some files were too large, unreadable or invalid and were skipped."]
                     if coverage["excluded_files"] or coverage["unreadable_files"]
