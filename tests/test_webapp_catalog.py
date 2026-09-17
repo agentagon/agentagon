@@ -62,9 +62,7 @@ def test_discovery_is_explicit_bounded_and_preserves_confirmed_identity(app, tmp
 def test_discovery_excludes_non_application_sources_and_retires_old_suggestions(app, tmp_path):
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root
-    (root / "app.py").write_text(
-        'from agents import Agent\nsupport = Agent(name="Support")\n'
-    )
+    (root / "app.py").write_text('from agents import Agent\nsupport = Agent(name="Support")\n')
     excluded = [
         "docs/archive/reference.py",
         "examples/demo.py",
@@ -102,9 +100,7 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
     (root / "app.py").write_text(
         'from agents import Agent\nsupport = Agent(name="Support")\nresearch = Agent(name="Research")\n'
     )
-    (root / "helper.py").write_text(
-        'from agents import Agent\nhelper = Agent(name="Helper")\n'
-    )
+    (root / "helper.py").write_text('from agents import Agent\nhelper = Agent(name="Helper")\n')
     calls = []
 
     def execute(request, *_args):

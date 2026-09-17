@@ -410,9 +410,7 @@ def test_project_switch_and_guided_measurement_are_scoped(webapp_page):
     ).to_be_visible()
     playwright.expect(page.get_by_role("button", name="Chat", exact=True)).to_be_visible()
     playwright.expect(page.get_by_role("complementary", name="Chat", exact=True)).to_be_visible()
-    playwright.expect(
-        page.get_by_role("button", name="Coding agent", exact=True)
-    ).to_have_count(0)
+    playwright.expect(page.get_by_role("button", name="Coding agent", exact=True)).to_have_count(0)
     playwright.expect(
         page.get_by_text("Resolve customer support requests.", exact=True)
     ).to_have_count(0)
@@ -545,7 +543,9 @@ def test_navigation_mobile_layout_and_provider_credentials(webapp_page, width):
     playwright.expect(page.get_by_role("dialog")).not_to_be_visible()
     assert "sk-test" not in page.locator("body").inner_text()
     page.get_by_role("button", name="Project defaults", exact=True).click()
-    playwright.expect(page.get_by_role("button", name="Remove project", exact=True)).to_have_count(0)
+    playwright.expect(page.get_by_role("button", name="Remove project", exact=True)).to_have_count(
+        0
+    )
     page.get_by_role("button", name="Privacy", exact=True).click()
     playwright.expect(
         page.get_by_text("Intelligence uses separately prepared context", exact=False)
@@ -1072,12 +1072,8 @@ def test_settings_are_scoped_to_project_or_selected_application_agent(webapp_pag
         "src/support"
     )
     playwright.expect(page.get_by_text("Trace binding (optional)", exact=True)).to_be_visible()
-    playwright.expect(page.get_by_role("button", name="Connections", exact=True)).to_have_count(
-        0
-    )
-    playwright.expect(
-        page.get_by_role("button", name="Coding agents", exact=True)
-    ).to_have_count(0)
+    playwright.expect(page.get_by_role("button", name="Connections", exact=True)).to_have_count(0)
+    playwright.expect(page.get_by_role("button", name="Coding agents", exact=True)).to_have_count(0)
 
     page.get_by_label("Agent name", exact=True).fill("Support operations")
     page.get_by_label("Shared code paths", exact=True).fill("src/shared")
@@ -1262,7 +1258,9 @@ def test_agent_discovery_confirmation_focus_and_scoped_launch(webapp_page):
     playwright.expect(page.get_by_role("heading", name="Routing agent", exact=True)).to_be_visible()
     playwright.expect(page.get_by_role("button", name="Edit agent", exact=True)).to_be_visible()
     playwright.expect(page.get_by_role("button", name="Add focus", exact=True)).to_have_count(0)
-    playwright.expect(page.get_by_role("button", name="Choose a focus", exact=True)).to_have_count(1)
+    playwright.expect(page.get_by_role("button", name="Choose a focus", exact=True)).to_have_count(
+        1
+    )
     playwright.expect(
         page.get_by_text(
             "Choose a focus, describe a problem, or investigate an imported trace sample.",
@@ -1277,18 +1275,12 @@ def test_agent_discovery_confirmation_focus_and_scoped_launch(webapp_page):
     assert ideal_behavior.get_attribute("required") is None
     page.get_by_label("Focus category", exact=True).select_option("custom")
     playwright.expect(page.get_by_label("Focus name", exact=True)).to_be_visible()
-    playwright.expect(page.get_by_label("Focus name", exact=True)).to_have_attribute(
-        "required", ""
-    )
+    playwright.expect(page.get_by_label("Focus name", exact=True)).to_have_attribute("required", "")
     page.get_by_label("Focus category", exact=True).select_option("latency")
     playwright.expect(page.get_by_label("Focus name", exact=True)).to_be_hidden()
-    ideal_behavior.fill(
-        "Route simple requests within one second"
-    )
+    ideal_behavior.fill("Route simple requests within one second")
     playwright.expect(
-        page.get_by_text(
-            "Earlier accepted focuses remain guardrails.", exact=False
-        )
+        page.get_by_text("Earlier accepted focuses remain guardrails.", exact=False)
     ).to_have_count(0)
     page.get_by_role("button", name="Save focus", exact=True).click()
     playwright.expect(
@@ -1312,6 +1304,26 @@ def test_agent_discovery_confirmation_focus_and_scoped_launch(webapp_page):
     assert job["model"] == "codex-saved-model"
     assert job["kind"] == "design"
     assert "code_scopes" not in job["options"]
+
+
+def test_discovery_trace_source_uses_project_scoped_connection(webapp_page):
+    page, fixture = webapp_page
+    fixture.connections = [
+        {
+            "id": "connection_one",
+            "project_id": "project_alpha",
+            "provider": "braintrust",
+            "name": "Production traces",
+            "project": "remote-a",
+            "status": "connected",
+        }
+    ]
+    page.goto("http://127.0.0.1:8765/")
+    page.get_by_role("button", name="Discover agents", exact=True).click()
+    traces = page.get_by_label("Match up to 100 recent root-trace metadata records", exact=True)
+    playwright.expect(traces).to_be_enabled()
+    traces.check()
+    playwright.expect(page.get_by_label("Trace source", exact=True)).to_have_value("connection_one")
 
 
 def test_recent_trace_focus_requires_retained_evidence(webapp_page):

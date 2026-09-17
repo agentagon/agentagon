@@ -460,9 +460,7 @@ def test_cli_trace_settings_do_not_create_app_connections(app, tmp_path):
     assert Config().effective(workspace.root)["traces"]["source"] == "braintrust"
 
 
-def test_settings_preserve_scope_direct_intelligence_key_and_reject_stale_revision(
-    app, tmp_path
-):
+def test_settings_preserve_scope_direct_intelligence_key_and_reject_stale_revision(app, tmp_path):
     first, second = project(app, tmp_path), project(app, tmp_path, "other")
     original = app.settings(first["id"])
     app.update_settings(
@@ -482,10 +480,11 @@ def test_settings_preserve_scope_direct_intelligence_key_and_reject_stale_revisi
             "intelligence_api_key": "private-intelligence-key",
         },
     )
-    key_env = updated["settings"]["intelligence"]["api_key_env"]
-    assert key_env.startswith("AGENTAGON_INTELLIGENCE_")
     assert updated["intelligence_key_configured"] is True
-    assert os.environ[key_env] == "private-intelligence-key"
+    reference = app._intelligence_refs[first["id"]]
+    assert app.credentials.resolve(reference) == "private-intelligence-key"
+    assert "private-intelligence-key" not in os.environ.values()
+    assert app.settings(second["id"])["intelligence_key_configured"] is False
     assert "private-intelligence-key" not in json.dumps(updated)
     with pytest.raises(AuditError, match="changed"):
         app.update_settings(

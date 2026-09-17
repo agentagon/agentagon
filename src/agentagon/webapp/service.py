@@ -40,7 +40,7 @@ class Application:
         self.jobs.verify_result = self.completed_job
         self.previews = {}
         self.connection_discoveries = {}
-        self._intelligence_envs = set()
+        self._intelligence_refs = {}
         self.lock = threading.RLock()
         self.selected_project_id = None
 
@@ -559,7 +559,7 @@ class Application:
 
     def remove_project(self, project_id):
         with self.lock, self.jobs.condition:
-            workspace = self.state.workspace(project_id)
+            self.state.workspace(project_id)
             if any(key[0] == project_id for key in self.jobs.active):
                 raise AuditError("pause or cancel this project's tasks before removing it")
             if any(j["state"] in ACTIVE for j in self.jobs.list(project_id)):
@@ -569,7 +569,6 @@ class Application:
                 for c in self.state.read()["connections"].values()
                 if c["project_id"] == project_id
             ]
-            key_env = Config().effective(workspace.root)["intelligence"]["api_key_env"]
             result = self.state.remove(project_id)
             for discovery_id, draft in list(self.connection_discoveries.items()):
                 if draft["connection"]["project_id"] == project_id:
@@ -577,9 +576,9 @@ class Application:
             for connection in connections:
                 for reference in connection["credentials"].values():
                     self.credentials.delete(reference)
-            if key_env in self._intelligence_envs:
-                os.environ.pop(key_env, None)
-                self._intelligence_envs.discard(key_env)
+            reference = self._intelligence_refs.pop(project_id, None)
+            if reference:
+                self.credentials.delete(reference)
             return result
 
     def overview(self, project_id):
@@ -802,11 +801,14 @@ class Application:
         workspace = self.state.workspace(project_id)
         config = Config()
         effective = config.effective(workspace.root)
+        intelligence_reference = self._intelligence_refs.get(project_id)
         return {
             "settings": effective,
             "profiles": effective["profiles"],
-            "intelligence_key_configured": bool(credential(effective, "intelligence")),
-            "revision": digest(effective),
+            "intelligence_key_configured": bool(
+                intelligence_reference or credential(effective, "intelligence")
+            ),
+            "revision": digest([effective, intelligence_reference]),
             "scope": "project",
         }
 
@@ -976,18 +978,20 @@ class Application:
                     or not all(isinstance(k, str) for k in unset)
                 ):
                     raise AuditError("settings require values and an unset list")
-                previous_env = Config().effective(workspace.root)["intelligence"]["api_key_env"]
-                key_env = None
+                reference = None
                 if intelligence_key:
-                    key_env = "AGENTAGON_INTELLIGENCE_" + uuid.uuid4().hex.upper()
-                    values["intelligence.api_key_env"] = key_env
-                Config().update(scope, workspace.root, values, tuple(unset))
-                if key_env:
-                    os.environ[key_env] = intelligence_key
-                    self._intelligence_envs.add(key_env)
-                    if previous_env in self._intelligence_envs:
-                        os.environ.pop(previous_env, None)
-                        self._intelligence_envs.discard(previous_env)
+                    reference = self.credentials.set(intelligence_key, "session")
+                try:
+                    Config().update(scope, workspace.root, values, tuple(unset))
+                except Exception:
+                    if reference:
+                        self.credentials.delete(reference)
+                    raise
+                if reference:
+                    previous_reference = self._intelligence_refs.get(project_id)
+                    self._intelligence_refs[project_id] = reference
+                    if previous_reference:
+                        self.credentials.delete(previous_reference)
         return self.settings(project_id)
 
     def connection(self, connection_id, project_id):
@@ -1397,6 +1401,6 @@ class Application:
         with self.lock:
             for discovery_id in list(self.connection_discoveries):
                 self._discard_discovery(discovery_id)
-        for name in self._intelligence_envs:
-            os.environ.pop(name, None)
-        self._intelligence_envs.clear()
+        for reference in self._intelligence_refs.values():
+            self.credentials.delete(reference)
+        self._intelligence_refs.clear()
