@@ -19,6 +19,27 @@ from agentagon.webapp.state import identifier, private_directory
 ACTIVE = {"queued", "running", "needs_input"}
 TERMINAL = {"completed", "completed_with_limits", "failed", "cancelled"}
 BUDGET_DEFAULTS = {"max_trials": 24, "max_elapsed_seconds": 1800, "trial_timeout_seconds": 60}
+MAX_JOB_EVENTS = 300
+CONVERSATION_EVENT_TYPES = {"message", "result", "error"}
+
+
+def _retained_events(events):
+    if len(events) <= MAX_JOB_EVENTS:
+        return events
+    conversation = [
+        (index, event)
+        for index, event in enumerate(events)
+        if event.get("type") in CONVERSATION_EVENT_TYPES
+    ]
+    if len(conversation) >= MAX_JOB_EVENTS:
+        return [event for _index, event in conversation[-MAX_JOB_EVENTS:]]
+    remaining = MAX_JOB_EVENTS - len(conversation)
+    activity = [
+        (index, event)
+        for index, event in enumerate(events)
+        if event.get("type") not in CONVERSATION_EVENT_TYPES
+    ][-remaining:]
+    return [event for _index, event in sorted([*conversation, *activity])]
 
 
 def operation_id(value):
@@ -1041,7 +1062,7 @@ class JobManager:
             if "text" in event:
                 event["text"] = str(event["text"])[-16000:]
             event["at"] = now()
-            job["events"] = (job["events"] + [event])[-300:]
+            job["events"] = _retained_events([*job["events"], event])
             self._write(job)
             if event.get("type") == "session" and review_id:
                 workflows.write_context(self.state.workspace(project_id), job)

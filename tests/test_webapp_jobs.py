@@ -489,6 +489,40 @@ def test_task_projection_keeps_messages_and_results_without_progress(manager_fac
     assert projected["can_message"] is True
 
 
+def test_progress_retention_does_not_evict_conversation(manager_factory):
+    from agentagon.webapp.resources import task_detail
+
+    manager, _, project = manager_factory(lambda *args: pytest.fail("host should not run"))
+    manager.stopping = True
+    submitted = manager.submit(project, payload())
+    job = manager._read(project, submitted["id"])
+    job["events"] = [
+        {"type": "message", "text": "I found the agent entrypoint.", "at": now()},
+        *[
+            {"type": "progress", "text": f"Completed tool {index}", "at": now()}
+            for index in range(299)
+        ],
+    ]
+    manager._write(job)
+
+    manager._emit(
+        project,
+        submitted["id"],
+        {"type": "progress", "text": "Completed one more tool"},
+    )
+
+    saved = manager._read(project, submitted["id"])
+    projected = task_detail(saved)
+    assert len(saved["events"]) == 300
+    assert projected["conversation"] == [
+        {
+            "role": "assistant",
+            "text": "I found the agent entrypoint.",
+            "created_at": saved["events"][0]["at"],
+        }
+    ]
+
+
 def test_pause_resume_preserves_session_and_audit(manager_factory):
     calls = []
 

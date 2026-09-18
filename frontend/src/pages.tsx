@@ -154,7 +154,7 @@ export function GoalPage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const accept = useMutation({ mutationFn: () => post(projectPath(projectId, `/application-agents/${agentId}/focuses/${goalId}/design/accept`), { expected_revision: goal.data?.measurement_plan?.revision }), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects", projectId, "agents", agentId, "goals", goalId] }) });
   const workflow = currentStage === "define" ? "design" : currentStage === "measure" ? goal.data?.measurement?.evaluation_id ? "baseline" : "eval" : "fix";
-  const startTask = useMutation({ mutationFn: () => post<{ id: string }>(projectPath(projectId, "/tasks"), { operation_id: operationId(), workflow, agent_id: agentId, goal_id: goalId, options: {} }), onSuccess: (task) => navigate(`/projects/${projectId}/tasks/${task.id}`) });
+  const startTask = useMutation({ mutationFn: () => post<{ id: string }>(projectPath(projectId, "/tasks"), { operation_id: operationId(), workflow, agent_id: agentId, goal_id: goalId, options: {} }), onSuccess: async (task) => { await queryClient.invalidateQueries({ queryKey: ["projects", projectId, "tasks"] }); navigate(`/projects/${projectId}/tasks/${task.id}`); } });
   if (!goal.data) return <div className="page-loading">Loading goal…</div>;
   const plan = goal.data.measurement_plan;
   const stageState = { define: plan?.state === "accepted" ? "complete" : plan ? "ready" : "current", measure: goal.data.measurement?.baseline_id ? "complete" : goal.data.measurement?.evaluation_id ? "ready" : "locked", improve: goal.data.measurement?.baseline_id ? "ready" : "locked", review: "locked" } as Record<string, string>;

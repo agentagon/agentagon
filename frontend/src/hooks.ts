@@ -77,6 +77,7 @@ export function useTask(projectId?: string, taskId?: string | null) {
     queryKey: ["projects", projectId, "tasks", taskId],
     queryFn: ({ signal }) => api<TaskDetail>(projectPath(projectId!, `/tasks/${encodeURIComponent(taskId!)}`), { signal }),
     enabled: Boolean(projectId && taskId),
+    refetchOnMount: "always",
   });
 }
 

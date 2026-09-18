@@ -534,6 +534,27 @@ def test_goal_action_starts_the_known_workflow_without_a_dialog(webapp_page):
     }
 
 
+def test_task_messages_survive_leaving_and_reopening(webapp_page):
+    page, fixture = webapp_page
+    goal = fixture.goals["agent_support"][0]
+    goal["measurement"] = None
+    goal["measurement_plan"] = None
+    page.goto(
+        "http://agentagon.test/projects/project_alpha/agents/agent_support/goals/goal_correctness"
+    )
+    page.get_by_role("button", name="Design measurements").click()
+    page.wait_for_url("**/projects/project_alpha/tasks/task_started")
+    page.get_by_role("button", name="Back to tasks").click()
+    page.wait_for_url("**/projects/project_alpha/tasks")
+
+    started = next(task for task in fixture.tasks["project_alpha"] if task["id"] == "task_started")
+    started["conversation"].append({"role": "assistant", "text": "I found the agent entrypoint."})
+    page.get_by_role("link", name="New workflow task").click()
+
+    page.get_by_text("I found the agent entrypoint.").wait_for()
+    assert not any(item["path"].endswith("/cancel") for item in fixture.mutations)
+
+
 def test_goal_form_prefills_one_ideal_behavior_field(webapp_page):
     page, fixture = webapp_page
     page.locator(".sidebar").get_by_role("link", name="Support agent").click()
