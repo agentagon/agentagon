@@ -281,6 +281,13 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
     assert calls[0]["sandbox"] == "read-only"
     assert calls[0]["response_mode"] == "raw-final"
     assert "set keep to false for the duplicates" in calls[0]["prompt"]
+    reviewed_candidates = json.loads(calls[0]["prompt"].split("Candidates: ", 1)[1])
+    support_entrypoint = next(
+        item["entrypoint"] for item in reviewed_candidates if item["name"] == "Support"
+    )
+    assert support_entrypoint["line"] == 2
+    assert support_entrypoint["framework_call"] == "agents.Agent"
+    assert '2: support = Agent(name="Support")' in support_entrypoint["code"]
 
     discovered_again = app.discover_application_agents(saved["id"], {})
     assert [agent["name"] for agent in discovered_again["agents"]] == [
@@ -288,6 +295,63 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
         "Research",
     ]
     assert discovered_again["enrichment"]["coding_review"] == {"reviewed": 2, "kept": 2}
+
+
+def test_discovery_automatically_resumes_a_timed_out_review(app, tmp_path, monkeypatch):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    (root / "app.py").write_text('from agents import Agent\nsupport = Agent(name="Support")\n')
+    calls = []
+    candidates = []
+
+    def execute(request, emit, *_args):
+        calls.append(request)
+        if len(calls) == 1:
+            candidates.extend(json.loads(request["prompt"].split("Candidates: ", 1)[1]))
+            emit({"type": "session", "session_id": "discovery-session"})
+            raise AuditError(
+                "Coding-agent time limit reached. Resume the saved session explicitly."
+            )
+        return {
+            "state": "completed",
+            "raw_final_text": json.dumps(
+                {
+                    "candidates": [
+                        {
+                            "id": candidate["id"],
+                            "file": candidate["file"],
+                            "name": candidate["name"],
+                            "responsibility": "Resolves customer questions for users.",
+                            "keep": True,
+                        }
+                        for candidate in candidates
+                    ]
+                }
+            ),
+        }
+
+    app.jobs.execute = execute
+    monkeypatch.setattr(
+        app,
+        "agents",
+        lambda: {
+            "agents": [
+                {
+                    "id": "codex",
+                    "available": True,
+                    "authenticated": True,
+                    "name": "Codex",
+                }
+            ],
+            "settings": {},
+        },
+    )
+
+    discovered = app.discover_application_agents(saved["id"], {})
+
+    assert calls[1]["session_id"] == "discovery-session"
+    assert calls[1]["prompt"].startswith("Continue and finish")
+    assert discovered["agents"][0]["description"] == ("Resolves customer questions for users.")
 
 
 def test_discovery_requires_an_authenticated_coding_assistant(app, tmp_path, monkeypatch):

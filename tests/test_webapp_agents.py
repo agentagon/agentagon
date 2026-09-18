@@ -294,17 +294,26 @@ def test_codex_cancellation_while_approval_is_waiting(tmp_path):
     assert time.monotonic() - before < 3
 
 
-def test_codex_timeout_stops_owned_process(tmp_path):
+def test_codex_timeout_stops_owned_process(tmp_path, monkeypatch):
     executable, _ = fake_codex(tmp_path, "hold")
+    sent = []
+    original_send = agents._Codex.send
+
+    def record_send(self, value):
+        sent.append(value)
+        return original_send(self, value)
+
+    monkeypatch.setattr(agents._Codex, "send", record_send)
     before = time.monotonic()
     with pytest.raises(AuditError, match="time limit"):
         agents.run_agent(
-            request(tmp_path, executable=str(executable), timeout_seconds=0.2),
+            request(tmp_path, executable=str(executable), timeout_seconds=1),
             lambda event: None,
             lambda event: {},
             threading.Event(),
         )
     assert time.monotonic() - before < 3
+    assert any(message.get("method") == "turn/interrupt" for message in sent)
 
 
 @pytest.mark.parametrize("invalid", ["relative", "file", "missing", "unknown"])

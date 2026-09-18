@@ -736,7 +736,7 @@ def _codex(run):
         while client.finished is None:
             client.handle(client.receive())
         return run.result(client.finished)
-    except _Stopped:
+    except (_Stopped, AuditError):
         if run.session_id and client.turn_id:
             with suppress(OSError):
                 client.send(
