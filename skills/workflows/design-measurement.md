@@ -10,6 +10,9 @@ For an app-managed design task, return final JSON with `summary` and `measuremen
 - `metrics`: map of metric names to `direction` (`min`/`max`), `unit`, `aggregation` (`mean`/`median`/`min`/`max`/`sum`), `missing` (`unknown`/`fail`), optional positive `scale`, positive `weight`, `description`, `evidence` and `prerequisites`. Weighted scoring needs every weight.
 - `scoring`: `mode` (`primary`/`weighted`/`custom`), `primary` or `custom_metric` when applicable, optional numeric `target`.
 - `evaluation`: for an existing frozen evaluator, use exactly `{"mode":"reuse","evaluation_id":"eval_..."}` and preserve its scoring. Otherwise use `mode` (`reuse`/`create`), `framework` (`braintrust`/`deepeval`/`pytest`/`custom`), optional native `command` (`argv` array, relative `cwd`), `entrypoint`, `dataset_snapshot_id`, `scorer` description/reference and `output_mapping` (metric to native result field). A detected source candidate is not a frozen evaluator.
-- `evidence` and `limitations`: lists of concise strings. `background`: supported goal-specific observations and reasoning to retain for optimization, with references and uncertainty.
+- `evidence` and `limitations`: lists of concise strings. `background`: a list of concise,
+  supported goal-specific observations and reasoning to retain for optimization, with references and
+  uncertainty. Return an empty list when there is no useful background. Keep the complete list within
+  64 KB.
 
 The proposal does not run or accept an evaluation. The browser saves it for editing and explicit acceptance. Do not claim acceptance from silence or from completion of this task. The service freezes accepted revisions and checks subsequent evaluator scoring against them.
