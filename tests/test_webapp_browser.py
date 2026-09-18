@@ -44,7 +44,7 @@ class WorkspaceFixture:
                     "id": "agent_suggested",
                     "project_id": "project_alpha",
                     "name": "Example agent",
-                    "responsibility": "",
+                    "responsibility": "Demonstrates the application agent flow for local development.",
                     "status": "suggested",
                     "code_scopes": ["examples/example_agent.py"],
                     "shared_dependencies": [],
@@ -713,12 +713,32 @@ def test_home_discover_agents_scans_code_without_a_second_click(webapp_page):
     page, fixture = webapp_page
     fixture.agents["project_alpha"] = []
     page.reload()
-    page.get_by_role("button", name="Discover agents").click()
+    page.get_by_role("button", name="Discover with Codex").click()
     page.wait_for_url("**/projects/project_alpha/agents")
     assert fixture.mutations[-1]["path"] == (
         "/api/projects/project_alpha/application-agents/discover"
     )
+    assert fixture.mutations[-1]["payload"] == {"preferences": {"coding_review": True}}
     assert page.get_by_role("dialog").count() == 0
+
+
+def test_agent_discovery_can_remain_local(webapp_page):
+    page, fixture = webapp_page
+    page.get_by_role("link", name="Agents", exact=True).click()
+    page.get_by_role("button", name="Scan code only").click()
+    page.wait_for_timeout(50)
+    assert fixture.mutations[-1]["payload"] == {"preferences": {"coding_review": False}}
+
+
+def test_confirm_agent_prefills_coding_review_responsibility(webapp_page):
+    page, _ = webapp_page
+    page.get_by_role("link", name="Agents", exact=True).click()
+    page.locator(".inventory-card").filter(has_text="Example agent").get_by_role(
+        "button", name="Review"
+    ).click()
+    assert page.get_by_label("Responsibility").input_value() == (
+        "Demonstrates the application agent flow for local development."
+    )
 
 
 def test_modal_keeps_workspace_visible_without_a_scrim(webapp_page):

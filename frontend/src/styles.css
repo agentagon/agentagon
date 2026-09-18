@@ -124,6 +124,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .onboarding-band { position: relative; overflow: hidden; margin-bottom: 1.2rem; padding: 1.25rem 1.4rem; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 1rem; border: 1px solid color-mix(in srgb, var(--blue-bright) 45%, var(--line)); border-radius: .8rem; background: linear-gradient(105deg, var(--blue-soft), var(--paper) 72%); }
 .onboarding-count { font: 600 1.8rem var(--font-data); color: var(--blue-bright); }
 .onboarding-band p { margin-top: .2rem; color: var(--muted); font-size: .82rem; }
+.onboarding-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .55rem; }
 .home-columns { display: grid; grid-template-columns: 1.15fr .85fr; gap: 2.2rem; }
 .section-heading { min-height: 2.8rem; margin: 2rem 0 .75rem; display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; }
 .section-heading .eyebrow { margin-bottom: .3rem; }
@@ -312,7 +313,7 @@ textarea { resize: vertical; line-height: 1.5; }
   .task-footer { align-items: stretch; flex-direction: column; }
   .task-composer { width: 100%; }
   .onboarding-band { grid-template-columns: auto 1fr; }
-  .onboarding-band .button { grid-column: 2; justify-self: start; }
+  .onboarding-actions { grid-column: 2; justify-content: flex-start; }
   .welcome { background: var(--canvas); }
   .welcome-content h1 { font-size: clamp(2.7rem, 14vw, 4.5rem); }
 }

@@ -219,6 +219,9 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
         'from agents import Agent\nsupport = Agent(name="Support")\nresearch = Agent(name="Research")\n'
     )
     (root / "helper.py").write_text('from agents import Agent\nhelper = Agent(name="Helper")\n')
+    (root / "support_wrapper.py").write_text(
+        'from agents import Agent\nsupport = Agent(name="Support wrapper")\n'
+    )
     calls = []
 
     def execute(request, *_args):
@@ -240,7 +243,8 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
                                 if candidate["name"] == "Support"
                                 else "Researches and summarizes requested information."
                             ),
-                            "keep": candidate["name"] != "Helper",
+                            "keep": candidate["name"] != "Helper"
+                            and candidate["file"] != "support_wrapper.py",
                         }
                         for candidate in candidates
                     ]
@@ -271,7 +275,7 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
     )
 
     assert discovered["preferences"]["seen"] is True
-    assert discovered["enrichment"]["coding_review"] == {"reviewed": 3, "kept": 2}
+    assert discovered["enrichment"]["coding_review"] == {"reviewed": 4, "kept": 2}
     assert [agent["name"] for agent in discovered["agents"]] == [
         "Customer support",
         "Research",
@@ -282,6 +286,7 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
     ]
     assert calls[0]["sandbox"] == "read-only"
     assert calls[0]["response_mode"] == "raw-final"
+    assert "set keep to false for the duplicates" in calls[0]["prompt"]
 
     discovered_again = app.discover_application_agents(saved["id"], {})
     assert [agent["name"] for agent in discovered_again["agents"]] == [

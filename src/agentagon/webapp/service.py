@@ -372,6 +372,7 @@ class Application:
         return result
 
     def _review_discovered_agents(self, project_id):
+        agents = self.catalog.agents(project_id)
         candidates = [
             {
                 "id": agent["id"],
@@ -379,7 +380,7 @@ class Application:
                 "name": agent["name"],
                 "confirmed": agent["status"] == "confirmed",
             }
-            for agent in self.catalog.agents(project_id)
+            for agent in agents
             if len(agent.get("code_scopes", [])) == 1
             and (
                 agent["status"] == "suggested"
@@ -394,6 +395,17 @@ class Application:
             return {"reviewed": 0, "kept": 0}
         if len(candidates) > 100:
             raise AuditError("more than 100 suggestions require manual review")
+        candidate_ids = {candidate["id"] for candidate in candidates}
+        existing = [
+            {
+                "id": agent["id"],
+                "file": agent["code_scopes"][0] if len(agent.get("code_scopes", [])) == 1 else None,
+                "name": agent["name"],
+                "responsibility": agent.get("description", ""),
+            }
+            for agent in agents
+            if agent["status"] == "confirmed" and agent["id"] not in candidate_ids
+        ]
         settings = self.state.read()["agents"]
         selected = settings.get("default_agent", "codex")
         capability = next(
@@ -417,8 +429,15 @@ class Application:
             "exactly. Describe the agent's responsibility in plain user-facing language, based only on "
             "the inspected code, without implementation details or unsupported claims. When `confirmed` "
             "is true, preserve its name, set keep to true, and only supply its missing responsibility. "
+            "Compare suggestions with each other and with the existing confirmed agents. If multiple "
+            "suggestions represent the same user-facing agent, keep the strongest application entrypoint "
+            "and set keep to false for the duplicates. If a suggestion duplicates an existing confirmed "
+            "agent, set keep to false for the suggestion. Do not merge distinct agents merely because they "
+            "share a framework, model, tool, or dependency. "
             "Do not include the input-only `confirmed` field in the response. "
-            "Use a concise user-facing name. Candidates: "
+            "Use a concise user-facing name. Existing confirmed agents: "
+            + json.dumps(existing, ensure_ascii=False)
+            + ". Candidates: "
             + json.dumps(candidates, ensure_ascii=False)
         )
         request = {

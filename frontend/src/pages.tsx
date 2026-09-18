@@ -31,14 +31,27 @@ import {
 } from "./hooks";
 import type { Agent, ConnectorType, Project, ProjectConnector, SkillDefinition } from "./types";
 
+function useDiscoveryAssistant() {
+  const assistants = useAssistants();
+  const selected = String(assistants.data?.defaults.default_agent || "codex");
+  const assistant = assistants.data?.assistants.find((item) => item.id === selected);
+  return assistant?.available && assistant.authenticated === true ? assistant.name : undefined;
+}
+
+function DiscoveryButtons({ assistant, pending, onDiscover }: { assistant?: string; pending: boolean; onDiscover: (codingReview: boolean) => void }) {
+  if (!assistant) return <Button onClick={() => onDiscover(false)} disabled={pending}>{pending ? "Discovering…" : "Discover agents"}</Button>;
+  return <><Button onClick={() => onDiscover(true)} disabled={pending}>{pending ? "Discovering…" : `Discover with ${assistant}`}</Button><Button tone="secondary" onClick={() => onDiscover(false)} disabled={pending}>Scan code only</Button></>;
+}
+
 export function HomePage({ project }: { project: Project }) {
   const agents = useAgents(project.id);
   const tasks = useTasks(project.id);
   const overview = useOverview(project.id);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const discoveryAssistant = useDiscoveryAssistant();
   const discover = useMutation({
-    mutationFn: () => post(projectPath(project.id, "/application-agents/discover"), {}),
+    mutationFn: (codingReview: boolean) => post(projectPath(project.id, "/application-agents/discover"), { preferences: { coding_review: codingReview } }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["projects", project.id, "agents"] });
       navigate(`/projects/${project.id}/agents`);
@@ -53,7 +66,7 @@ export function HomePage({ project }: { project: Project }) {
   ].slice(0, 5);
   return <>
     <PageHeader eyebrow="Project home" title={project.name}><p>{project.path}</p></PageHeader>
-    {!confirmed.length && <section className="onboarding-band"><div className="onboarding-count">01</div><div><h2>Add an agent</h2><p>Choose the application agent you want to improve.</p></div><Button onClick={() => discover.mutate()} disabled={discover.isPending}>{discover.isPending ? "Discovering…" : "Discover agents"}</Button></section>}
+    {!confirmed.length && <section className="onboarding-band"><div className="onboarding-count">01</div><div><h2>Add an agent</h2><p>Choose the application agent you want to improve.</p></div><div className="onboarding-actions"><DiscoveryButtons assistant={discoveryAssistant} pending={discover.isPending} onDiscover={(codingReview) => discover.mutate(codingReview)} /></div></section>}
     {discover.error && <p className="error-banner">{discover.error.message}</p>}
     <div className="summary-grid">
       <section className="summary-card"><span className="summary-label">Agents</span><strong>{confirmed.length}</strong><Link to={`/projects/${project.id}/agents`}>{confirmed.length ? "View agents" : "Set up"}<Icon name="arrow" size={15} /></Link></section>
@@ -371,6 +384,7 @@ function ProjectSettings({ projectId, mode }: { projectId: string; mode: string 
 export function AgentInventoryPage({ projectId }: { projectId: string }) {
   const agents = useAgents(projectId);
   const queryClient = useQueryClient();
+  const discoveryAssistant = useDiscoveryAssistant();
   const [edit, setEdit] = useState<Agent>();
   const [add, setAdd] = useState(false);
   const [notice, setNotice] = useState("");
@@ -380,12 +394,12 @@ export function AgentInventoryPage({ projectId }: { projectId: string }) {
     return () => window.clearTimeout(timeout);
   }, [notice]);
   const discover = useMutation({
-    mutationFn: () => post<{ discovered: number; scanned_files: number }>(projectPath(projectId, "/application-agents/discover"), {}),
+    mutationFn: (codingReview: boolean) => post<{ discovered: number; scanned_files: number }>(projectPath(projectId, "/application-agents/discover"), { preferences: { coding_review: codingReview } }),
     onMutate: () => setNotice(""),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["projects", projectId, "agents"] });
       setNotice(result.discovered ? `Found ${result.discovered} ${result.discovered === 1 ? "agent" : "agents"}.` : `Scanned ${result.scanned_files} files. No agents found.`);
     },
   });
-  return <><PageHeader eyebrow="Inventory" title="Agents" actions={<><Button onClick={() => discover.mutate()} disabled={discover.isPending}>{discover.isPending ? "Discovering…" : "Discover agents"}</Button><Button tone="secondary" onClick={() => setAdd(true)}>Add manually</Button></>} />{notice && <p className="notice-banner" role="status">{notice}</p>}<section><div className="section-heading"><h2>Confirmed</h2><span>{agents.data?.confirmed.length || 0}</span></div><div className="agent-inventory">{agents.data?.confirmed.map((agent) => <article className="inventory-card" key={agent.id}><div><h3>{agent.name}</h3><code>{agent.code_scopes.join(", ")}</code></div><Link to={`/projects/${projectId}/agents/${agent.id}/overview`}>Open</Link></article>)}</div></section><section><div className="section-heading"><h2>Suggestions</h2><span>{agents.data?.suggestions.length || 0}</span></div>{agents.data?.suggestions.length ? <div className="agent-inventory">{agents.data.suggestions.map((agent) => <article className="inventory-card" key={agent.id}><div><h3>{agent.name}</h3><code>{agent.code_scopes[0]}</code></div><Button tone="secondary" onClick={() => setEdit(agent)}>Review</Button></article>)}</div> : <div className="quiet-surface">No suggestions to review.</div>}</section>{discover.error && <p className="error-banner">{discover.error.message}</p>}{(add || edit) && <AddAgentModal projectId={projectId} suggestion={edit} onClose={() => { setAdd(false); setEdit(undefined); }} />}</>;
+  return <><PageHeader eyebrow="Inventory" title="Agents" actions={<><DiscoveryButtons assistant={discoveryAssistant} pending={discover.isPending} onDiscover={(codingReview) => discover.mutate(codingReview)} /><Button tone="secondary" onClick={() => setAdd(true)}>Add manually</Button></>} />{notice && <p className="notice-banner" role="status">{notice}</p>}<section><div className="section-heading"><h2>Confirmed</h2><span>{agents.data?.confirmed.length || 0}</span></div><div className="agent-inventory">{agents.data?.confirmed.map((agent) => <article className="inventory-card" key={agent.id}><div><h3>{agent.name}</h3><code>{agent.code_scopes.join(", ")}</code></div><Link to={`/projects/${projectId}/agents/${agent.id}/overview`}>Open</Link></article>)}</div></section><section><div className="section-heading"><h2>Suggestions</h2><span>{agents.data?.suggestions.length || 0}</span></div>{agents.data?.suggestions.length ? <div className="agent-inventory">{agents.data.suggestions.map((agent) => <article className="inventory-card" key={agent.id}><div><h3>{agent.name}</h3><code>{agent.code_scopes[0]}</code></div><Button tone="secondary" onClick={() => setEdit(agent)}>Review</Button></article>)}</div> : <div className="quiet-surface">No suggestions to review.</div>}</section>{discover.error && <p className="error-banner">{discover.error.message}</p>}{(add || edit) && <AddAgentModal projectId={projectId} suggestion={edit} onClose={() => { setAdd(false); setEdit(undefined); }} />}</>;
 }
