@@ -701,6 +701,14 @@ def test_ag_intelligence_has_its_own_settings_tab(webapp_page):
     assert page.get_by_label("API key").is_visible()
 
 
+def test_execution_profile_defaults_support_the_default_fix(webapp_page):
+    page, _ = webapp_page
+    page.get_by_role("link", name="Settings").click()
+    page.get_by_role("link", name="Execution").click()
+    page.get_by_label("Candidate changes").wait_for()
+    assert page.get_by_label("Candidate changes").input_value() == "6"
+
+
 def test_home_discover_agents_scans_code_without_a_second_click(webapp_page):
     page, fixture = webapp_page
     fixture.agents["project_alpha"] = []

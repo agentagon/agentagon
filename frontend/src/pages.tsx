@@ -282,7 +282,7 @@ type ExecutionProfile = {
 };
 
 const defaultExecutionLimits: ExecutionLimits = {
-  max_candidates: 3,
+  max_candidates: 6,
   max_trials: 24,
   max_elapsed_seconds: 1800,
   parallel_candidates: 1,

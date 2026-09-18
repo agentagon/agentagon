@@ -291,6 +291,29 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
     assert discovered_again["enrichment"]["coding_review"] == {"reviewed": 2, "kept": 2}
 
 
+def test_first_discovery_without_preferences_stays_local(app, tmp_path, monkeypatch):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    (root / "app.py").write_text('from agents import Agent\nsupport = Agent(name="Support")\n')
+    calls = []
+    app.jobs.execute = lambda request, *_args: calls.append(request)
+    monkeypatch.setattr(
+        app,
+        "agents",
+        lambda: {
+            "agents": [{"id": "codex", "available": True, "authenticated": True, "name": "Codex"}],
+            "settings": {},
+        },
+    )
+
+    discovered = app.discover_application_agents(saved["id"], {})
+
+    assert discovered["preferences"]["seen"] is True
+    assert discovered["preferences"]["coding_review"] is False
+    assert discovered["enrichment"] == {}
+    assert calls == []
+
+
 def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path):
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root

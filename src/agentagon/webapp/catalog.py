@@ -29,7 +29,7 @@ DISCOVERY_PREFERENCES_ID = "preferences"
 DISCOVERY_PREFERENCES = {
     "version": 1,
     "seen": False,
-    "coding_review": True,
+    "coding_review": False,
     "trace_metadata": False,
     "trace_cap": 100,
     "trace_connection_id": None,
