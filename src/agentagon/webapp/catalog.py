@@ -29,7 +29,7 @@ DISCOVERY_PREFERENCES_ID = "preferences"
 DISCOVERY_PREFERENCES = {
     "version": 1,
     "seen": False,
-    "coding_review": False,
+    "coding_review": True,
     "trace_metadata": False,
     "trace_cap": 100,
     "trace_connection_id": None,
@@ -154,7 +154,7 @@ class Catalog:
         saved = self.state.db.get_record(
             project_id, "discovery_preferences", DISCOVERY_PREFERENCES_ID
         )
-        return {**DISCOVERY_PREFERENCES, **(saved or {})}
+        return {**DISCOVERY_PREFERENCES, **(saved or {}), "coding_review": True}
 
     def save_discovery_preferences(self, project_id, payload):
         if not isinstance(payload, dict) or set(payload) - {
@@ -165,11 +165,12 @@ class Catalog:
         }:
             raise AuditError("invalid discovery preferences")
         current = self.discovery_preferences(project_id)
-        coding_review = payload.get("coding_review", current["coding_review"])
+        if "coding_review" in payload and payload["coding_review"] is not True:
+            raise AuditError("coding-agent review is required for discovery")
         trace_metadata = payload.get("trace_metadata", current["trace_metadata"])
         trace_cap = payload.get("trace_cap", current["trace_cap"])
         connection_id = payload.get("trace_connection_id", current["trace_connection_id"])
-        if type(coding_review) is not bool or type(trace_metadata) is not bool:
+        if type(trace_metadata) is not bool:
             raise AuditError("discovery choices must be enabled or disabled")
         if type(trace_cap) is not int or not 1 <= trace_cap <= 100:
             raise AuditError("trace metadata cap must be between 1 and 100")
@@ -179,7 +180,7 @@ class Catalog:
             **current,
             "version": 1,
             "seen": True,
-            "coding_review": coding_review,
+            "coding_review": True,
             "trace_metadata": trace_metadata,
             "trace_cap": trace_cap,
             "trace_connection_id": connection_id,

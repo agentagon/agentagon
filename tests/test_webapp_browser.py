@@ -11,6 +11,20 @@ ASSETS = Path(__file__).parents[1] / "src/agentagon/dashboard_assets"
 class WorkspaceFixture:
     def __init__(self):
         self.mutations = []
+        self.assistants = [
+            {
+                "id": "codex",
+                "name": "Codex",
+                "available": True,
+                "authenticated": True,
+            },
+            {"id": "claude", "name": "Claude", "available": False},
+        ]
+        self.assistant_defaults = {
+            "default_agent": "codex",
+            "models": {"codex": "gpt-test", "claude": "claude-test"},
+            "concurrency": 1,
+        }
         self.projects = [
             {
                 "id": "project_alpha",
@@ -242,20 +256,8 @@ class WorkspaceFixture:
             }
         if path == "/api/assistants":
             return {
-                "assistants": [
-                    {
-                        "id": "codex",
-                        "name": "Codex",
-                        "available": True,
-                        "authenticated": True,
-                    },
-                    {"id": "claude", "name": "Claude", "available": False},
-                ],
-                "defaults": {
-                    "default_agent": "codex",
-                    "models": {"codex": "gpt-test", "claude": "claude-test"},
-                    "concurrency": 1,
-                },
+                "assistants": self.assistants,
+                "defaults": self.assistant_defaults,
             }
         if path == "/api/agents/codex/models":
             return {
@@ -713,21 +715,23 @@ def test_home_discover_agents_scans_code_without_a_second_click(webapp_page):
     page, fixture = webapp_page
     fixture.agents["project_alpha"] = []
     page.reload()
-    page.get_by_role("button", name="Discover with Codex").click()
+    page.get_by_role("button", name="Discover agents").click()
     page.wait_for_url("**/projects/project_alpha/agents")
     assert fixture.mutations[-1]["path"] == (
         "/api/projects/project_alpha/application-agents/discover"
     )
-    assert fixture.mutations[-1]["payload"] == {"preferences": {"coding_review": True}}
+    assert fixture.mutations[-1]["payload"] == {}
     assert page.get_by_role("dialog").count() == 0
 
 
-def test_agent_discovery_can_remain_local(webapp_page):
+def test_missing_coding_assistant_is_the_first_setup_step(webapp_page):
     page, fixture = webapp_page
-    page.get_by_role("link", name="Agents", exact=True).click()
-    page.get_by_role("button", name="Scan code only").click()
-    page.wait_for_timeout(50)
-    assert fixture.mutations[-1]["payload"] == {"preferences": {"coding_review": False}}
+    fixture.assistants[0]["authenticated"] = False
+    fixture.agents["project_alpha"] = []
+    page.reload()
+    page.get_by_role("button", name="Set up coding assistant").click()
+    page.wait_for_url("**/settings/assistants")
+    assert page.get_by_role("button", name="Discover agents").count() == 0
 
 
 def test_confirm_agent_prefills_coding_review_responsibility(webapp_page):

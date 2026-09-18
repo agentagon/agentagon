@@ -264,17 +264,11 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
 
     discovered = app.discover_application_agents(
         saved["id"],
-        {
-            "preferences": {
-                "coding_review": True,
-                "trace_metadata": False,
-                "trace_cap": 100,
-                "trace_connection_id": None,
-            }
-        },
+        {},
     )
 
     assert discovered["preferences"]["seen"] is True
+    assert discovered["preferences"]["coding_review"] is True
     assert discovered["enrichment"]["coding_review"] == {"reviewed": 4, "kept": 2}
     assert [agent["name"] for agent in discovered["agents"]] == [
         "Customer support",
@@ -296,30 +290,34 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
     assert discovered_again["enrichment"]["coding_review"] == {"reviewed": 2, "kept": 2}
 
 
-def test_first_discovery_without_preferences_stays_local(app, tmp_path, monkeypatch):
+def test_discovery_requires_an_authenticated_coding_assistant(app, tmp_path, monkeypatch):
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root
     (root / "app.py").write_text('from agents import Agent\nsupport = Agent(name="Support")\n')
-    calls = []
-    app.jobs.execute = lambda request, *_args: calls.append(request)
     monkeypatch.setattr(
         app,
         "agents",
         lambda: {
-            "agents": [{"id": "codex", "available": True, "authenticated": True, "name": "Codex"}],
+            "agents": [
+                {
+                    "id": "codex",
+                    "available": True,
+                    "authenticated": False,
+                    "name": "Codex",
+                }
+            ],
             "settings": {},
         },
     )
 
-    discovered = app.discover_application_agents(saved["id"], {})
+    with pytest.raises(AuditError, match="Set up and authenticate a coding assistant"):
+        app.discover_application_agents(saved["id"], {})
 
-    assert discovered["preferences"]["seen"] is True
-    assert discovered["preferences"]["coding_review"] is False
-    assert discovered["enrichment"] == {}
-    assert calls == []
+    assert app.catalog.discovery_preferences(saved["id"])["seen"] is False
+    assert app.catalog.agents(saved["id"]) == []
 
 
-def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path):
+def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path, monkeypatch):
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root
     (root / "support_router.py").write_text(
@@ -350,6 +348,26 @@ def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path):
             }
 
     app.provider_factory = Provider
+    monkeypatch.setattr(
+        app,
+        "agents",
+        lambda: {
+            "agents": [
+                {
+                    "id": "codex",
+                    "available": True,
+                    "authenticated": True,
+                    "name": "Codex",
+                }
+            ],
+            "settings": {},
+        },
+    )
+    monkeypatch.setattr(
+        app,
+        "_review_discovered_agents",
+        lambda _project_id, _coding_assistant: {"reviewed": 1, "kept": 1},
+    )
     source = save_connection(app, saved["id"])
     app.test_connection(saved["id"], source["id"])
 
@@ -357,7 +375,6 @@ def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path):
         saved["id"],
         {
             "preferences": {
-                "coding_review": False,
                 "trace_metadata": True,
                 "trace_cap": 100,
                 "trace_connection_id": source["id"],

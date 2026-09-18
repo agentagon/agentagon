@@ -343,6 +343,7 @@ class Application:
     def discover_application_agents(self, project_id, payload):
         if not isinstance(payload, dict) or set(payload) - {"preferences"}:
             raise AuditError("unsupported discovery fields")
+        coding_assistant = self._discovery_coding_assistant()
         preferences = self.catalog.discovery_preferences(project_id)
         if "preferences" in payload:
             preferences = self.catalog.save_discovery_preferences(
@@ -351,12 +352,7 @@ class Application:
         elif not preferences["seen"]:
             preferences = self.catalog.save_discovery_preferences(project_id, {})
         result = self.catalog.discover(project_id)
-        enrichment = {}
-        if preferences["coding_review"]:
-            try:
-                enrichment["coding_review"] = self._review_discovered_agents(project_id)
-            except AuditError as exc:
-                result["limitations"].append(f"Coding-agent review unavailable: {exc}")
+        enrichment = {"coding_review": self._review_discovered_agents(project_id, coding_assistant)}
         if preferences["trace_metadata"]:
             try:
                 enrichment["trace_metadata"] = self._match_recent_trace_metadata(
@@ -371,7 +367,21 @@ class Application:
         )
         return result
 
-    def _review_discovered_agents(self, project_id):
+    def _discovery_coding_assistant(self):
+        settings = self.state.read()["agents"]
+        selected = settings.get("default_agent", "codex")
+        capability = next(
+            (item for item in self.agents()["agents"] if item["id"] == selected), None
+        )
+        if (
+            not capability
+            or not capability.get("available")
+            or capability.get("authenticated") is not True
+        ):
+            raise AuditError("Set up and authenticate a coding assistant before discovering agents")
+        return settings, selected
+
+    def _review_discovered_agents(self, project_id, coding_assistant=None):
         agents = self.catalog.agents(project_id)
         candidates = [
             {
@@ -406,17 +416,7 @@ class Application:
             for agent in agents
             if agent["status"] == "confirmed" and agent["id"] not in candidate_ids
         ]
-        settings = self.state.read()["agents"]
-        selected = settings.get("default_agent", "codex")
-        capability = next(
-            (item for item in self.agents()["agents"] if item["id"] == selected), None
-        )
-        if (
-            not capability
-            or not capability.get("available")
-            or capability.get("authenticated") is not True
-        ):
-            raise AuditError(f"{selected.title()} is not authenticated")
+        settings, selected = coding_assistant or self._discovery_coding_assistant()
         prompt = (
             "Review the following deterministic application-agent suggestions in this repository. "
             "Work read-only. Inspect only the listed files and their nearby imports. Return JSON only, "
