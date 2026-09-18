@@ -62,13 +62,7 @@ Before using these judgments as performance metrics, calibrate them on represent
 
 Shared user defaults reduce repeated setup; checkout overrides keep project-specific choices separate. Distinct worktrees have distinct project entries. Explicit invocation choices take precedence over saved configuration.
 
-SQLite in the sibling app-state directory is authoritative for app metadata: project registrations, application agents and bindings, focuses, project connections, coding-agent settings, jobs, events and approvals. Engine records, immutable imported evidence, artifacts and Git work areas remain in the checkout's ignored `.agentagon/` directory. Generated task context files are read projections, not independent mutable job state. Backups need both database and project artifacts.
-
-Use short transactions for metadata; keep model calls, provider requests, Git operations and measurements outside them. Job acceptance binds the raw submission before derived defaults, so retries return the same task even when surrounding settings change. Persist native session and request identities; uncertain external execution must be reconciled rather than duplicated. A database transaction does not make external effects exactly once.
-
-`needs_input` is an Agentagon job state, not a coding-host lifecycle. Persist each exact request and its answer receipt. Exclude human waiting from execution budgets. Native Codex or Claude requests are valid only while their owned process is live; expire them on process loss and resume the exact session so the host can issue a fresh request. Agentagon-owned blockers and bound Intelligence approvals remain durable across restarts. Steering messages never count as approval.
-
-No legacy app-state import, compatibility writer or migration layer is required. Project connections are explicit and are not synthesized from CLI trace settings. The app still uses user/project configuration precedence for execution settings. Provider credentials automatically prefer a supported OS store, with session memory as the fallback; retain only references in app metadata. CLI and execution credentials remain environment references. Changing future defaults does not rewrite a run's frozen settings. See [configuration](../settings.md) and [app state](../app.md#keep-or-resume-work).
+Project connections are explicit. Credentials prefer a supported OS store, with session memory as the fallback, and saved metadata contains references rather than secrets. Changing defaults does not rewrite a task's frozen settings. See [configuration](../settings.md) and [app state](../app.md#keep-or-resume-work).
 
 ## Provider imports are immutable inputs
 
