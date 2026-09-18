@@ -3,7 +3,7 @@
 import copy
 
 from agentagon.webapp import workflows
-from agentagon.webapp.jobs import ACTIVE, public_job
+from agentagon.webapp.jobs import ACTIVE, TERMINAL, public_job
 from agentagon.webapp.providers import DEFAULT_ENDPOINTS
 
 CONNECTOR_TYPES = {
@@ -92,14 +92,47 @@ def task_summary(job, agents=None, goals=None):
 def task_detail(job, agents=None, goals=None):
     result = task_summary(job, agents, goals)
     public = public_job(job)
-    messages = [
-        copy.deepcopy(message)
-        if isinstance(message, dict)
-        else {"role": "assistant", "text": str(message)}
-        for message in public.get("messages", [])
-    ]
+    timeline = []
+    order = 0
+    for message in public.get("messages", []):
+        if not isinstance(message, dict) or message.get("role") not in {"user", "assistant"}:
+            continue
+        text = message.get("text") or message.get("content")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        timeline.append(
+            (
+                message.get("at") or message.get("created_at") or public.get("created_at", ""),
+                order,
+                {
+                    "role": message["role"],
+                    "text": text,
+                    "created_at": message.get("at") or message.get("created_at"),
+                },
+            )
+        )
+        order += 1
+    for event in public.get("events", []):
+        if event.get("type") not in {"message", "result", "error"}:
+            continue
+        text = event.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        timeline.append(
+            (
+                event.get("at") or event.get("created_at") or public.get("created_at", ""),
+                order,
+                {
+                    "role": "assistant",
+                    "text": text,
+                    "created_at": event.get("at") or event.get("created_at"),
+                },
+            )
+        )
+        order += 1
+    timeline.sort(key=lambda item: (item[0], item[1]))
     result.update(
-        conversation=messages,
+        conversation=[item[2] for item in timeline],
         events=copy.deepcopy(public.get("events", [])),
         question=copy.deepcopy(public.get("question")),
         progress=copy.deepcopy(public.get("progress")),
@@ -107,6 +140,7 @@ def task_detail(job, agents=None, goals=None):
         next_action=public.get("next_action"),
         can_resume=public.get("state") == "interrupted",
         can_cancel=public.get("state") in ACTIVE | {"interrupted"},
+        can_message=public.get("state") not in TERMINAL,
         revision=public.get("revision"),
     )
     return result

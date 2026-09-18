@@ -42,7 +42,9 @@ These sessions are separate from a conversation already open in your terminal or
 
 Choose a Codex model from the installed CLI's model catalog in Settings; the app validates the selection before starting a session. The catalog reflects that installation and account, so it can differ between machines. Claude has its own model setting. Model selection is separate from the execution profile used to run evaluations.
 
-Set coding-agent capacity in Settings. Fix has a separate requested parallelism limit; actual work stays within the shared capacity and execution budget. The app queues tasks from the same project, while candidate work uses isolated worktrees. Permissions and questions appear in the task view; a pending approval waits for your explicit answer. Independent reviews use separate managed sessions.
+Set coding-agent capacity in Settings. Fix has a separate requested parallelism limit; actual work stays within the shared capacity and execution budget. The app queues tasks from the same project, while candidate work uses isolated worktrees. Independent reviews use separate managed sessions.
+
+Agentagon owns task input state. Ordinary coding-agent questions are answered with an instruction to use the available evidence and make a reasonable assumption. Exact command, file, trace and AG Intelligence requests appear as task cards; chat remains optional steering and cannot approve them. Time waiting for a card does not consume the task budget. Native host requests expire with their process and are issued again after an explicit resume, while Agentagon-owned requests survive app restarts.
 
 ## Connect traces and datasets
 

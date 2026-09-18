@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, NavLink, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { post, projectPath, remove } from "./api";
+import { operationId, post, projectPath, remove } from "./api";
 import {
   AddAgentModal,
   AddGoalModal,
@@ -13,12 +13,14 @@ import {
   Modal,
   PageHeader,
   Status,
+  TaskDetail,
 } from "./components";
 import {
   useAgent,
   useAgentOverview,
   useAgents,
   useAssistants,
+  useCodexModels,
   useConnectors,
   useConnectorTypes,
   useGoal,
@@ -33,7 +35,15 @@ export function HomePage({ project }: { project: Project }) {
   const agents = useAgents(project.id);
   const tasks = useTasks(project.id);
   const overview = useOverview(project.id);
-  const [addAgent, setAddAgent] = useState(false);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const discover = useMutation({
+    mutationFn: () => post(projectPath(project.id, "/application-agents/discover"), {}),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["projects", project.id, "agents"] });
+      navigate(`/projects/${project.id}/agents`);
+    },
+  });
   const confirmed = agents.data?.confirmed || [];
   const attention = tasks.data?.tasks.filter((task) => task.needs_attention) || [];
   const results = [
@@ -43,15 +53,15 @@ export function HomePage({ project }: { project: Project }) {
   ].slice(0, 5);
   return <>
     <PageHeader eyebrow="Project home" title={project.name}><p>{project.path}</p></PageHeader>
-    {!confirmed.length && <section className="onboarding-band"><div className="onboarding-count">01</div><div><h2>Add an agent</h2><p>Choose the application agent you want to improve.</p></div><Button onClick={() => setAddAgent(true)}>Add agent</Button></section>}
+    {!confirmed.length && <section className="onboarding-band"><div className="onboarding-count">01</div><div><h2>Add an agent</h2><p>Choose the application agent you want to improve.</p></div><Button onClick={() => discover.mutate()} disabled={discover.isPending}>{discover.isPending ? "Discovering…" : "Discover agents"}</Button></section>}
+    {discover.error && <p className="error-banner">{discover.error.message}</p>}
     <div className="summary-grid">
-      <section className="summary-card"><span className="summary-label">Agents</span><strong>{confirmed.length}</strong><Link to={confirmed[0] ? `/projects/${project.id}/agents/${confirmed[0].id}/overview` : `/projects/${project.id}/home`}>{confirmed.length ? "View agents" : "Set up"}<Icon name="arrow" size={15} /></Link></section>
+      <section className="summary-card"><span className="summary-label">Agents</span><strong>{confirmed.length}</strong><Link to={`/projects/${project.id}/agents`}>{confirmed.length ? "View agents" : "Set up"}<Icon name="arrow" size={15} /></Link></section>
       <section className="summary-card"><span className="summary-label">Needs attention</span><strong>{attention.length}</strong><Link to={`/projects/${project.id}/tasks`}>View tasks<Icon name="arrow" size={15} /></Link></section>
       <section className="summary-card"><span className="summary-label">Evidence</span><strong>{(overview.data?.datasets.length || 0) + (overview.data?.traces.length || 0)}</strong><span className="summary-note">Datasets and trace snapshots</span></section>
     </div>
     <div className="home-columns"><section><div className="section-heading"><div><p className="eyebrow">Attention</p><h2>Work waiting on you</h2></div><Link to={`/projects/${project.id}/tasks`}>All tasks</Link></div>{attention.length ? <div className="list-surface">{attention.slice(0, 5).map((task) => <Link className="list-row" to={`/projects/${project.id}/tasks/${task.id}`} key={task.id}><div><strong>{task.title}</strong><span>{task.agent_name || "Agent"} · {task.workflow}</span></div><Status value={task.state} /></Link>)}</div> : <div className="quiet-surface">Nothing needs your attention.</div>}</section>
       <section><div className="section-heading"><div><p className="eyebrow">Recent</p><h2>Measured results</h2></div></div>{results.length ? <div className="list-surface">{results.map(({ kind, item }, index) => <div className="list-row" key={String(item.id || item.run_id || item.audit_id || index)}><div><strong>{String(item.name || item.summary || kind)}</strong><span>{kind}</span></div></div>)}</div> : <div className="quiet-surface">Results appear after the first measurement.</div>}</section></div>
-    {addAgent && <AddAgentModal projectId={project.id} onClose={() => setAddAgent(false)} />}
   </>;
 }
 
@@ -80,15 +90,19 @@ export function AgentPage({ projectId }: { projectId: string }) {
   </>;
 }
 
-function AgentOverview({ agent, goals, overview, projectId, onAddGoal }: { agent: Agent; goals: Array<{ id: string; name: string; objective: string; measurement?: { baseline_id?: string } | null }>; overview?: ReturnType<typeof useAgentOverview>["data"]; projectId: string; onAddGoal: () => void }) {
+function goalBehavior(goal: { objective: string; ideal_behavior?: string | null }) {
+  return goal.ideal_behavior || goal.objective;
+}
+
+function AgentOverview({ agent, goals, overview, projectId, onAddGoal }: { agent: Agent; goals: Array<{ id: string; name: string; objective: string; ideal_behavior?: string | null; measurement?: { baseline_id?: string } | null }>; overview?: ReturnType<typeof useAgentOverview>["data"]; projectId: string; onAddGoal: () => void }) {
   const measured = goals.filter((goal) => goal.measurement?.baseline_id);
   return <div className="agent-overview"><section className="identity-card"><div><p className="eyebrow">Responsibility</p><h2>{agent.responsibility || "No responsibility recorded"}</h2></div><dl><div><dt>Code</dt><dd>{agent.code_scopes.length ? agent.code_scopes.join(", ") : "Trace-only"}</dd></div><div><dt>Goals</dt><dd>{goals.length}</dd></div><div><dt>Measured</dt><dd>{measured.length}</dd></div></dl></section>
-    <section><div className="section-heading"><div><p className="eyebrow">Outcomes</p><h2>Goals</h2></div><Button onClick={onAddGoal}><Icon name="plus" size={15} />Create goal</Button></div>{goals.length ? <div className="goal-grid">{goals.map((goal) => <Link className="goal-card" key={goal.id} to={`/projects/${projectId}/agents/${agent.id}/goals/${goal.id}`}><div><Status value={goal.measurement?.baseline_id ? "measured" : "not measured"} /><h3>{goal.name}</h3><p>{goal.objective}</p></div><Icon name="arrow" /></Link>)}</div> : <Empty title="No goals yet" action={<Button onClick={onAddGoal}>Create first goal</Button>} />}</section>
+    <section><div className="section-heading"><div><p className="eyebrow">Outcomes</p><h2>Goals</h2></div><Button onClick={onAddGoal}><Icon name="plus" size={15} />Create goal</Button></div>{goals.length ? <div className="goal-grid">{goals.map((goal) => <Link className="goal-card" key={goal.id} to={`/projects/${projectId}/agents/${agent.id}/goals/${goal.id}`}><div><Status value={goal.measurement?.baseline_id ? "measured" : "not measured"} /><h3>{goal.name}</h3><p>{goalBehavior(goal)}</p></div><Icon name="arrow" /></Link>)}</div> : <Empty title="No goals yet" action={<Button onClick={onAddGoal}>Create first goal</Button>} />}</section>
     <section><div className="section-heading"><div><p className="eyebrow">Latest evidence</p><h2>Measured outcomes</h2></div></div>{overview?.baselines.length ? <div className="list-surface">{overview.baselines.slice(0, 4).map((item, index) => <div className="list-row" key={String(item.baseline_id || index)}><div><strong>{String(item.name || item.baseline_id)}</strong><span>Immutable baseline</span></div><Status value={String(item.state || "complete")} /></div>)}</div> : <div className="quiet-surface">No baseline has been recorded for this agent.</div>}</section></div>;
 }
 
-function GoalsList({ projectId, agentId, goals, onAddGoal }: { projectId: string; agentId: string; goals: Array<{ id: string; name: string; objective: string; state: string; measurement?: { baseline_id?: string } | null }>; onAddGoal: () => void }) {
-  return <section><div className="section-heading"><div><p className="eyebrow">Goals</p><h2>Outcomes to improve</h2></div><Button onClick={onAddGoal}><Icon name="plus" size={15} />Create goal</Button></div>{goals.length ? <div className="list-surface">{goals.map((goal) => <Link className="list-row" key={goal.id} to={`/projects/${projectId}/agents/${agentId}/goals/${goal.id}`}><div><strong>{goal.name}</strong><span>{goal.objective}</span></div><Status value={goal.measurement?.baseline_id ? "measured" : goal.state} /></Link>)}</div> : <Empty title="No goals yet" action={<Button onClick={onAddGoal}>Create first goal</Button>} />}</section>;
+function GoalsList({ projectId, agentId, goals, onAddGoal }: { projectId: string; agentId: string; goals: Array<{ id: string; name: string; objective: string; ideal_behavior?: string | null; state: string; measurement?: { baseline_id?: string } | null }>; onAddGoal: () => void }) {
+  return <section><div className="section-heading"><div><p className="eyebrow">Goals</p><h2>Outcomes to improve</h2></div><Button onClick={onAddGoal}><Icon name="plus" size={15} />Create goal</Button></div>{goals.length ? <div className="list-surface">{goals.map((goal) => <Link className="list-row" key={goal.id} to={`/projects/${projectId}/agents/${agentId}/goals/${goal.id}`}><div><strong>{goal.name}</strong><span>{goalBehavior(goal)}</span></div><Status value={goal.measurement?.baseline_id ? "measured" : goal.state} /></Link>)}</div> : <Empty title="No goals yet" action={<Button onClick={onAddGoal}>Create first goal</Button>} />}</section>;
 }
 
 function EvidenceView({ overview }: { overview?: ReturnType<typeof useAgentOverview>["data"] }) {
@@ -119,25 +133,24 @@ export function GoalPage({ projectId }: { projectId: string }) {
   const [search, setSearch] = useSearchParams();
   const currentStage = search.get("stage") || "define";
   const goal = useGoal(projectId, agentId, goalId);
-  const skills = useSkills();
-  const [launch, setLaunch] = useState<SkillDefinition>();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const accept = useMutation({ mutationFn: () => post(projectPath(projectId, `/application-agents/${agentId}/focuses/${goalId}/design/accept`), { expected_revision: goal.data?.measurement_plan?.revision }), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects", projectId, "agents", agentId, "goals", goalId] }) });
+  const workflow = currentStage === "define" ? "design" : currentStage === "measure" ? goal.data?.measurement?.evaluation_id ? "baseline" : "eval" : "fix";
+  const startTask = useMutation({ mutationFn: () => post<{ id: string }>(projectPath(projectId, "/tasks"), { operation_id: operationId(), workflow, agent_id: agentId, goal_id: goalId, options: {} }), onSuccess: (task) => navigate(`/projects/${projectId}/tasks/${task.id}`) });
   if (!goal.data) return <div className="page-loading">Loading goal…</div>;
-  const workflow = currentStage === "define" ? "design" : currentStage === "measure" ? goal.data.measurement?.evaluation_id ? "baseline" : "eval" : "fix";
-  const skill = skills.data?.skills.find((item) => item.workflow === workflow);
   const plan = goal.data.measurement_plan;
   const stageState = { define: plan?.state === "accepted" ? "complete" : plan ? "ready" : "current", measure: goal.data.measurement?.baseline_id ? "complete" : goal.data.measurement?.evaluation_id ? "ready" : "locked", improve: goal.data.measurement?.baseline_id ? "ready" : "locked", review: "locked" } as Record<string, string>;
   return <>
-    <PageHeader eyebrow="Goal" title={goal.data.name}><p>{goal.data.objective}</p></PageHeader>
+    <PageHeader eyebrow="Goal" title={goal.data.name}><p>{goalBehavior(goal.data)}</p></PageHeader>
     <nav className="stage-rail" aria-label="Goal stages">{stages.map((stage, index) => <button key={stage.id} className={currentStage === stage.id ? "is-active" : ""} onClick={() => setSearch({ stage: stage.id })}><span className={`stage-index stage-${stageState[stage.id]}`}>{stageState[stage.id] === "complete" ? "✓" : index + 1}</span><span><strong>{stage.name}</strong><small>{stageState[stage.id]}</small></span></button>)}</nav>
     <section className="goal-stage"><div className="stage-heading"><p className="eyebrow">{currentStage}</p><h2>{currentStage === "define" ? "Define what good looks like" : currentStage === "measure" ? "Establish the current result" : currentStage === "improve" ? "Run a bounded improvement" : "Choose what to deliver"}</h2></div>
-      {currentStage === "define" && <div className="stage-content"><dl className="definition-list"><div><dt>Objective</dt><dd>{goal.data.objective}</dd></div>{goal.data.ideal_behavior && <div><dt>Ideal behavior</dt><dd>{goal.data.ideal_behavior}</dd></div>}</dl>{plan ? <div className="measurement-plan"><div><h3>Measurement plan</h3><Status value={plan.state || "draft"} /></div>{plan.state !== "accepted" && <Button onClick={() => accept.mutate()} disabled={accept.isPending}>Accept measurement plan</Button>}</div> : <div className="stage-empty"><h3>No measurement plan</h3><Button onClick={() => skill && setLaunch(skill)}>Design measurements</Button></div>}</div>}
-      {currentStage === "measure" && <div className="stage-content"><dl className="definition-list"><div><dt>Evaluator</dt><dd>{goal.data.measurement?.evaluation_id || "Not prepared"}</dd></div><div><dt>Baseline</dt><dd>{goal.data.measurement?.baseline_id || "Not run"}</dd></div></dl><Button onClick={() => skill && setLaunch(skill)} disabled={!skill}>{goal.data.measurement?.evaluation_id ? "Run baseline" : "Prepare evaluation"}</Button></div>}
-      {currentStage === "improve" && <div className="stage-content">{goal.data.measurement?.baseline_id ? <><p className="stage-summary">The frozen baseline will remain the comparison point.</p><Button onClick={() => skill && setLaunch(skill)}>Improve agent</Button></> : <div className="blocked-state"><h3>Baseline required</h3><Button tone="secondary" onClick={() => setSearch({ stage: "measure" })}>Go to Measure</Button></div>}</div>}
+      {currentStage === "define" && <div className="stage-content"><dl className="definition-list"><div><dt>Ideal behavior</dt><dd>{goalBehavior(goal.data)}</dd></div></dl>{plan ? <div className="measurement-plan"><div><h3>Measurement plan</h3><Status value={plan.state || "draft"} /></div>{plan.state !== "accepted" && <Button onClick={() => accept.mutate()} disabled={accept.isPending}>Accept measurement plan</Button>}</div> : <div className="stage-empty"><h3>No measurement plan</h3><Button onClick={() => startTask.mutate()} disabled={startTask.isPending}>{startTask.isPending ? "Starting…" : "Design measurements"}</Button></div>}</div>}
+      {currentStage === "measure" && <div className="stage-content"><dl className="definition-list"><div><dt>Evaluator</dt><dd>{goal.data.measurement?.evaluation_id || "Not prepared"}</dd></div><div><dt>Baseline</dt><dd>{goal.data.measurement?.baseline_id || "Not run"}</dd></div></dl><Button onClick={() => startTask.mutate()} disabled={startTask.isPending}>{startTask.isPending ? "Starting…" : goal.data.measurement?.evaluation_id ? "Run baseline" : "Prepare evaluation"}</Button></div>}
+      {currentStage === "improve" && <div className="stage-content">{goal.data.measurement?.baseline_id ? <><p className="stage-summary">The frozen baseline will remain the comparison point.</p><Button onClick={() => startTask.mutate()} disabled={startTask.isPending}>{startTask.isPending ? "Starting…" : "Improve agent"}</Button></> : <div className="blocked-state"><h3>Baseline required</h3><Button tone="secondary" onClick={() => setSearch({ stage: "measure" })}>Go to Measure</Button></div>}</div>}
       {currentStage === "review" && <div className="stage-content"><div className="blocked-state"><h3>No verified candidate yet</h3><Button tone="secondary" onClick={() => setSearch({ stage: "improve" })}>Go to Improve</Button></div></div>}
+      {startTask.error && <p className="error-banner">{startTask.error.message}</p>}
     </section>
-    {launch && <LaunchWorkflowModal projectId={projectId} skill={launch} defaultAgentId={agentId} defaultGoalId={goalId} onClose={() => setLaunch(undefined)} />}
   </>;
 }
 
@@ -160,6 +173,12 @@ export function TasksPage({ projectId }: { projectId: string }) {
     return next;
   });
   return <><PageHeader eyebrow="Tasks" title="Task history"><p>Questions, approvals, progress, and results.</p></PageHeader><div className="filters"><select aria-label="Filter by agent" value={filters.agent_id || ""} onChange={(event) => selectAgent(event.target.value)}><option value="">All agents</option>{agents.data?.confirmed.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select><select aria-label="Filter by goal" value={filters.goal_id || ""} onChange={(event) => selectFilter("goal_id", event.target.value)} disabled={!filters.agent_id}><option value="">All goals</option>{goals.data?.goals.map((goal) => <option key={goal.id} value={goal.id}>{goal.name}</option>)}</select><select aria-label="Filter by workflow" value={filters.workflow || ""} onChange={(event) => selectFilter("workflow", event.target.value)}><option value="">All workflows</option><option value="design">Design measurements</option><option value="eval">Prepare evaluation</option><option value="baseline">Run baseline</option><option value="fix">Improve agent</option><option value="audit">Audit agent</option></select><select aria-label="Filter by status" value={filters.status || ""} onChange={(event) => selectFilter("status", event.target.value)}><option value="">All statuses</option><option value="needs_input">Needs input</option><option value="running">Running</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="interrupted">Interrupted</option></select></div><TaskList projectId={projectId} tasks={tasks.data?.tasks || []} /></>;
+}
+
+export function TaskPage({ projectId }: { projectId: string }) {
+  const { taskId = "" } = useParams();
+  const navigate = useNavigate();
+  return <TaskDetail projectId={projectId} taskId={taskId} onBack={() => navigate(`/projects/${projectId}/tasks`)} />;
 }
 
 function TaskList({ projectId, tasks }: { projectId: string; tasks: Array<{ id: string; title: string; agent_name?: string | null; goal_name?: string | null; workflow: string; state: string; updated_at?: string }> }) {
@@ -200,8 +219,15 @@ function ConnectModal({ projectId, type, onClose }: { projectId: string; type: C
 
 export function SettingsPage({ projectId }: { projectId: string }) {
   const { section = "assistants" } = useParams();
-  const sections = ["assistants", "execution", "defaults", "privacy", "project"];
-  return <><PageHeader eyebrow="Workspace settings" title="Settings" /><nav className="tabs settings-tabs">{sections.map((name) => <NavLink key={name} to={`/projects/${projectId}/settings/${name}`} className={({ isActive }) => isActive ? "is-active" : ""}>{name}</NavLink>)}</nav>{section === "assistants" && <AssistantSettings />}{section === "execution" && <ProjectSettings key="execution" projectId={projectId} mode="execution" />}{section === "defaults" && <ProjectSettings key="defaults" projectId={projectId} mode="defaults" />}{section === "privacy" && <ProjectSettings key="privacy" projectId={projectId} mode="privacy" />}{section === "project" && <ProjectSettings key="project" projectId={projectId} mode="project" />}</>;
+  const current = section === "privacy" ? "intelligence" : section;
+  const sections = [
+    { id: "assistants", label: "Assistants" },
+    { id: "execution", label: "Execution" },
+    { id: "defaults", label: "Defaults" },
+    { id: "intelligence", label: "AG Intelligence" },
+    { id: "project", label: "Project" },
+  ];
+  return <><PageHeader eyebrow="Workspace settings" title="Settings" /><nav className="tabs settings-tabs">{sections.map(({ id, label }) => <NavLink key={id} end to={`/projects/${projectId}/settings/${id}`} className={({ isActive }) => isActive || current === id ? "is-active" : ""}>{label}</NavLink>)}</nav>{current === "assistants" && <AssistantSettings />}{current === "execution" && <ExecutionSettings projectId={projectId} />}{current === "defaults" && <ProjectSettings key="defaults" projectId={projectId} mode="defaults" />}{current === "intelligence" && <ProjectSettings key="intelligence" projectId={projectId} mode="intelligence" />}{current === "project" && <ProjectSettings key="project" projectId={projectId} mode="project" />}</>;
 }
 
 function AssistantSettings() {
@@ -213,6 +239,7 @@ function AssistantSettings() {
   const [concurrency, setConcurrency] = useState(Number(defaults.concurrency || 1));
   const [key, setKey] = useState("");
   const [initialized, setInitialized] = useState(false);
+  const codexModels = useCodexModels(selected === "codex");
   useEffect(() => {
     if (!assistants.data || initialized) return;
     const agent = String(assistants.data.defaults.default_agent || "codex");
@@ -222,12 +249,99 @@ function AssistantSettings() {
     setConcurrency(Number(assistants.data.defaults.concurrency || 1));
     setInitialized(true);
   }, [assistants.data, initialized]);
+  useEffect(() => {
+    if (selected !== "codex" || !codexModels.data?.models.length) return;
+    if (!codexModels.data.models.some((entry) => entry.id === model)) {
+      setModel(codexModels.data.default_model || codexModels.data.models[0].id);
+    }
+  }, [codexModels.data, model, selected]);
   const mutation = useMutation({ mutationFn: () => post("/api/assistants", { default_agent: selected, model, concurrency, ...(selected === "claude" && key ? { claude_api_key: key, credential_mode: "keyring" } : {}) }), onSuccess: () => { setKey(""); queryClient.invalidateQueries({ queryKey: ["assistants"] }); } });
   const selectAssistant = (agent: string) => {
     setSelected(agent);
     setModel(String((assistants.data?.defaults.models as Record<string, string> | undefined)?.[agent] || ""));
   };
-  return <><div className="assistant-grid">{assistants.data?.assistants.map((assistant) => <article className={`assistant-card ${selected === assistant.id ? "is-selected" : ""}`} key={assistant.id}><div><h2>{assistant.name}</h2><Status value={assistant.available ? assistant.authenticated === false ? "sign in needed" : "available" : "not available"} /></div>{assistant.version && <p>{assistant.version}</p>}</article>)}</div><form className="settings-card form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><label>Default coding assistant<select value={selected} onChange={(event) => selectAssistant(event.target.value)}><option value="codex">Codex</option><option value="claude">Claude</option></select></label><label>Default model<input value={model} onChange={(event) => setModel(event.target.value)} /></label><label>Maximum concurrent tasks<input type="number" min={1} max={8} value={concurrency} onChange={(event) => setConcurrency(Number(event.target.value))} /></label>{selected === "claude" && <label>Claude API key<input type="password" value={key} onChange={(event) => setKey(event.target.value)} autoComplete="off" /></label>}{mutation.error && <p className="error-banner">{mutation.error.message}</p>}<footer className="form-actions"><Button type="submit">Save settings</Button></footer></form></>;
+  const modelField = selected === "codex" && codexModels.data?.models.length
+    ? <select value={model} onChange={(event) => setModel(event.target.value)}>{codexModels.data.models.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
+    : <input value={model} onChange={(event) => setModel(event.target.value)} />;
+  return <><div className="assistant-grid">{assistants.data?.assistants.map((assistant) => <article className={`assistant-card ${selected === assistant.id ? "is-selected" : ""}`} key={assistant.id}><div><h2>{assistant.name}</h2><Status value={assistant.available ? assistant.authenticated === false ? "sign in needed" : "available" : "not available"} /></div>{assistant.version && <p>{assistant.version}</p>}</article>)}</div><form className="settings-card form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><label>Default coding assistant<select value={selected} onChange={(event) => selectAssistant(event.target.value)}><option value="codex">Codex</option><option value="claude">Claude</option></select></label><label>Default model{modelField}</label>{codexModels.isError && selected === "codex" && <p className="error-banner">Could not load models from Codex. Enter a model name instead.</p>}<label>Maximum concurrent tasks<input type="number" min={1} max={8} value={concurrency} onChange={(event) => setConcurrency(Number(event.target.value))} /></label>{selected === "claude" && <label>Claude API key<input type="password" value={key} onChange={(event) => setKey(event.target.value)} autoComplete="off" /></label>}{mutation.error && <p className="error-banner">{mutation.error.message}</p>}<footer className="form-actions"><Button type="submit">Save settings</Button></footer></form></>;
+}
+
+type ExecutionLimits = {
+  max_candidates: number;
+  max_trials: number;
+  max_elapsed_seconds: number;
+  parallel_candidates: number;
+  parallel_trials: number;
+  trial_timeout_seconds: number;
+};
+
+type ExecutionProfile = {
+  runner?: { kind?: string };
+  limits?: Partial<ExecutionLimits>;
+  [key: string]: unknown;
+};
+
+const defaultExecutionLimits: ExecutionLimits = {
+  max_candidates: 3,
+  max_trials: 24,
+  max_elapsed_seconds: 1800,
+  parallel_candidates: 1,
+  parallel_trials: 1,
+  trial_timeout_seconds: 60,
+};
+
+function ExecutionSettings({ projectId }: { projectId: string }) {
+  const overview = useOverview(projectId);
+  const queryClient = useQueryClient();
+  const profiles = (overview.data?.settings.profiles || {}) as Record<string, ExecutionProfile>;
+  const localProfile = profiles.local;
+  const [limits, setLimits] = useState(defaultExecutionLimits);
+  const [initialized, setInitialized] = useState(false);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    if (!overview.data || initialized) return;
+    setLimits({ ...defaultExecutionLimits, ...(localProfile?.limits || {}) });
+    setInitialized(true);
+  }, [initialized, localProfile, overview.data]);
+  useEffect(() => {
+    if (!saved) return;
+    const timeout = window.setTimeout(() => setSaved(false), 3000);
+    return () => window.clearTimeout(timeout);
+  }, [saved]);
+  const setLimit = (name: keyof ExecutionLimits, value: number) => setLimits((current) => ({ ...current, [name]: value }));
+  const save = useMutation({
+    mutationFn: () => post(projectPath(projectId, "/settings"), {
+      scope: "project",
+      profile_name: "local",
+      profile: {
+        ...(localProfile || {}),
+        runner: { ...(localProfile?.runner || {}), kind: "local" },
+        limits: { ...(localProfile?.limits || {}), ...limits },
+      },
+      expected_revision: overview.data?.settings.revision,
+    }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["projects", projectId, "overview"] });
+      setSaved(true);
+    },
+  });
+  const otherProfiles = Object.entries(profiles).filter(([name]) => name !== "local");
+  return <div className="execution-settings">
+    {otherProfiles.length > 0 && <div className="list-surface">{otherProfiles.map(([name, profile]) => <div className="list-row" key={name}><div><strong>{name}</strong><span>{String(profile.runner?.kind || "local")}</span></div></div>)}</div>}
+    <form className="settings-card form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
+      <div className="section-heading compact-heading"><div><p className="eyebrow">Execution</p><h2>Local profile</h2></div>{localProfile && <Status value="configured" />}</div>
+      <div className="execution-limits">
+        <label>Candidate changes<input type="number" min={1} required value={limits.max_candidates} onChange={(event) => setLimit("max_candidates", Number(event.target.value))} /></label>
+        <label>Total trials<input type="number" min={1} required value={limits.max_trials} onChange={(event) => setLimit("max_trials", Number(event.target.value))} /></label>
+        <label>Time limit (minutes)<input type="number" min={1} required value={Math.max(1, Math.round(limits.max_elapsed_seconds / 60))} onChange={(event) => setLimit("max_elapsed_seconds", Number(event.target.value) * 60)} /></label>
+        <label>Trial timeout (seconds)<input type="number" min={1} required value={limits.trial_timeout_seconds} onChange={(event) => setLimit("trial_timeout_seconds", Number(event.target.value))} /></label>
+        <label>Parallel candidates<input type="number" min={1} max={limits.max_candidates} required value={limits.parallel_candidates} onChange={(event) => setLimit("parallel_candidates", Number(event.target.value))} /></label>
+        <label>Parallel trials<input type="number" min={1} max={limits.max_trials} required value={limits.parallel_trials} onChange={(event) => setLimit("parallel_trials", Number(event.target.value))} /></label>
+      </div>
+      {save.error && <p className="error-banner">{save.error.message}</p>}
+      <footer className="form-actions">{saved && <span className="saved-label" role="status">Saved</span>}<Button type="submit" disabled={save.isPending}>{save.isPending ? "Saving…" : localProfile ? "Save profile" : "Create profile"}</Button></footer>
+    </form>
+  </div>;
 }
 
 function ProjectSettings({ projectId, mode }: { projectId: string; mode: string }) {
@@ -250,7 +364,6 @@ function ProjectSettings({ projectId, mode }: { projectId: string; mode: string 
   }, [overview.data, initialized]);
   const save = useMutation({ mutationFn: () => post(projectPath(projectId, "/settings"), mode === "defaults" ? { scope: "project", values: { "traces.state": traces }, unset: [] } : { scope: "project", values: { "intelligence.mode": intelligenceMode, ...(endpoint ? { "intelligence.endpoint": endpoint } : {}) }, unset: endpoint ? [] : ["intelligence.endpoint"], ...(key ? { intelligence_api_key: key } : {}) }), onSuccess: () => { setKey(""); queryClient.invalidateQueries({ queryKey: ["projects", projectId, "overview"] }); } });
   const removeProject = useMutation({ mutationFn: () => remove(projectPath(projectId, "")), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["projects"] }); navigate("/"); } });
-  if (mode === "execution") return <div className="settings-card"><div className="section-heading"><div><p className="eyebrow">Execution</p><h2>Profiles</h2></div></div><div className="list-surface">{Object.entries(overview.data?.settings.profiles || {}).map(([name, profile]) => <div className="list-row" key={name}><div><strong>{name}</strong><span>{String((profile as { runner?: { kind?: string } }).runner?.kind || "local")}</span></div></div>)}</div></div>;
   if (mode === "project") return <div className="settings-card danger-card"><h2>Remove project</h2><p>Files and saved evidence stay on disk.</p><Button tone="danger" onClick={() => removeProject.mutate()}>Remove project</Button></div>;
   return <form className="settings-card form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>{mode === "defaults" ? <label>Use runtime traces<select value={traces} onChange={(event) => setTraces(event.target.value)}><option value="unset">Ask when relevant</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label> : <><label>Intelligence access<select value={intelligenceMode} onChange={(event) => setIntelligenceMode(event.target.value)}><option value="ask">Ask before each request</option><option value="full_access">Allow prepared requests</option></select></label><label>Service URL<input type="url" value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label><label>API key<input type="password" value={key} onChange={(event) => setKey(event.target.value)} autoComplete="off" /></label></>}{save.error && <p className="error-banner">{save.error.message}</p>}<footer className="form-actions"><Button type="submit">Save settings</Button></footer></form>;
 }
@@ -260,6 +373,19 @@ export function AgentInventoryPage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const [edit, setEdit] = useState<Agent>();
   const [add, setAdd] = useState(false);
-  const discover = useMutation({ mutationFn: () => post(projectPath(projectId, "/application-agents/discover"), {}), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects", projectId, "agents"] }) });
-  return <><PageHeader eyebrow="Inventory" title="Agents" actions={<><Button tone="secondary" onClick={() => discover.mutate()} disabled={discover.isPending}>Discover agents</Button><Button onClick={() => setAdd(true)}>Add agent</Button></>} /><section><div className="section-heading"><h2>Confirmed</h2><span>{agents.data?.confirmed.length || 0}</span></div><div className="agent-inventory">{agents.data?.confirmed.map((agent) => <article className="inventory-card" key={agent.id}><div><h3>{agent.name}</h3><code>{agent.code_scopes.join(", ")}</code></div><Link to={`/projects/${projectId}/agents/${agent.id}/overview`}>Open</Link></article>)}</div></section><section><div className="section-heading"><h2>Suggestions</h2><span>{agents.data?.suggestions.length || 0}</span></div>{agents.data?.suggestions.length ? <div className="agent-inventory">{agents.data.suggestions.map((agent) => <article className="inventory-card" key={agent.id}><div><h3>{agent.name}</h3><code>{agent.code_scopes[0]}</code></div><Button tone="secondary" onClick={() => setEdit(agent)}>Review</Button></article>)}</div> : <div className="quiet-surface">No suggestions to review.</div>}</section>{discover.error && <p className="error-banner">{discover.error.message}</p>}{(add || edit) && <AddAgentModal projectId={projectId} suggestion={edit} onClose={() => { setAdd(false); setEdit(undefined); }} />}</>;
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    if (!notice) return;
+    const timeout = window.setTimeout(() => setNotice(""), 3000);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
+  const discover = useMutation({
+    mutationFn: () => post<{ discovered: number; scanned_files: number }>(projectPath(projectId, "/application-agents/discover"), {}),
+    onMutate: () => setNotice(""),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["projects", projectId, "agents"] });
+      setNotice(result.discovered ? `Found ${result.discovered} ${result.discovered === 1 ? "agent" : "agents"}.` : `Scanned ${result.scanned_files} files. No agents found.`);
+    },
+  });
+  return <><PageHeader eyebrow="Inventory" title="Agents" actions={<><Button onClick={() => discover.mutate()} disabled={discover.isPending}>{discover.isPending ? "Discovering…" : "Discover agents"}</Button><Button tone="secondary" onClick={() => setAdd(true)}>Add manually</Button></>} />{notice && <p className="notice-banner" role="status">{notice}</p>}<section><div className="section-heading"><h2>Confirmed</h2><span>{agents.data?.confirmed.length || 0}</span></div><div className="agent-inventory">{agents.data?.confirmed.map((agent) => <article className="inventory-card" key={agent.id}><div><h3>{agent.name}</h3><code>{agent.code_scopes.join(", ")}</code></div><Link to={`/projects/${projectId}/agents/${agent.id}/overview`}>Open</Link></article>)}</div></section><section><div className="section-heading"><h2>Suggestions</h2><span>{agents.data?.suggestions.length || 0}</span></div>{agents.data?.suggestions.length ? <div className="agent-inventory">{agents.data.suggestions.map((agent) => <article className="inventory-card" key={agent.id}><div><h3>{agent.name}</h3><code>{agent.code_scopes[0]}</code></div><Button tone="secondary" onClick={() => setEdit(agent)}>Review</Button></article>)}</div> : <div className="quiet-surface">No suggestions to review.</div>}</section>{discover.error && <p className="error-banner">{discover.error.message}</p>}{(add || edit) && <AddAgentModal projectId={projectId} suggestion={edit} onClose={() => { setAdd(false); setEdit(undefined); }} />}</>;
 }

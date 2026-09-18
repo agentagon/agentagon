@@ -124,14 +124,16 @@ class Application:
         return result
 
     def save_goal(self, project_id, agent_id, payload):
+        objective = payload.get("objective")
+        ideal_behavior = payload.get("ideal_behavior")
         translated = {
             "category": payload.get("category", "custom"),
-            "goal": payload.get("objective"),
-            "target": payload.get("ideal_behavior"),
+            "goal": objective or ideal_behavior,
+            "target": ideal_behavior if objective else None,
             "source": payload.get("source", {"kind": "goal"}),
         }
         if translated["category"] == "custom":
-            translated["name"] = payload.get("name") or payload.get("objective")
+            translated["name"] = payload.get("name") or objective or ideal_behavior
         return self.goal_projection(self.catalog.save_focus(project_id, agent_id, translated))
 
     @staticmethod
@@ -371,9 +373,22 @@ class Application:
 
     def _review_discovered_agents(self, project_id):
         candidates = [
-            {"id": agent["id"], "file": agent["code_scopes"][0], "name": agent["name"]}
+            {
+                "id": agent["id"],
+                "file": agent["code_scopes"][0],
+                "name": agent["name"],
+                "confirmed": agent["status"] == "confirmed",
+            }
             for agent in self.catalog.agents(project_id)
-            if agent["status"] == "suggested" and len(agent.get("code_scopes", [])) == 1
+            if len(agent.get("code_scopes", [])) == 1
+            and (
+                agent["status"] == "suggested"
+                or (
+                    agent["status"] == "confirmed"
+                    and agent.get("discovery_key")
+                    and not agent.get("description")
+                )
+            )
         ]
         if not candidates:
             return {"reviewed": 0, "kept": 0}
@@ -394,10 +409,15 @@ class Application:
             "Review the following deterministic application-agent suggestions in this repository. "
             "Work read-only. Inspect only the listed files and their nearby imports. Return JSON only, "
             "with exactly one item per input candidate and no new candidates: "
-            '{"candidates":[{"id":"agent_id","file":"path","name":"Agent name","keep":true}]}. '
+            '{"candidates":[{"id":"agent_id","file":"path","name":"Agent name",'
+            '"responsibility":"One concise sentence describing what the agent does for users",'
+            '"keep":true}]}. '
             "Keep a candidate only when the file defines an application agent entrypoint rather than a "
             "library helper, test, example, documentation, or dependency. Preserve each id and file string "
-            "exactly. "
+            "exactly. Describe the agent's responsibility in plain user-facing language, based only on "
+            "the inspected code, without implementation details or unsupported claims. When `confirmed` "
+            "is true, preserve its name, set keep to true, and only supply its missing responsibility. "
+            "Do not include the input-only `confirmed` field in the response. "
             "Use a concise user-facing name. Candidates: "
             + json.dumps(candidates, ensure_ascii=False)
         )

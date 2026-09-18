@@ -105,15 +105,23 @@ class WorkspaceFixture:
                     "state": "needs_input",
                     "needs_attention": True,
                     "updated_at": "2026-09-17T12:00:00Z",
-                    "conversation": [],
+                    "conversation": [
+                        {
+                            "role": "assistant",
+                            "text": "I am comparing the verified candidates.",
+                        }
+                    ],
                     "events": [{"type": "progress", "text": "Compared two verified candidates."}],
                     "question": {
                         "id": "question_candidate",
+                        "kind": "blocker",
+                        "source": "agentagon",
                         "prompt": "Choose the candidate to prepare for delivery.",
                     },
                     "next_action": "Choose a verified candidate.",
                     "can_resume": False,
                     "can_cancel": True,
+                    "can_message": True,
                     "result": None,
                 },
                 {
@@ -135,6 +143,7 @@ class WorkspaceFixture:
                     "next_action": None,
                     "can_resume": False,
                     "can_cancel": False,
+                    "can_message": False,
                     "result": {"baseline_id": "baseline_support"},
                 },
             ],
@@ -248,6 +257,24 @@ class WorkspaceFixture:
                     "concurrency": 1,
                 },
             }
+        if path == "/api/agents/codex/models":
+            return {
+                "models": [
+                    {
+                        "id": "gpt-test",
+                        "name": "GPT Test",
+                        "description": "Available model",
+                        "default": True,
+                    },
+                    {
+                        "id": "gpt-test-fast",
+                        "name": "GPT Test Fast",
+                        "description": "Faster model",
+                        "default": False,
+                    },
+                ],
+                "default_model": "gpt-test",
+            }
         parts = path.strip("/").split("/")
         project_id, resource = parts[2:4]
         if resource == "agents":
@@ -264,14 +291,15 @@ class WorkspaceFixture:
             if parts[5] == "goals":
                 if len(parts) == 6:
                     if method == "POST":
+                        definition = payload.get("ideal_behavior") or payload.get("objective")
                         goal = {
                             "id": "goal_new",
                             "project_id": project_id,
                             "agent_id": agent_id,
                             "name": payload.get("name") or "Task success and correctness",
                             "category": payload["category"],
-                            "objective": payload["objective"],
-                            "ideal_behavior": payload.get("ideal_behavior"),
+                            "objective": definition,
+                            "ideal_behavior": None,
                             "state": "active",
                             "measurement": None,
                         }
@@ -307,6 +335,7 @@ class WorkspaceFixture:
                         "question": None,
                         "can_resume": False,
                         "can_cancel": True,
+                        "can_message": True,
                     }
                     self.tasks[project_id].insert(0, task)
                     return {"id": task["id"]}
@@ -326,6 +355,7 @@ class WorkspaceFixture:
                     "result",
                     "can_resume",
                     "can_cancel",
+                    "can_message",
                 }
                 return {
                     "tasks": [
@@ -337,6 +367,10 @@ class WorkspaceFixture:
             task = next(item for item in self.tasks[project_id] if item["id"] == parts[4])
             if len(parts) == 6 and parts[5] == "reply":
                 task.update(state="running", needs_attention=False, question=None)
+            if len(parts) == 6 and parts[5] == "message":
+                task["conversation"].append({"role": "user", "text": payload["message"]})
+                if not task.get("question") or task["question"].get("source") != "agentagon":
+                    task.update(state="running", needs_attention=False, question=None)
             return task
         if resource == "workflows":
             params = {key: values[0] for key, values in parse_qs(query).items()}
@@ -384,7 +418,12 @@ class WorkspaceFixture:
                 "profiles": {"local": {"runner": {"kind": "local"}}},
             }
         if resource == "application-agents" and parts[-1] == "discover":
-            return {"agents": self.agents[project_id], "limitations": []}
+            return {
+                "agents": self.agents[project_id],
+                "discovered": len(self.agents[project_id]),
+                "scanned_files": 42,
+                "limitations": [],
+            }
         return {}
 
     def overview(self, project_id):
@@ -436,13 +475,14 @@ def test_named_agents_and_project_switch_are_scoped(webapp_page):
     assert sidebar.get_by_role("link", name="Research agent").count() == 0
     sidebar.get_by_role("link", name="Tasks", exact=True).click()
     page.get_by_role("link", name="Improve duplicate ticket handling").click()
-    page.get_by_role("complementary", name="Task details").wait_for()
+    page.get_by_role("region", name="Task details").wait_for()
+    assert page.get_by_role("heading", name="Task history").count() == 0
     page.locator("#project-picker").select_option("project_beta")
     page.wait_for_url("**/projects/project_beta/home")
     sidebar.get_by_role("link", name="Research agent").wait_for()
     assert sidebar.get_by_role("link", name="Research agent").count() == 1
     assert sidebar.get_by_role("link", name="Support agent").count() == 0
-    assert page.get_by_role("complementary", name="Task details").count() == 0
+    assert page.get_by_role("region", name="Task details").count() == 0
 
 
 def test_agent_goal_workspace_uses_one_stage_rail(webapp_page):
@@ -463,6 +503,70 @@ def test_agent_goal_workspace_uses_one_stage_rail(webapp_page):
     page.get_by_role("button", name="Measure").click()
     page.get_by_text("eval_support", exact=True).wait_for()
     assert page.get_by_text("baseline_support", exact=True).is_visible()
+
+
+def test_goal_action_starts_the_known_workflow_without_a_dialog(webapp_page):
+    page, fixture = webapp_page
+    goal = fixture.goals["agent_support"][0]
+    goal["measurement"] = None
+    goal["measurement_plan"] = None
+    page.goto(
+        "http://agentagon.test/projects/project_alpha/agents/agent_support/goals/goal_correctness"
+    )
+
+    page.get_by_role("button", name="Design measurements").click()
+
+    assert page.get_by_role("dialog").count() == 0
+    page.wait_for_url("**/projects/project_alpha/tasks/task_started")
+    request = next(
+        item
+        for item in reversed(fixture.mutations)
+        if item["path"] == "/api/projects/project_alpha/tasks"
+    )
+    assert request["payload"] == {
+        "operation_id": request["payload"]["operation_id"],
+        "workflow": "design",
+        "agent_id": "agent_support",
+        "goal_id": "goal_correctness",
+        "options": {},
+    }
+
+
+def test_goal_form_prefills_one_ideal_behavior_field(webapp_page):
+    page, fixture = webapp_page
+    page.locator(".sidebar").get_by_role("link", name="Support agent").click()
+    page.get_by_role("button", name="Create goal").click()
+    dialog = page.get_by_role("dialog")
+    improve = dialog.locator("select")
+    ideal = dialog.locator("textarea")
+
+    assert "Improve" in dialog.inner_text()
+    assert "Ideal behavior" in dialog.inner_text()
+    assert "Objective" not in dialog.inner_text()
+    assert ideal.input_value() == (
+        "The agent completes the requested task correctly and produces the expected result."
+    )
+    improve.select_option("latency")
+    assert ideal.input_value() == (
+        "The agent completes the task within the expected response time without reducing quality."
+    )
+    improve.select_option("custom")
+    assert ideal.input_value() == ""
+    dialog.get_by_label("Goal name").fill("Clear escalation")
+    ideal.fill("The agent escalates ambiguous requests before taking action.")
+    dialog.get_by_role("button", name="Create goal").click()
+
+    page.wait_for_url("**/projects/project_alpha/agents/agent_support/goals/goal_new")
+    request = next(
+        item
+        for item in reversed(fixture.mutations)
+        if item["path"] == "/api/projects/project_alpha/agents/agent_support/goals"
+    )
+    assert request["payload"] == {
+        "category": "custom",
+        "name": "Clear escalation",
+        "ideal_behavior": "The agent escalates ambiguous requests before taking action.",
+    }
 
 
 def test_skills_and_goal_actions_share_task_submission(webapp_page):
@@ -490,24 +594,28 @@ def test_skills_and_goal_actions_share_task_submission(webapp_page):
         "goal_id": "goal_correctness",
         "options": {},
     }
-    assert page.get_by_role("complementary", name="Task details").is_visible()
+    assert page.get_by_role("region", name="Task details").is_visible()
 
 
-def test_task_history_has_stable_urls_and_bound_decisions(webapp_page):
+def test_task_detail_hides_progress_and_accepts_optional_guidance(webapp_page):
     page, fixture = webapp_page
     page.goto("http://agentagon.test/projects/project_alpha/tasks/task_decision")
-    panel = page.get_by_role("complementary", name="Task details")
-    panel.get_by_text("Choose the candidate to prepare for delivery.").wait_for()
-    panel.get_by_label("Response").fill("Use the safer verified candidate.")
-    panel.get_by_role("button", name="Send response").click()
+    detail = page.get_by_role("region", name="Task details")
+    detail.get_by_text("I am comparing the verified candidates.").wait_for()
+    assert page.get_by_role("heading", name="Task history").count() == 0
+    assert detail.get_by_text("Compared two verified candidates.").count() == 0
+    assert detail.get_by_text("Choose the candidate to prepare for delivery.").is_visible()
+    detail.get_by_label("Message").fill("Prefer the safer verified candidate.")
+    detail.get_by_role("button", name="Send", exact=True).click()
     page.wait_for_timeout(50)
     reply = fixture.mutations[-1]
-    assert reply["path"] == "/api/projects/project_alpha/tasks/task_decision/reply"
+    assert reply["path"] == "/api/projects/project_alpha/tasks/task_decision/message"
     assert uuid.UUID(reply["payload"].pop("operation_id"))
     assert reply["payload"] == {
-        "question_id": "question_candidate",
-        "answer": {"text": "Use the safer verified candidate."},
+        "message": "Prefer the safer verified candidate.",
     }
+    detail.get_by_text("Prefer the safer verified candidate.").wait_for()
+    assert detail.get_by_text("Choose the candidate to prepare for delivery.").is_visible()
 
 
 def test_task_approvals_send_an_explicit_decision(webapp_page):
@@ -519,8 +627,8 @@ def test_task_approvals_send_an_explicit_decision(webapp_page):
         "text": "Approve the proposed command?",
     }
     page.goto("http://agentagon.test/projects/project_alpha/tasks/task_decision")
-    panel = page.get_by_role("complementary", name="Task details")
-    panel.get_by_role("button", name="Approve").click()
+    detail = page.get_by_role("region", name="Task details")
+    detail.get_by_role("button", name="Approve").click()
     page.wait_for_timeout(50)
     reply = fixture.mutations[-1]
     assert uuid.UUID(reply["payload"].pop("operation_id"))
@@ -528,6 +636,28 @@ def test_task_approvals_send_an_explicit_decision(webapp_page):
         "question_id": "question_approval",
         "answer": {"decision": "accept"},
     }
+
+
+def test_intelligence_approval_shows_exact_destination_and_payload(webapp_page):
+    page, fixture = webapp_page
+    task = fixture.tasks["project_alpha"][0]
+    task["question"] = {
+        "id": "question_intelligence",
+        "kind": "intelligence",
+        "source": "agentagon",
+        "text": "Consult Agentagon Intelligence for fix guidance",
+        "workflow": "fix",
+        "endpoint": "https://intelligence.example.test/fix",
+        "request": {"limit": 5, "focus": "Redacted failure pattern"},
+    }
+    page.goto("http://agentagon.test/projects/project_alpha/tasks/task_decision")
+    detail = page.get_by_role("region", name="Task details")
+    detail.get_by_role("heading", name="AG Intelligence request").wait_for()
+    assert detail.get_by_text("https://intelligence.example.test/fix").is_visible()
+    assert detail.get_by_text('"focus": "Redacted failure pattern"').is_visible()
+    detail.get_by_role("button", name="Approve").click()
+    page.wait_for_timeout(50)
+    assert fixture.mutations[-1]["payload"]["answer"] == {"decision": "accept"}
 
 
 def test_connectors_are_project_resources(webapp_page):
@@ -550,22 +680,64 @@ def test_assistant_settings_only_request_relevant_credentials(webapp_page):
     page, _ = webapp_page
     page.get_by_role("link", name="Settings").click()
     page.get_by_role("heading", name="Settings").wait_for()
+    model = page.get_by_label("Default model")
+    assert model.evaluate("element => element.tagName") == "SELECT"
+    assert model.locator("option").all_text_contents() == ["GPT Test", "GPT Test Fast"]
     assert page.get_by_label("Claude API key").count() == 0
     page.get_by_label("Default coding assistant").select_option("claude")
+    assert page.get_by_label("Default model").evaluate("element => element.tagName") == "INPUT"
     assert page.get_by_label("Claude API key").is_visible()
     page.get_by_label("Default coding assistant").select_option("codex")
     assert page.get_by_label("Claude API key").count() == 0
 
 
-def test_mobile_navigation_and_task_panel_are_full_width(webapp_page):
+def test_ag_intelligence_has_its_own_settings_tab(webapp_page):
+    page, _ = webapp_page
+    page.get_by_role("link", name="Settings").click()
+    page.get_by_role("link", name="AG Intelligence").click()
+    page.wait_for_url("**/settings/intelligence")
+    page.locator("a.is-active", has_text="AG Intelligence").wait_for()
+    assert page.get_by_label("Intelligence access").is_visible()
+    assert page.get_by_label("API key").is_visible()
+
+
+def test_home_discover_agents_scans_code_without_a_second_click(webapp_page):
+    page, fixture = webapp_page
+    fixture.agents["project_alpha"] = []
+    page.reload()
+    page.get_by_role("button", name="Discover agents").click()
+    page.wait_for_url("**/projects/project_alpha/agents")
+    assert fixture.mutations[-1]["path"] == (
+        "/api/projects/project_alpha/application-agents/discover"
+    )
+    assert page.get_by_role("dialog").count() == 0
+
+
+def test_modal_keeps_workspace_visible_without_a_scrim(webapp_page):
+    page, _ = webapp_page
+    page.locator(".sidebar").get_by_role("link", name="Agents", exact=True).click()
+    page.get_by_role("button", name="Add manually").click()
+    page.get_by_role("dialog").wait_for()
+    backdrop = page.locator(".modal-backdrop")
+    styles = backdrop.evaluate(
+        "element => ({ background: getComputedStyle(element).backgroundColor, "
+        "filter: getComputedStyle(element).backdropFilter })"
+    )
+    assert styles == {"background": "rgba(0, 0, 0, 0)", "filter": "none"}
+
+
+def test_mobile_task_detail_uses_the_main_page(webapp_page):
     page, _ = webapp_page
     page.set_viewport_size({"width": 390, "height": 844})
     page.get_by_role("button", name="Open navigation").click()
     assert page.locator(".sidebar").evaluate("element => element.classList.contains('is-open')")
     page.get_by_role("link", name="Tasks", exact=True).click()
     page.get_by_role("link", name="Improve duplicate ticket handling").click()
-    panel = page.get_by_role("complementary", name="Task details")
-    assert panel.bounding_box()["width"] == pytest.approx(390, abs=1)
+    detail = page.get_by_role("region", name="Task details")
+    detail.wait_for()
+    assert page.get_by_role("heading", name="Task history").count() == 0
+    assert detail.evaluate("element => getComputedStyle(element).position") == "static"
+    assert detail.bounding_box()["width"] >= 350
 
 
 def test_new_user_sees_project_onboarding():

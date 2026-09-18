@@ -78,6 +78,18 @@ def request(tmp_path, **kwargs):
     return {"agent": "codex", "cwd": str(tmp_path), "prompt": "Inspect this project", **kwargs}
 
 
+def test_waiting_for_user_input_does_not_consume_host_timeout():
+    run = agents._Run(
+        {"timeout_seconds": 0.02},
+        lambda event: None,
+        lambda question: (time.sleep(0.05), {"decision": "accept"})[1],
+        threading.Event(),
+    )
+
+    assert run.ask({"kind": "approval"}) == {"decision": "accept"}
+    run.check()
+
+
 def test_codex_streams_approval_question_and_redacted_result(tmp_path, monkeypatch):
     monkeypatch.setenv("EXAMPLE_API_KEY", "super-secret-value")
     executable, log = fake_codex(tmp_path)

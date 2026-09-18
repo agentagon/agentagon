@@ -385,8 +385,11 @@ class _Run:
         self.emit({"type": "message", "text": text})
 
     def ask(self, request):
-        # Browser responses may take arbitrarily long. A daemon waiter allows the
-        # owning job to cancel or time out while an approval is still pending.
+        # Browser responses may take arbitrarily long. Waiting for a person is not
+        # coding-agent execution time, so extend this turn's deadline by the exact
+        # wait duration once the application resolves the request. A daemon waiter
+        # still lets the owning job cancel a native request whose process is gone.
+        waiting_started = time.monotonic()
         answer_queue = queue.Queue(maxsize=1)
 
         def wait():
@@ -397,11 +400,13 @@ class _Run:
 
         threading.Thread(target=wait, daemon=True, name="agentagon-agent-input").start()
         while True:
-            self.check()
+            if self.cancelled.is_set():
+                raise _Stopped
             try:
                 ok, answer = answer_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
+            self.deadline += time.monotonic() - waiting_started
             if not ok:
                 raise AuditError("The application could not resolve the agent's input request.")
             self.check()

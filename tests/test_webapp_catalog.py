@@ -89,6 +89,24 @@ def test_workspace_resource_contracts_and_unified_task_submission(app, tmp_path)
     assert detail["agent_name"] == "Support"
     assert detail["goal_name"] == "Task success and correctness"
 
+
+def test_goal_accepts_ideal_behavior_as_the_single_definition(app, tmp_path):
+    saved = project(app, tmp_path)
+    confirmed = agent(app, saved)
+
+    goal = app.save_goal(
+        saved["id"],
+        confirmed["id"],
+        {
+            "category": "latency",
+            "ideal_behavior": "The agent responds within one second without reducing quality.",
+        },
+    )
+
+    assert goal["name"] == "Latency"
+    assert goal["objective"] == ("The agent responds within one second without reducing quality.")
+    assert goal["ideal_behavior"] is None
+
     audit = app.submit_task(
         saved["id"],
         {
@@ -127,6 +145,36 @@ def test_discovery_is_explicit_bounded_and_preserves_confirmed_identity(app, tmp
         assert app2.catalog.agent(saved["id"], confirmed["id"])["name"] == "Customer support"
     finally:
         app2.close()
+
+
+def test_coding_review_backfills_confirmed_discovery_responsibility(app, tmp_path):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    (root / "documents.py").write_text(
+        'from agents import Agent\ndocuments = Agent(name="DocumentAgent")\n'
+    )
+    suggested = app.catalog.discover(saved["id"])["agents"][0]
+    confirmed = app.save_application_agent(
+        saved["id"], {"status": "confirmed", "name": suggested["name"]}, suggested["id"]
+    )
+
+    result = app.catalog.apply_coding_review(
+        saved["id"],
+        [
+            {
+                "id": confirmed["id"],
+                "file": "documents.py",
+                "name": "DocumentAgent",
+                "responsibility": "Creates and edits PDF and Word documents for users.",
+                "keep": True,
+            }
+        ],
+    )
+
+    assert result == {"reviewed": 1, "kept": 1}
+    assert app.catalog.agent(saved["id"], confirmed["id"])["description"] == (
+        "Creates and edits PDF and Word documents for users."
+    )
 
 
 def test_discovery_excludes_non_application_sources_and_retires_old_suggestions(app, tmp_path):
@@ -182,10 +230,16 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
                 {
                     "candidates": [
                         {
-                            **candidate,
+                            "id": candidate["id"],
+                            "file": candidate["file"],
                             "name": "Customer support"
                             if candidate["name"] == "Support"
                             else candidate["name"],
+                            "responsibility": (
+                                "Resolves customer questions using the appropriate tools."
+                                if candidate["name"] == "Support"
+                                else "Researches and summarizes requested information."
+                            ),
                             "keep": candidate["name"] != "Helper",
                         }
                         for candidate in candidates
@@ -221,6 +275,10 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
     assert [agent["name"] for agent in discovered["agents"]] == [
         "Customer support",
         "Research",
+    ]
+    assert [agent["description"] for agent in discovered["agents"]] == [
+        "Resolves customer questions using the appropriate tools.",
+        "Researches and summarizes requested information.",
     ]
     assert calls[0]["sandbox"] == "read-only"
     assert calls[0]["response_mode"] == "raw-final"

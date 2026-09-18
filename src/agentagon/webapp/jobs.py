@@ -11,7 +11,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from agentagon.core.records import AuditError, digest, now
+from agentagon.core.records import AuditError, digest, load_json, now
 from agentagon.storage.config import Config
 from agentagon.webapp import snapshots, workflows
 from agentagon.webapp.state import identifier, private_directory
@@ -40,7 +40,10 @@ def public_job(job):
             "receipts",
             "agent_settings",
             "attempt_started_at",
+            "attempt_wait_seconds",
             "answers",
+            "input_history",
+            "pending_guidance",
         }
     }
 
@@ -64,15 +67,34 @@ class JobManager:
         for project in self.state.read()["projects"].values():
             try:
                 for job in self.list(project["id"]):
-                    unfinished = job["state"] in {"queued", "running"} or bool(job.get("question"))
+                    question = job.get("question")
+                    durable = question and question.get("source") == "agentagon"
+                    migrated = False
+                    unfinished = job["state"] in {"queued", "running"} or bool(
+                        question and not durable
+                    )
                     charged = self._charge_attempt(job)
                     if unfinished:
+                        if question:
+                            self._expire_question(
+                                job,
+                                "The coding-agent process ended before this request was answered.",
+                            )
                         job.update(
                             state="interrupted",
-                            question=None,
                             next_action="Resume this task to reconcile its saved session.",
                         )
-                    if unfinished or charged:
+                    elif job["state"] == "needs_input" and not question:
+                        self._set_durable_question(
+                            job,
+                            {
+                                "kind": "blocker",
+                                "text": job.get("next_action")
+                                or "The task needs a decision before it can continue.",
+                            },
+                        )
+                        migrated = True
+                    if unfinished or charged or migrated:
                         self._write(job)
             except (AuditError, OSError):
                 continue
@@ -96,6 +118,119 @@ class JobManager:
 
     def list(self, project_id):
         return self.state.db.list_records(project_id, "jobs")
+
+    @staticmethod
+    def _wait_seconds(question):
+        asked_at = question.get("asked_at") if isinstance(question, dict) else None
+        if not asked_at:
+            return 0
+        try:
+            return max(0, time.time() - datetime.fromisoformat(asked_at).timestamp())
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def _record_wait(cls, job, question):
+        if not question or question.get("wait_charged"):
+            return
+        job["attempt_wait_seconds"] = job.get("attempt_wait_seconds", 0) + cls._wait_seconds(
+            question
+        )
+        question["wait_charged"] = True
+
+    @classmethod
+    def _expire_question(cls, job, reason):
+        question = job.get("question")
+        if not question:
+            return
+        cls._record_wait(job, question)
+        job.setdefault("input_history", []).append(
+            {
+                **copy.deepcopy(question),
+                "status": "expired",
+                "expired_at": now(),
+                "reason": reason,
+            }
+        )
+        job["input_history"] = job["input_history"][-100:]
+        job["question"] = None
+
+    @staticmethod
+    def _set_durable_question(job, request):
+        text = request.get("text") or request.get("reason") or request.get("purpose")
+        if not isinstance(text, str) or not text.strip():
+            text = "The task needs a decision before it can continue."
+        job.update(
+            state="needs_input",
+            question={
+                **copy.deepcopy(request),
+                "id": "input_" + uuid.uuid4().hex,
+                "source": "agentagon",
+                "durable": True,
+                "asked_at": now(),
+                "status": "pending",
+                "text": text.strip(),
+            },
+            next_action=text.strip(),
+        )
+
+    @staticmethod
+    def _input_text(value, fallback):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            for key in ("text", "reason", "purpose", "next_action"):
+                text = value.get(key)
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+        return fallback
+
+    def _result_question(self, workspace, job, result, next_action):
+        request = result.get("needs_input")
+        if isinstance(request, dict) and request.get("kind") == "intelligence":
+            from agentagon.lookup import owners
+
+            workflow = request.get("workflow")
+            owner_key = {
+                "audit": "audit_id",
+                "eval": "evaluation_id",
+                "fix": "run_id",
+            }.get(workflow)
+            if owner_key is None or workflow != job["kind"]:
+                raise AuditError("Intelligence approval belongs to a different task workflow")
+            owner_id = request.get("owner_id") or job["workflow_ids"].get(owner_key)
+            if owner_id != job["workflow_ids"].get(owner_key):
+                raise AuditError("Intelligence approval belongs to a different workflow record")
+            path = owners.approval_path(workspace, workflow, owner_id)
+            prepared = load_json(workspace.checked(path)) if path.exists() else None
+            approval_id = request.get("approval_id")
+            if (
+                not isinstance(prepared, dict)
+                or prepared.get("status") != "pending"
+                or prepared.get("approval_id") != approval_id
+                or not isinstance(prepared.get("preview"), dict)
+            ):
+                raise AuditError("Intelligence approval is stale or does not match this task")
+            preview = copy.deepcopy(prepared["preview"])
+            return {
+                "kind": "intelligence",
+                "approval_id": approval_id,
+                "owner_id": owner_id,
+                **preview,
+                "text": preview.get("purpose") or "Allow this AG Intelligence request?",
+            }
+        details = copy.deepcopy(request) if isinstance(request, dict) else {}
+        kind = details.get("kind")
+        if kind not in {"blocker", "question"}:
+            kind = "blocker"
+        return {
+            **details,
+            "kind": kind,
+            "text": self._input_text(
+                request,
+                next_action or "The task needs a decision before it can continue.",
+            ),
+        }
 
     def existing_submission(self, project_id, operation, request_digest):
         operation = operation_id(operation)
@@ -261,6 +396,7 @@ class JobManager:
                 "messages": [],
                 "receipts": {},
                 "answers": {},
+                "input_history": [],
                 "session_id": None,
                 "question": None,
                 "workflow_ids": {},
@@ -272,8 +408,33 @@ class JobManager:
                 "execution_profile": execution_profile,
                 "agent_settings": settings,
                 "elapsed_seconds": 0,
+                "attempt_wait_seconds": 0,
+                "pending_guidance": False,
                 "next_action": "Waiting for coding-agent capacity.",
             }
+            trace_id = options.get("trace_snapshot_id")
+            trace_setting = frozen.get("traces", {}).get("state", "unset")
+            if trace_id and trace_setting == "disabled":
+                raise AuditError("Runtime traces are disabled for this project")
+            if trace_id and trace_setting == "unset":
+                trace = snapshots.load(workspace, trace_id)
+                selection = trace.get("selection", {})
+                provenance = trace.get("provenance", {})
+                self._set_durable_question(
+                    job,
+                    {
+                        "kind": "trace_access",
+                        "text": "Allow this task to use the selected runtime traces?",
+                        "request": {
+                            "snapshot_id": trace_id,
+                            "provider": provenance.get("provider"),
+                            "project": selection.get("project") or provenance.get("project"),
+                            "start": selection.get("start"),
+                            "end": selection.get("end"),
+                            "limit": selection.get("cap") or len(trace.get("items", [])),
+                        },
+                    },
+                )
             with self.state.db.transaction() as transaction:
                 existing = transaction.get_record(project_id, "jobs", job_id)
                 if existing is not None:
@@ -478,7 +639,12 @@ class JobManager:
                 if job["state"] != "queued":
                     return
                 workspace = self.state.workspace(project_id)
-                job.update(state="running", next_action=None, attempt_started_at=now())
+                job.update(
+                    state="running",
+                    next_action=None,
+                    attempt_started_at=now(),
+                    attempt_wait_seconds=0,
+                )
                 self._write(job)
                 workflows.freeze_settings(workspace, job)
                 remaining = job["options"]["max_elapsed_seconds"] - job["elapsed_seconds"]
@@ -519,7 +685,18 @@ class JobManager:
                 job = self._read(project_id, job_id)
                 if job["state"] in {"paused", "cancelled", "interrupted"}:
                     return
-                if outcome.get("state") != "completed":
+                job["session_id"] = outcome.get("session_id") or job.get("session_id")
+                if job.pop("pending_guidance", False):
+                    job.update(
+                        state="queued",
+                        question=None,
+                        next_action="Waiting for coding-agent capacity.",
+                    )
+                elif outcome.get("state") != "completed":
+                    self._expire_question(
+                        job,
+                        "The coding-agent process ended before this request was answered.",
+                    )
                     job.update(
                         state="interrupted", next_action="Resume the saved coding-agent session."
                     )
@@ -537,13 +714,28 @@ class JobManager:
                     }[job["kind"]]
                     if result.get(key):
                         job["workflow_ids"][key] = result[key]
-                job["session_id"] = outcome.get("session_id") or job.get("session_id")
-                job["question"] = None
+                    if state == "needs_input":
+                        self._set_durable_question(
+                            job, self._result_question(workspace, job, result, next_action)
+                        )
+                    else:
+                        job["question"] = None
                 self._write(job)
         except Exception as exc:
             with self.condition:
                 job = self._read(project_id, job_id)
-                if job["state"] not in {"paused", "cancelled", "interrupted"}:
+                if job.pop("pending_guidance", False):
+                    job.update(
+                        state="queued",
+                        question=None,
+                        next_action="Waiting for coding-agent capacity.",
+                    )
+                    self._write(job)
+                elif job["state"] not in {"paused", "cancelled", "interrupted"}:
+                    self._expire_question(
+                        job,
+                        "The coding-agent process failed before this request was answered.",
+                    )
                     message = (
                         str(exc) if isinstance(exc, AuditError) else f"{type(exc).__name__}: {exc}"
                     )
@@ -556,13 +748,17 @@ class JobManager:
                     for secret in secrets:
                         if secret:
                             message = message.replace(secret, "[redacted]")
-                    job.update(state="failed", next_action=message, question=None)
+                    job.update(state="failed", next_action=message)
                     self._write(job)
         finally:
             with self.condition:
                 cancelled.set()  # Release outstanding approval waiters on timeout/failure too.
                 job = self._read(project_id, job_id)
-                job["elapsed_seconds"] += time.monotonic() - started
+                active_seconds = max(
+                    0,
+                    time.monotonic() - started - job.pop("attempt_wait_seconds", 0),
+                )
+                job["elapsed_seconds"] += active_seconds
                 job.pop("attempt_started_at", None)
                 self._write(job)
                 self.active.pop((project_id, job_id), None)
@@ -582,7 +778,10 @@ class JobManager:
                 remaining = (
                     job["options"]["max_elapsed_seconds"]
                     - job["elapsed_seconds"]
-                    - (time.monotonic() - started)
+                    - max(
+                        0,
+                        time.monotonic() - started - job.get("attempt_wait_seconds", 0),
+                    )
                 )
                 if remaining <= 0:
                     raise AuditError(
@@ -637,9 +836,12 @@ class JobManager:
                         lambda question, review_id=review_id: (
                             {"decision": "decline"}
                             if question.get("kind") == "approval"
-                            else self._ask(
-                                project_id, job_id, {**question, "review_id": review_id}, cancelled
-                            )
+                            else {
+                                "text": (
+                                    "Use the available evidence and your best judgment. "
+                                    "If required evidence is missing, return needs_input as a blocker."
+                                )
+                            }
                         ),
                         cancelled,
                     )
@@ -692,7 +894,7 @@ class JobManager:
             outcome = self.execute(
                 current,
                 lambda event: self._emit(project_id, job_id, event),
-                lambda question: self._ask(project_id, job_id, question, cancelled),
+                lambda question: self._author_input(project_id, job_id, question, cancelled),
                 cancelled,
             )
             if outcome.get("state") != "completed":
@@ -752,11 +954,15 @@ class JobManager:
                 reflection["owner_id"],
                 reflection["request_id"],
                 emit=lambda event: self._emit(project_id, job_id, event),
-                ask=lambda question: self._ask(
-                    project_id,
-                    job_id,
-                    {**question, "request_id": reflection["request_id"]},
-                    cancelled,
+                ask=lambda question: (
+                    {"decision": "decline"}
+                    if question.get("kind") == "approval"
+                    else {
+                        "text": (
+                            "Use the available evidence and your best judgment. "
+                            "Return a blocker if essential evidence is missing."
+                        )
+                    }
                 ),
                 cancelled=cancelled,
                 timeout_seconds=timeout,
@@ -848,6 +1054,17 @@ class JobManager:
         with lock:
             return self._ask_one(project_id, job_id, question, cancelled)
 
+    def _author_input(self, project_id, job_id, question, cancelled):
+        """Keep author turns autonomous while preserving explicit security approvals."""
+        if question.get("kind") != "approval":
+            return {
+                "text": (
+                    "Use your best judgment, continue without asking the user, and state any "
+                    "material assumptions in the result."
+                )
+            }
+        return self._ask(project_id, job_id, question, cancelled)
+
     def _ask_one(self, project_id, job_id, question, cancelled):
         with self.condition:
             job = self._read(project_id, job_id)
@@ -870,25 +1087,38 @@ class JobManager:
                 )
             job.update(
                 state="needs_input",
-                question={**question, "id": uuid.uuid4().hex, "text": text},
+                question={
+                    **question,
+                    "id": "input_" + uuid.uuid4().hex,
+                    "source": "coding_agent",
+                    "durable": False,
+                    "asked_at": now(),
+                    "status": "pending",
+                    "text": text,
+                },
                 next_action=text,
             )
             self._write(job)
             key = (project_id, job_id)
-            budget_left = job["options"]["max_elapsed_seconds"] - job["elapsed_seconds"]
-            deadline = datetime.fromisoformat(job["attempt_started_at"]).timestamp() + budget_left
             while key not in self.answers and not cancelled.is_set():
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    raise AuditError("task time budget exhausted while waiting for input")
-                self.condition.wait(timeout=min(1, remaining))
+                self.condition.wait(timeout=1)
             if cancelled.is_set():
                 return {"decision": "decline"}
             answer = self.answers.pop(key)
             job = self._read(project_id, job_id)
             if job["state"] != "needs_input":
                 return {"decision": "decline"}
-            job["answers"][job["question"]["id"]]["consumed_at"] = now()
+            current = job["question"]
+            self._record_wait(job, current)
+            job["answers"][current["id"]]["consumed_at"] = now()
+            job.setdefault("input_history", []).append(
+                {
+                    **copy.deepcopy(current),
+                    "status": "answered",
+                    "answered_at": job["answers"][current["id"]]["accepted_at"],
+                }
+            )
+            job["input_history"] = job["input_history"][-100:]
             job.update(state="running", question=None, next_action=None)
             self._write(job)
             return answer
@@ -903,7 +1133,7 @@ class JobManager:
         binding = digest({"action": action, "payload": payload})
         with self.condition:
             key = (project_id, job_id)
-            answer = None
+            live_answer = None
             interrupt = False
             with self.state.db.transaction() as transaction:
                 identifier(job_id, "job")
@@ -916,12 +1146,13 @@ class JobManager:
                         raise AuditError("operation_id already belongs to a different task control")
                     return public_job(job)
                 if action == "reply":
-                    if (
-                        job["state"] != "needs_input"
-                        or not job.get("question")
-                        or key not in self.active
-                    ):
-                        raise AuditError("this task has no live unanswered question")
+                    if job["state"] != "needs_input" or not job.get("question"):
+                        raise AuditError("this task has no unanswered input request")
+                    durable = job["question"].get("source") == "agentagon"
+                    if not durable and key not in self.active:
+                        raise AuditError(
+                            "this native request expired with its coding-agent process; resume the task to request it again"
+                        )
                     question_id = job["question"]["id"]
                     if payload.get("question_id") != question_id:
                         raise AuditError(
@@ -937,12 +1168,69 @@ class JobManager:
                         "accepted_at": now(),
                     }
                     job["question"]["answered"] = True
+                    self._record_wait(job, job["question"])
+                    if durable:
+                        question = copy.deepcopy(job["question"])
+                        decision = answer.get("decision")
+                        if question.get("kind") in {
+                            "approval",
+                            "intelligence",
+                            "trace_access",
+                        } and decision not in {"accept", "decline"}:
+                            raise AuditError("choose approve or decline for this exact request")
+                        if question.get("kind") == "intelligence":
+                            option = "--approve" if decision == "accept" else "--decline"
+                            verb = "approved" if decision == "accept" else "declined"
+                            instruction = (
+                                f"The user {verb} AG Intelligence request "
+                                f"{question['approval_id']}. Re-run the exact same "
+                                f"{question['workflow']} lookup with `{option} "
+                                f"{question['approval_id']}`. Do not change its prepared payload."
+                            )
+                        elif question.get("kind") == "trace_access":
+                            instruction = (
+                                "The user approved the exact trace-access request. Continue with "
+                                "only the described trace scope."
+                                if decision == "accept"
+                                else "The user declined trace access, so this trace-bound task was not started."
+                            )
+                        else:
+                            response = answer.get("text")
+                            if not isinstance(response, str) or not response.strip():
+                                response = decision or json.dumps(answer, sort_keys=True)
+                            instruction = (
+                                "Agentagon resolved the blocking input: " + response.strip()
+                            )
+                        job["messages"].append({"role": "system", "text": instruction, "at": now()})
+                        job.setdefault("input_history", []).append(
+                            {
+                                **question,
+                                "status": "answered",
+                                "answered_at": job["answers"][question_id]["accepted_at"],
+                                "decision": decision,
+                            }
+                        )
+                        job["input_history"] = job["input_history"][-100:]
+                        job["answers"][question_id]["consumed_at"] = now()
+                        if question.get("kind") == "trace_access" and decision == "decline":
+                            job.update(state="cancelled", question=None, next_action=None)
+                        else:
+                            job.update(
+                                state="queued",
+                                question=None,
+                                next_action="Waiting for coding-agent capacity.",
+                            )
+                    else:
+                        live_answer = copy.deepcopy(answer)
                 elif action in {"pause", "cancel"}:
                     if job["state"] in TERMINAL:
                         raise AuditError("task has already finished")
+                    verb = "paused" if action == "pause" else "cancelled"
+                    self._expire_question(
+                        job, f"The task was {verb} before this request was answered."
+                    )
                     job.update(
                         state="paused" if action == "pause" else "cancelled",
-                        question=None,
                         next_action="Resume when ready." if action == "pause" else None,
                     )
                     interrupt = True
@@ -951,6 +1239,8 @@ class JobManager:
                         raise AuditError(
                             "wait for the previous agent process to stop before resuming"
                         )
+                    if job["state"] == "needs_input" and job.get("question"):
+                        raise AuditError("respond to the current input request before resuming")
                     if job["state"] not in {"paused", "interrupted", "failed", "needs_input"}:
                         raise AuditError("only paused, interrupted or blocked tasks can resume")
                     job.update(
@@ -964,21 +1254,34 @@ class JobManager:
                         raise AuditError("message must contain 1–4000 characters")
                     if job["state"] in TERMINAL:
                         raise AuditError("start a new task to follow up on a completed task")
-                    job["messages"].append(message.strip())
+                    job["messages"].append({"role": "user", "text": message.strip(), "at": now()})
                     if len(job["messages"]) > 100:
                         raise AuditError("task guidance limit reached; start a new task")
                     if key in self.active:
                         interrupt = True
+                        job["pending_guidance"] = True
+                        self._expire_question(
+                            job,
+                            "The coding-agent turn was interrupted by new user guidance.",
+                        )
                         job.update(
-                            state="paused",
+                            next_action=None,
+                        )
+                    elif job["state"] == "needs_input" and job.get("question"):
+                        # Chat is steering, not an approval channel. Keep an exact
+                        # durable request pending until its guided card is answered.
+                        pass
+                    elif job["state"] != "queued":
+                        job.update(
+                            state="queued",
                             question=None,
-                            next_action="Guidance saved. Resume after the current turn stops.",
+                            next_action="Waiting for coding-agent capacity.",
                         )
                 job["receipts"][op] = binding
                 self._write(job, transaction)
             # Only release a waiter or interrupt a host after its receipt is durable.
-            if answer is not None:
-                self.answers[key] = copy.deepcopy(answer)
+            if live_answer is not None:
+                self.answers[key] = live_answer
             if interrupt and key in self.active:
                 self.active[key].set()
             self._dispatch()
@@ -989,7 +1292,15 @@ class JobManager:
         started = job.pop("attempt_started_at", None)
         if started is None:
             return False
-        elapsed = max(0, time.time() - datetime.fromisoformat(started).timestamp())
+        waiting = job.pop("attempt_wait_seconds", 0)
+        question = job.get("question")
+        if question and not question.get("wait_charged"):
+            waiting += JobManager._wait_seconds(question)
+            question["wait_charged"] = True
+        elapsed = max(
+            0,
+            time.time() - datetime.fromisoformat(started).timestamp() - waiting,
+        )
         job["elapsed_seconds"] += elapsed
         return True
 
@@ -999,9 +1310,11 @@ class JobManager:
             for (project_id, job_id), cancel in list(self.active.items()):
                 cancel.set()
                 job = self._read(project_id, job_id)
+                self._expire_question(
+                    job, "Agentagon stopped before the native request was answered."
+                )
                 job.update(
                     state="interrupted",
-                    question=None,
                     next_action="Restart Agentagon and resume this task.",
                 )
                 self._write(job)

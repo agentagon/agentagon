@@ -51,15 +51,38 @@ export type TaskSummary = {
 };
 
 export type TaskDetail = TaskSummary & {
-  conversation: Array<{ role?: string; text?: string; content?: string }>;
+  conversation: Array<{ role?: string; text?: string; content?: string; created_at?: string }>;
   events: Array<{ type?: string; text?: string; created_at?: string }>;
-  question?: { id: string; kind?: string; prompt?: string; text?: string; command?: string; options?: string[] } | null;
+  question?: {
+    id: string;
+    kind?: "approval" | "intelligence" | "trace_access" | "blocker" | "question";
+    source?: "coding_agent" | "agentagon";
+    prompt?: string;
+    text?: string;
+    command?: string;
+    tool?: string;
+    options?: string[];
+    approval_id?: string;
+    workflow?: string;
+    owner_id?: string;
+    purpose?: string;
+    endpoint?: string;
+    request?: Record<string, unknown>;
+  } | null;
   progress?: unknown;
   result?: Record<string, unknown> | null;
   next_action?: string | null;
   can_resume: boolean;
   can_cancel: boolean;
+  can_message: boolean;
   revision?: number;
+};
+
+export type AssistantModel = {
+  id: string;
+  name: string;
+  description?: string;
+  default?: boolean;
 };
 
 export type SkillDefinition = {
@@ -120,5 +143,5 @@ export type ProjectOverview = {
   jobs: Array<Record<string, unknown>>;
   datasets: Array<Record<string, unknown>>;
   traces: Array<Record<string, unknown>>;
-  settings: { settings: Record<string, unknown>; profiles: Record<string, unknown> };
+  settings: { settings: Record<string, unknown>; profiles: Record<string, unknown>; revision?: string };
 };

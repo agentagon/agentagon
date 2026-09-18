@@ -29,7 +29,7 @@ DISCOVERY_PREFERENCES_ID = "preferences"
 DISCOVERY_PREFERENCES = {
     "version": 1,
     "seen": False,
-    "coding_review": False,
+    "coding_review": True,
     "trace_metadata": False,
     "trace_cap": 100,
     "trace_connection_id": None,
@@ -165,10 +165,10 @@ class Catalog:
         }:
             raise AuditError("invalid discovery preferences")
         current = self.discovery_preferences(project_id)
-        coding_review = payload.get("coding_review", False)
-        trace_metadata = payload.get("trace_metadata", False)
-        trace_cap = payload.get("trace_cap", 100)
-        connection_id = payload.get("trace_connection_id")
+        coding_review = payload.get("coding_review", current["coding_review"])
+        trace_metadata = payload.get("trace_metadata", current["trace_metadata"])
+        trace_cap = payload.get("trace_cap", current["trace_cap"])
+        connection_id = payload.get("trace_connection_id", current["trace_connection_id"])
         if type(coding_review) is not bool or type(trace_metadata) is not bool:
             raise AuditError("discovery choices must be enabled or disabled")
         if type(trace_cap) is not int or not 1 <= trace_cap <= 100:
@@ -198,12 +198,26 @@ class Catalog:
         suggestions = {
             agent["id"]: agent
             for agent in self.agents(project_id)
-            if agent["status"] == "suggested" and len(agent.get("code_scopes", [])) == 1
+            if len(agent.get("code_scopes", [])) == 1
+            and (
+                agent["status"] == "suggested"
+                or (
+                    agent["status"] == "confirmed"
+                    and agent.get("discovery_key")
+                    and not agent.get("description")
+                )
+            )
         }
         updates = []
         seen = set()
         for review in reviews:
-            if not isinstance(review, dict) or set(review) != {"id", "file", "name", "keep"}:
+            if not isinstance(review, dict) or set(review) != {
+                "id",
+                "file",
+                "name",
+                "responsibility",
+                "keep",
+            }:
                 raise AuditError("coding-agent discovery review is invalid")
             candidate_id = review["id"]
             if (
@@ -217,6 +231,9 @@ class Catalog:
                 raise AuditError("coding-agent discovery review does not match the local scan")
             seen.add(candidate_id)
             name = _text(review["name"], "agent name", 160)
+            responsibility = _text(review["responsibility"], "responsibility")
+            if record["status"] == "confirmed" and (not review["keep"] or name != record["name"]):
+                raise AuditError("coding-agent discovery review cannot change a confirmed agent")
             evidence = [
                 item
                 for item in record.get("evidence", [])
@@ -229,7 +246,14 @@ class Catalog:
                 {
                     **record,
                     "name": name,
-                    "status": "suggested" if review["keep"] else "archived",
+                    "description": responsibility,
+                    "status": (
+                        "confirmed"
+                        if record["status"] == "confirmed"
+                        else "suggested"
+                        if review["keep"]
+                        else "archived"
+                    ),
                     "evidence": evidence,
                 }
             )
@@ -245,7 +269,7 @@ class Catalog:
                         record,
                         expected_revision=record["revision"],
                     )
-        return {"reviewed": len(updates), "kept": sum(r["status"] == "suggested" for r in updates)}
+        return {"reviewed": len(updates), "kept": sum(r["status"] != "archived" for r in updates)}
 
     def apply_trace_metadata(self, project_id, connection, traces):
         if not isinstance(traces, list) or len(traces) > 100:
