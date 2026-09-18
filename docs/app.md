@@ -13,7 +13,7 @@ The app runs on your computer and binds to loopback. Hosted access and team acco
 
 ## Select an application agent and focus
 
-The project opens to **Agents**. Discovery recognizes supported framework imports and skips documentation, examples, tests, dependencies and generated code. On the first discovery, choose whether to supplement the local scan with a read-only coding-agent review or recent root-trace metadata from a tested provider connection. These choices are saved per project under **Discovery options**. Coding-agent review can rename or exclude suggestions but cannot confirm them. Trace matching reads at most 100 metadata-only roots from the last seven days; it does not fetch inputs, outputs or child spans, and a match establishes identity context rather than behavioral correctness. Confirm suggested boundaries or add an agent manually. Separate checkouts, including Git worktrees, remain separate projects.
+The project opens to **Agents**. Connect a coding agent before discovery. Discovery first scans supported framework imports while skipping documentation, examples, tests, dependencies and generated code. The coding agent then reviews that bounded candidate list, removes false positives and duplicates, improves names and writes a concise responsibility for every retained agent. It cannot confirm agents. Optional trace matching reads at most 100 metadata-only roots from the last seven days; it does not fetch inputs, outputs or child spans, and a match establishes identity context rather than behavioral correctness. Confirm suggested boundaries or add an agent manually. Separate checkouts, including Git worktrees, remain separate projects.
 
 An **application agent** is the workflow you are investigating, such as a support agent. A **coding agent** is Codex or Claude, which Agentagon uses to perform the work. One project can contain several application agents and shared dependencies.
 
@@ -42,7 +42,9 @@ These sessions are separate from a conversation already open in your terminal or
 
 Choose a Codex model from the installed CLI's model catalog in Settings; the app validates the selection before starting a session. The catalog reflects that installation and account, so it can differ between machines. Claude has its own model setting. Model selection is separate from the execution profile used to run evaluations.
 
-Set coding-agent capacity in Settings. Fix has a separate requested parallelism limit; actual work stays within the shared capacity and execution budget. The app queues tasks from the same project, while candidate work uses isolated worktrees. Permissions and questions appear in the task view; a pending approval waits for your explicit answer. Independent reviews use separate managed sessions.
+Set coding-agent capacity in Settings. Fix has a separate requested parallelism limit; actual work stays within the shared capacity and execution budget. The app queues tasks from the same project, while candidate work uses isolated worktrees. Independent reviews use separate managed sessions.
+
+Agentagon owns task input state. Ordinary coding-agent questions are answered with an instruction to use the available evidence and make a reasonable assumption. Exact command, file, trace and AG Intelligence requests appear as task cards; chat remains optional steering and cannot approve them. Time waiting for a card does not consume the task budget. Native host requests expire with their process and are issued again after an explicit resume, while Agentagon-owned requests survive app restarts.
 
 ## Connect traces and datasets
 

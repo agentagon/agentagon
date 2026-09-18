@@ -26,7 +26,42 @@ from agentagon.webapp.providers import DEFAULT_ENDPOINTS, CredentialStore, Provi
 from agentagon.webapp.state import AppState, identifier, private_directory
 
 DISCOVERY_TTL_SECONDS = 600
+DISCOVERY_REVIEW_TIMEOUT_SECONDS = 180
+DISCOVERY_REVIEW_ATTEMPTS = 2
+DISCOVERY_EXCERPT_LINES = 50
+DISCOVERY_EXCERPT_CHARACTERS = 6_000
 MAX_CONNECTION_DISCOVERIES = 12
+
+
+def _discovery_excerpt(root, agent):
+    evidence = next(
+        (
+            item
+            for item in agent.get("evidence", [])
+            if isinstance(item, dict)
+            and item.get("kind") == "code"
+            and item.get("path") == agent["code_scopes"][0]
+        ),
+        None,
+    )
+    if evidence is None or type(evidence.get("line")) is not int:
+        return None
+    try:
+        lines = (root / agent["code_scopes"][0]).read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+    detected = max(1, evidence["line"])
+    start = max(0, detected - 6)
+    selected = lines[start : start + DISCOVERY_EXCERPT_LINES]
+    code = "\n".join(f"{start + index + 1}: {line}" for index, line in enumerate(selected))
+    return {
+        "line": detected,
+        "symbol": evidence.get("symbol"),
+        "framework_call": evidence.get("call"),
+        "start_line": start + 1,
+        "end_line": start + len(selected),
+        "code": code[:DISCOVERY_EXCERPT_CHARACTERS],
+    }
 
 
 class Application:
@@ -124,14 +159,16 @@ class Application:
         return result
 
     def save_goal(self, project_id, agent_id, payload):
+        objective = payload.get("objective")
+        ideal_behavior = payload.get("ideal_behavior")
         translated = {
             "category": payload.get("category", "custom"),
-            "goal": payload.get("objective"),
-            "target": payload.get("ideal_behavior"),
+            "goal": objective or ideal_behavior,
+            "target": ideal_behavior if objective else None,
             "source": payload.get("source", {"kind": "goal"}),
         }
         if translated["category"] == "custom":
-            translated["name"] = payload.get("name") or payload.get("objective")
+            translated["name"] = payload.get("name") or objective or ideal_behavior
         return self.goal_projection(self.catalog.save_focus(project_id, agent_id, translated))
 
     @staticmethod
@@ -341,6 +378,7 @@ class Application:
     def discover_application_agents(self, project_id, payload):
         if not isinstance(payload, dict) or set(payload) - {"preferences"}:
             raise AuditError("unsupported discovery fields")
+        coding_assistant = self._discovery_coding_assistant()
         preferences = self.catalog.discovery_preferences(project_id)
         if "preferences" in payload:
             preferences = self.catalog.save_discovery_preferences(
@@ -349,12 +387,7 @@ class Application:
         elif not preferences["seen"]:
             preferences = self.catalog.save_discovery_preferences(project_id, {})
         result = self.catalog.discover(project_id)
-        enrichment = {}
-        if preferences["coding_review"]:
-            try:
-                enrichment["coding_review"] = self._review_discovered_agents(project_id)
-            except AuditError as exc:
-                result["limitations"].append(f"Coding-agent review unavailable: {exc}")
+        enrichment = {"coding_review": self._review_discovered_agents(project_id, coding_assistant)}
         if preferences["trace_metadata"]:
             try:
                 enrichment["trace_metadata"] = self._match_recent_trace_metadata(
@@ -369,16 +402,7 @@ class Application:
         )
         return result
 
-    def _review_discovered_agents(self, project_id):
-        candidates = [
-            {"id": agent["id"], "file": agent["code_scopes"][0], "name": agent["name"]}
-            for agent in self.catalog.agents(project_id)
-            if agent["status"] == "suggested" and len(agent.get("code_scopes", [])) == 1
-        ]
-        if not candidates:
-            return {"reviewed": 0, "kept": 0}
-        if len(candidates) > 100:
-            raise AuditError("more than 100 suggestions require manual review")
+    def _discovery_coding_assistant(self):
         settings = self.state.read()["agents"]
         selected = settings.get("default_agent", "codex")
         capability = next(
@@ -389,16 +413,76 @@ class Application:
             or not capability.get("available")
             or capability.get("authenticated") is not True
         ):
-            raise AuditError(f"{selected.title()} is not authenticated")
+            raise AuditError("Set up and authenticate a coding assistant before discovering agents")
+        return settings, selected
+
+    def _review_discovered_agents(self, project_id, coding_assistant=None):
+        agents = self.catalog.agents(project_id)
+        root = self.state.workspace(project_id).root
+        candidates = [
+            {
+                "id": agent["id"],
+                "file": agent["code_scopes"][0],
+                "name": agent["name"],
+                "confirmed": agent["status"] == "confirmed",
+                **(
+                    {"entrypoint": excerpt}
+                    if (excerpt := _discovery_excerpt(root, agent)) is not None
+                    else {}
+                ),
+            }
+            for agent in agents
+            if len(agent.get("code_scopes", [])) == 1
+            and (
+                agent["status"] == "suggested"
+                or (
+                    agent["status"] == "confirmed"
+                    and agent.get("discovery_key")
+                    and not agent.get("description")
+                )
+            )
+        ]
+        if not candidates:
+            return {"reviewed": 0, "kept": 0}
+        if len(candidates) > 100:
+            raise AuditError("more than 100 suggestions require manual review")
+        candidate_ids = {candidate["id"] for candidate in candidates}
+        existing = [
+            {
+                "id": agent["id"],
+                "file": agent["code_scopes"][0] if len(agent.get("code_scopes", [])) == 1 else None,
+                "name": agent["name"],
+                "responsibility": agent.get("description", ""),
+            }
+            for agent in agents
+            if agent["status"] == "confirmed" and agent["id"] not in candidate_ids
+        ]
+        settings, selected = coding_assistant or self._discovery_coding_assistant()
         prompt = (
             "Review the following deterministic application-agent suggestions in this repository. "
-            "Work read-only. Inspect only the listed files and their nearby imports. Return JSON only, "
+            "Each candidate includes a bounded source excerpt around the detected entrypoint. Use that "
+            "excerpt as the primary evidence. Only open a listed file or directly relevant import when "
+            "its excerpt is insufficient. Work read-only. Do not run tests, perform broad repository "
+            "searches, ask questions, or request approvals. Return JSON as soon as the candidates are "
+            "classified, "
             "with exactly one item per input candidate and no new candidates: "
-            '{"candidates":[{"id":"agent_id","file":"path","name":"Agent name","keep":true}]}. '
+            '{"candidates":[{"id":"agent_id","file":"path","name":"Agent name",'
+            '"responsibility":"One concise sentence describing what the agent does for users",'
+            '"keep":true}]}. '
             "Keep a candidate only when the file defines an application agent entrypoint rather than a "
             "library helper, test, example, documentation, or dependency. Preserve each id and file string "
-            "exactly. "
-            "Use a concise user-facing name. Candidates: "
+            "exactly. Describe the agent's responsibility in plain user-facing language, based only on "
+            "the inspected code, without implementation details or unsupported claims. When `confirmed` "
+            "is true, preserve its name, set keep to true, and only supply its missing responsibility. "
+            "Compare suggestions with each other and with the existing confirmed agents. If multiple "
+            "suggestions represent the same user-facing agent, keep the strongest application entrypoint "
+            "and set keep to false for the duplicates. If a suggestion duplicates an existing confirmed "
+            "agent, set keep to false for the suggestion. Do not merge distinct agents merely because they "
+            "share a framework, model, tool, or dependency. "
+            "Do not include the input-only `confirmed` field in the response. "
+            "Use a concise user-facing name. Existing confirmed agents: "
+            + json.dumps(existing, ensure_ascii=False)
+            + ". Candidates: "
             + json.dumps(candidates, ensure_ascii=False)
         )
         request = {
@@ -407,7 +491,7 @@ class Application:
             "cwd": str(self.state.workspace(project_id).root),
             "prompt": prompt,
             "sandbox": "read-only",
-            "timeout_seconds": 120,
+            "timeout_seconds": DISCOVERY_REVIEW_TIMEOUT_SECONDS,
             "response_mode": "raw-final",
         }
         executable = settings.get(selected + "_executable")
@@ -420,12 +504,7 @@ class Application:
             if not reference:
                 raise AuditError("Claude credentials are unavailable")
             request["api_key"] = self.credentials.resolve(reference)
-        outcome = self.jobs.execute(
-            request,
-            lambda _event: None,
-            lambda _question: {"decision": "decline"},
-            threading.Event(),
-        )
+        outcome = self._execute_discovery_review(request)
         if not isinstance(outcome, dict) or outcome.get("state") != "completed":
             raise AuditError("the coding-agent review did not complete")
         text = outcome.get("raw_final_text")
@@ -438,6 +517,45 @@ class Application:
         if not isinstance(response, dict) or set(response) != {"candidates"}:
             raise AuditError("the coding-agent review returned an invalid result")
         return self.catalog.apply_coding_review(project_id, response["candidates"])
+
+    def _execute_discovery_review(self, request):
+        session_id = None
+
+        def emit(event):
+            nonlocal session_id
+            if isinstance(event, dict) and event.get("type") == "session":
+                value = event.get("session_id")
+                if isinstance(value, str) and value:
+                    session_id = value
+
+        current = request
+        for attempt in range(DISCOVERY_REVIEW_ATTEMPTS):
+            try:
+                return self.jobs.execute(
+                    current,
+                    emit,
+                    lambda _question: {"decision": "decline"},
+                    threading.Event(),
+                )
+            except AuditError as exc:
+                if "time limit reached" not in str(exc).casefold():
+                    raise
+                if attempt + 1 == DISCOVERY_REVIEW_ATTEMPTS:
+                    raise AuditError(
+                        "Agent discovery review could not finish in time. Run discovery again."
+                    ) from None
+                current = {
+                    **request,
+                    **({"session_id": session_id} if session_id else {}),
+                    "prompt": (
+                        "Continue and finish the pending agent discovery review now. "
+                        "Return only the requested JSON without further investigation."
+                        if session_id
+                        else request["prompt"]
+                        + " Complete this retry without additional repository exploration."
+                    ),
+                }
+        raise AssertionError("discovery review attempts exhausted")
 
     def _match_recent_trace_metadata(self, project_id, preferences):
         connection_id = preferences.get("trace_connection_id")

@@ -3,14 +3,11 @@ import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import {
-  AddAgentModal,
   AddProjectModal,
   Button,
   Empty,
   Sidebar,
-  TaskPanel,
   Topbar,
-  useSelectedTask,
 } from "./components";
 import { useAgents, useProjects, useTasks } from "./hooks";
 import {
@@ -21,6 +18,7 @@ import {
   HomePage,
   SettingsPage,
   SkillsPage,
+  TaskPage,
   TasksPage,
 } from "./pages";
 
@@ -49,8 +47,6 @@ function Workspace() {
   const tasks = useTasks(projectId);
   const [navOpen, setNavOpen] = useState(false);
   const [addProject, setAddProject] = useState(false);
-  const [addAgent, setAddAgent] = useState(false);
-  const task = useSelectedTask(projectId);
   const project = projects.data?.projects.find((item) => item.id === projectId);
 
   useEffect(() => {
@@ -67,8 +63,8 @@ function Workspace() {
   if (projects.isLoading || agents.isLoading) return <div className="splash"><p>Loading workspace…</p></div>;
   if (!project) return <Navigate to="/" replace />;
   const attention = tasks.data?.tasks.filter((item) => item.needs_attention).length || 0;
-  return <div className={`app-shell ${task.selected ? "has-task-panel" : ""}`}>
-    <Sidebar projects={projects.data?.projects || []} project={project} agents={agents.data?.confirmed || []} open={navOpen} onClose={() => setNavOpen(false)} onAddProject={() => setAddProject(true)} onAddAgent={() => setAddAgent(true)} />
+  return <div className="app-shell">
+    <Sidebar projects={projects.data?.projects || []} project={project} agents={agents.data?.confirmed || []} open={navOpen} onClose={() => setNavOpen(false)} onAddProject={() => setAddProject(true)} />
     {navOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setNavOpen(false)} />}
     <div className="workspace-shell"><Topbar project={project} taskCount={attention} onMenu={() => setNavOpen(true)} /><div className="work-area"><main id="main" tabIndex={-1} className="main-workspace"><Routes>
       <Route path="home" element={<HomePage project={project} />} />
@@ -77,15 +73,14 @@ function Workspace() {
       <Route path="agents/:agentId/:tab" element={<AgentPage projectId={projectId} />} />
       <Route path="agents/:agentId" element={<Navigate to="overview" replace />} />
       <Route path="tasks" element={<TasksPage projectId={projectId} />} />
-      <Route path="tasks/:taskId" element={<TasksPage projectId={projectId} />} />
+      <Route path="tasks/:taskId" element={<TaskPage projectId={projectId} />} />
       <Route path="skills" element={<SkillsPage projectId={projectId} />} />
       <Route path="connectors" element={<ConnectorsPage projectId={projectId} />} />
       <Route path="settings/:section" element={<SettingsPage projectId={projectId} />} />
       <Route path="settings" element={<Navigate to="assistants" replace />} />
       <Route index element={<Navigate to="home" replace />} />
       <Route path="*" element={<Empty title="Page not found" action={<Button onClick={() => navigate(`/projects/${projectId}/home`)}>Go home</Button>} />} />
-    </Routes></main>{task.selected && <TaskPanel projectId={projectId} taskId={task.selected} onClose={task.close} />}</div></div>
+    </Routes></main></div></div>
     {addProject && <AddProjectModal onClose={() => setAddProject(false)} />}
-    {addAgent && <AddAgentModal projectId={projectId} onClose={() => setAddAgent(false)} />}
   </div>;
 }

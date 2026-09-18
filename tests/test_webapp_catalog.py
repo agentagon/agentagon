@@ -89,6 +89,24 @@ def test_workspace_resource_contracts_and_unified_task_submission(app, tmp_path)
     assert detail["agent_name"] == "Support"
     assert detail["goal_name"] == "Task success and correctness"
 
+
+def test_goal_accepts_ideal_behavior_as_the_single_definition(app, tmp_path):
+    saved = project(app, tmp_path)
+    confirmed = agent(app, saved)
+
+    goal = app.save_goal(
+        saved["id"],
+        confirmed["id"],
+        {
+            "category": "latency",
+            "ideal_behavior": "The agent responds within one second without reducing quality.",
+        },
+    )
+
+    assert goal["name"] == "Latency"
+    assert goal["objective"] == ("The agent responds within one second without reducing quality.")
+    assert goal["ideal_behavior"] is None
+
     audit = app.submit_task(
         saved["id"],
         {
@@ -127,6 +145,36 @@ def test_discovery_is_explicit_bounded_and_preserves_confirmed_identity(app, tmp
         assert app2.catalog.agent(saved["id"], confirmed["id"])["name"] == "Customer support"
     finally:
         app2.close()
+
+
+def test_coding_review_backfills_confirmed_discovery_responsibility(app, tmp_path):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    (root / "documents.py").write_text(
+        'from agents import Agent\ndocuments = Agent(name="DocumentAgent")\n'
+    )
+    suggested = app.catalog.discover(saved["id"])["agents"][0]
+    confirmed = app.save_application_agent(
+        saved["id"], {"status": "confirmed", "name": suggested["name"]}, suggested["id"]
+    )
+
+    result = app.catalog.apply_coding_review(
+        saved["id"],
+        [
+            {
+                "id": confirmed["id"],
+                "file": "documents.py",
+                "name": "DocumentAgent",
+                "responsibility": "Creates and edits PDF and Word documents for users.",
+                "keep": True,
+            }
+        ],
+    )
+
+    assert result == {"reviewed": 1, "kept": 1}
+    assert app.catalog.agent(saved["id"], confirmed["id"])["description"] == (
+        "Creates and edits PDF and Word documents for users."
+    )
 
 
 def test_discovery_excludes_non_application_sources_and_retires_old_suggestions(app, tmp_path):
@@ -171,6 +219,9 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
         'from agents import Agent\nsupport = Agent(name="Support")\nresearch = Agent(name="Research")\n'
     )
     (root / "helper.py").write_text('from agents import Agent\nhelper = Agent(name="Helper")\n')
+    (root / "support_wrapper.py").write_text(
+        'from agents import Agent\nsupport = Agent(name="Support wrapper")\n'
+    )
     calls = []
 
     def execute(request, *_args):
@@ -182,11 +233,18 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
                 {
                     "candidates": [
                         {
-                            **candidate,
+                            "id": candidate["id"],
+                            "file": candidate["file"],
                             "name": "Customer support"
                             if candidate["name"] == "Support"
                             else candidate["name"],
-                            "keep": candidate["name"] != "Helper",
+                            "responsibility": (
+                                "Resolves customer questions using the appropriate tools."
+                                if candidate["name"] == "Support"
+                                else "Researches and summarizes requested information."
+                            ),
+                            "keep": candidate["name"] != "Helper"
+                            and candidate["file"] != "support_wrapper.py",
                         }
                         for candidate in candidates
                     ]
@@ -206,24 +264,30 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
 
     discovered = app.discover_application_agents(
         saved["id"],
-        {
-            "preferences": {
-                "coding_review": True,
-                "trace_metadata": False,
-                "trace_cap": 100,
-                "trace_connection_id": None,
-            }
-        },
+        {},
     )
 
     assert discovered["preferences"]["seen"] is True
-    assert discovered["enrichment"]["coding_review"] == {"reviewed": 3, "kept": 2}
+    assert discovered["preferences"]["coding_review"] is True
+    assert discovered["enrichment"]["coding_review"] == {"reviewed": 4, "kept": 2}
     assert [agent["name"] for agent in discovered["agents"]] == [
         "Customer support",
         "Research",
     ]
+    assert [agent["description"] for agent in discovered["agents"]] == [
+        "Resolves customer questions using the appropriate tools.",
+        "Researches and summarizes requested information.",
+    ]
     assert calls[0]["sandbox"] == "read-only"
     assert calls[0]["response_mode"] == "raw-final"
+    assert "set keep to false for the duplicates" in calls[0]["prompt"]
+    reviewed_candidates = json.loads(calls[0]["prompt"].split("Candidates: ", 1)[1])
+    support_entrypoint = next(
+        item["entrypoint"] for item in reviewed_candidates if item["name"] == "Support"
+    )
+    assert support_entrypoint["line"] == 2
+    assert support_entrypoint["framework_call"] == "agents.Agent"
+    assert '2: support = Agent(name="Support")' in support_entrypoint["code"]
 
     discovered_again = app.discover_application_agents(saved["id"], {})
     assert [agent["name"] for agent in discovered_again["agents"]] == [
@@ -233,7 +297,91 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
     assert discovered_again["enrichment"]["coding_review"] == {"reviewed": 2, "kept": 2}
 
 
-def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path):
+def test_discovery_automatically_resumes_a_timed_out_review(app, tmp_path, monkeypatch):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    (root / "app.py").write_text('from agents import Agent\nsupport = Agent(name="Support")\n')
+    calls = []
+    candidates = []
+
+    def execute(request, emit, *_args):
+        calls.append(request)
+        if len(calls) == 1:
+            candidates.extend(json.loads(request["prompt"].split("Candidates: ", 1)[1]))
+            emit({"type": "session", "session_id": "discovery-session"})
+            raise AuditError(
+                "Coding-agent time limit reached. Resume the saved session explicitly."
+            )
+        return {
+            "state": "completed",
+            "raw_final_text": json.dumps(
+                {
+                    "candidates": [
+                        {
+                            "id": candidate["id"],
+                            "file": candidate["file"],
+                            "name": candidate["name"],
+                            "responsibility": "Resolves customer questions for users.",
+                            "keep": True,
+                        }
+                        for candidate in candidates
+                    ]
+                }
+            ),
+        }
+
+    app.jobs.execute = execute
+    monkeypatch.setattr(
+        app,
+        "agents",
+        lambda: {
+            "agents": [
+                {
+                    "id": "codex",
+                    "available": True,
+                    "authenticated": True,
+                    "name": "Codex",
+                }
+            ],
+            "settings": {},
+        },
+    )
+
+    discovered = app.discover_application_agents(saved["id"], {})
+
+    assert calls[1]["session_id"] == "discovery-session"
+    assert calls[1]["prompt"].startswith("Continue and finish")
+    assert discovered["agents"][0]["description"] == ("Resolves customer questions for users.")
+
+
+def test_discovery_requires_an_authenticated_coding_assistant(app, tmp_path, monkeypatch):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    (root / "app.py").write_text('from agents import Agent\nsupport = Agent(name="Support")\n')
+    monkeypatch.setattr(
+        app,
+        "agents",
+        lambda: {
+            "agents": [
+                {
+                    "id": "codex",
+                    "available": True,
+                    "authenticated": False,
+                    "name": "Codex",
+                }
+            ],
+            "settings": {},
+        },
+    )
+
+    with pytest.raises(AuditError, match="Set up and authenticate a coding assistant"):
+        app.discover_application_agents(saved["id"], {})
+
+    assert app.catalog.discovery_preferences(saved["id"])["seen"] is False
+    assert app.catalog.agents(saved["id"]) == []
+
+
+def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path, monkeypatch):
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root
     (root / "support_router.py").write_text(
@@ -264,6 +412,26 @@ def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path):
             }
 
     app.provider_factory = Provider
+    monkeypatch.setattr(
+        app,
+        "agents",
+        lambda: {
+            "agents": [
+                {
+                    "id": "codex",
+                    "available": True,
+                    "authenticated": True,
+                    "name": "Codex",
+                }
+            ],
+            "settings": {},
+        },
+    )
+    monkeypatch.setattr(
+        app,
+        "_review_discovered_agents",
+        lambda _project_id, _coding_assistant: {"reviewed": 1, "kept": 1},
+    )
     source = save_connection(app, saved["id"])
     app.test_connection(saved["id"], source["id"])
 
@@ -271,7 +439,6 @@ def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path):
         saved["id"],
         {
             "preferences": {
-                "coding_review": False,
                 "trace_metadata": True,
                 "trace_cap": 100,
                 "trace_connection_id": source["id"],
