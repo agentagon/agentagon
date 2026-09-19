@@ -6,8 +6,8 @@ import json
 import pytest
 from support.evaluation import draft, review_for
 
+from agentagon.capabilities.experiments import inspection, preparation, runners
 from agentagon.core.records import AuditError
-from agentagon.experiments import inspection, preparation, runners
 
 
 def metric_draft(application, specification, *, repetitions=1):

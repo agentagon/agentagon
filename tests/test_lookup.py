@@ -6,18 +6,14 @@ import httpx
 import pytest
 from click.testing import CliRunner
 
-from agentagon.cli.main import main
+from agentagon.capabilities.intelligence import client as lookup_client
+from agentagon.capabilities.intelligence.client import lookup, redact_query, service_url
+from agentagon.capabilities.reporting import report
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError, validate_record
-from agentagon.lookup import client as lookup_client
-from agentagon.lookup.client import (
-    lookup,
-    redact_query,
-    service_url,
-)
-from agentagon.operations import start
-from agentagon.reporting import report
 from agentagon.storage.config import Config
 from agentagon.storage.workspace import Workspace
+from agentagon.workflows.audit.operations import start
 
 RESPONSE = {
     "knowledge_version": "response-content-fingerprint",

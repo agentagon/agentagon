@@ -84,7 +84,11 @@ def number(value: Any) -> float | int | None:
 
 
 def resource_path(relative: str) -> Path:
-    candidates = (Path(__file__).resolve().parents[3], Path(sys.prefix) / "share/agentagon")
+    candidates = (
+        Path(__file__).resolve().parents[1],
+        Path(__file__).resolve().parents[3],
+        Path(sys.prefix) / "share/agentagon",
+    )
     for candidate in candidates:
         if (candidate / relative).exists():
             return candidate / relative

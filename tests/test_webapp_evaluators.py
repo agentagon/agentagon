@@ -14,10 +14,11 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from agentagon.capabilities.evaluation import native as evaluators
+from agentagon.capabilities.traces import snapshots
+from agentagon.capabilities.traces.providers import CredentialStore, ProviderClient, ProviderError
 from agentagon.core.records import AuditError
-from agentagon.webapp import evaluators, snapshots
-from agentagon.webapp.providers import CredentialStore, ProviderClient, ProviderError
-from agentagon.webapp.state import AppState
+from agentagon.storage.state import AppState
 
 
 @pytest.fixture

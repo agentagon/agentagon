@@ -35,10 +35,8 @@ def version_for_tag(tag, root=ROOT):
             isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets
         ):
             versions.append(ast.literal_eval(node.value))
-    for host in ("codex", "claude"):
-        versions.append(json.loads((root / f".{host}-plugin/plugin.json").read_text())["version"])
-    if len(versions) != 4 or any(value != version for value in versions):
-        raise ValueError(f"Tag and package/CLI/plugin versions disagree: {tag}, {versions}")
+    if len(versions) != 2 or any(value != version for value in versions):
+        raise ValueError(f"Tag and package/CLI versions disagree: {tag}, {versions}")
     return version
 
 

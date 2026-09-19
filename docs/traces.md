@@ -14,11 +14,11 @@ Agentagon imports supported exports. Your coding host retrieves provider data th
 | Phoenix | Supply project/endpoint and access when required, or an export. |
 | OpenTelemetry | Supply a supported local export. There is no universal historical-query endpoint. |
 
-Exact supported shapes are documented in the [export-format reference](../skills/audit/references/formats.md). A file from a provider is not automatically compatible with every export endpoint or format that provider offers.
+Exact supported shapes are documented in the [export-format reference](../src/agentagon/workflows/audit/references/formats.md). A file from a provider is not automatically compatible with every export endpoint or format that provider offers.
 
 ## Option A: use an existing local export
 
-Open the application in your coding host and select **ag:audit**. Give it the file and explicit selection details:
+Open the application in your coding host and select **Audit**. Give it the file and explicit selection details:
 
 ```text
 Audit the traces in /path/to/export.json in trace-only mode.
@@ -34,7 +34,7 @@ Local exports do not require a provider connection. Use only data permitted for 
 
 ## Option B: save a provider connection
 
-Use **ag:setup** in Codex or `/ag:setup` in Claude Code. For example:
+Use **Settings** in Codex or `Settings` in Claude Code. For example:
 
 ```text
 Configure Braintrust traces for this checkout using project MY_PROJECT.
@@ -47,7 +47,7 @@ Configure the actual secret outside chat and ensure the host can read it. The sa
 For direct configuration:
 
 ```sh
-agentagon setup --scope project --set traces.source braintrust --set traces.project MY_PROJECT --set traces.api_key_env BRAINTRUST_API_KEY --set traces.state enabled
+agentagon _internal setup --scope project --set traces.source braintrust --set traces.project MY_PROJECT --set traces.api_key_env BRAINTRUST_API_KEY --set traces.state enabled
 ```
 
 Other providers may need endpoint or public-key references; use [Settings and profiles](settings.md). Saving a connection does not authorize downloads or production instrumentation.
@@ -70,7 +70,7 @@ uncommitted changes. Preserve that limitation when relating code to failures.
 
 With dirty or non-Git source, alignment cannot be verified. Even matching revision metadata in a clean checkout remains a provenance assumption. Contradictory metadata prevents unsupported code/trace correlation. The report retains these limitations.
 
-Changes reviews stay code-only by default. To add traces to `ag:audit`, explicitly explain their connection to the captured changes; trace-only mode cannot satisfy a changes review.
+Changes reviews stay code-only by default. To add traces to `Audit`, explicitly explain their connection to the captured changes; trace-only mode cannot satisfy a changes review.
 
 ## Interpret runtime measurements
 
@@ -81,7 +81,7 @@ Import diagnostics and coverage matter as much as the findings. Read [Reports an
 ## Disconnect later
 
 ```sh
-agentagon setup --scope project --set traces.state disabled
+agentagon _internal setup --scope project --set traces.state disabled
 ```
 
 This changes future audit defaults and retains existing audit evidence. Use `unset` instead of `disabled` only if you want the trace-setup question to appear again.

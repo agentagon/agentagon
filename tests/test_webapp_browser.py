@@ -5,7 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-ASSETS = Path(__file__).parents[1] / "src/agentagon/dashboard_assets"
+ASSETS = Path(__file__).parents[1] / "src/agentagon/dashboard/assets"
 
 
 class WorkspaceFixture:
@@ -95,7 +95,7 @@ class WorkspaceFixture:
                 {
                     "id": "task_decision",
                     "project_id": "project_alpha",
-                    "workflow": "fix",
+                    "workflow": "optimize",
                     "workflow_version": 1,
                     "agent_id": "agent_support",
                     "agent_name": "Support agent",
@@ -137,6 +137,36 @@ class WorkspaceFixture:
                     "can_cancel": False,
                     "result": {"baseline_id": "baseline_support"},
                 },
+                {
+                    "id": "task_assess",
+                    "project_id": "project_alpha",
+                    "workflow": "assess",
+                    "workflow_version": 1,
+                    "agent_id": None,
+                    "agent_name": None,
+                    "goal_id": None,
+                    "goal_name": None,
+                    "title": "Assess application agents",
+                    "state": "completed_with_limits",
+                    "needs_attention": False,
+                    "updated_at": "2026-09-15T12:00:00Z",
+                    "conversation": [],
+                    "events": [{"type": "progress", "text": "Reviewed code-backed candidates."}],
+                    "question": None,
+                    "next_action": None,
+                    "can_resume": False,
+                    "can_cancel": False,
+                    "result": {
+                        "summary": "Retained one code-backed agent definition.",
+                        "candidates": [
+                            {
+                                "id": "agent_suggested",
+                                "file": "examples/example_agent.py",
+                                "keep": True,
+                            }
+                        ],
+                    },
+                },
             ],
             "project_beta": [],
         }
@@ -158,12 +188,12 @@ class WorkspaceFixture:
         self.discovery = None
 
     @staticmethod
-    def skills():
+    def workflows():
         values = [
             ("design-measurements", "design", "Design measurements", True),
             ("prepare-evaluation", "eval", "Prepare an evaluation", True),
             ("run-baseline", "baseline", "Run a baseline", True),
-            ("improve-agent", "fix", "Improve an agent", True),
+            ("improve-agent", "optimize", "Improve an agent", True),
             ("audit-agent", "audit", "Audit an agent", False),
         ]
         return [
@@ -213,8 +243,8 @@ class WorkspaceFixture:
             return {"token": "test-session", "controls_enabled": True}
         if path == "/api/projects":
             return {"projects": self.projects, "selected_project_id": "project_alpha"}
-        if path == "/api/skills":
-            return {"skills": self.skills()}
+        if path == "/api/workflows":
+            return {"workflows": self.workflows()}
         if path == "/api/connector-types":
             return {
                 "connector_types": [
@@ -250,6 +280,18 @@ class WorkspaceFixture:
             }
         parts = path.strip("/").split("/")
         project_id, resource = parts[2:4]
+        if resource == "onboarding":
+            return {"state": "complete", "scope": {}}
+        if resource == "recommendations":
+            return {"recommendations": []}
+        if resource == "production":
+            return {
+                "monitors": [],
+                "observations": [],
+                "improvements": [],
+                "deployments": [],
+                "attention": [],
+            }
         if resource == "agents":
             records = self.agents[project_id]
             if len(parts) == 4:
@@ -297,7 +339,7 @@ class WorkspaceFixture:
                         "workflow_version": 1,
                         "agent_id": payload["agent_id"],
                         "agent_name": "Support agent",
-                        "goal_id": payload.get("goal_id"),
+                        "goal_id": payload.get("input", {}).get("id"),
                         "goal_name": "Task success and correctness",
                         "title": "New workflow task",
                         "state": "running",
@@ -335,7 +377,7 @@ class WorkspaceFixture:
                     "next_cursor": None,
                 }
             task = next(item for item in self.tasks[project_id] if item["id"] == parts[4])
-            if len(parts) == 6 and parts[5] == "reply":
+            if len(parts) == 6 and parts[5] == "answer":
                 task.update(state="running", needs_attention=False, question=None)
             return task
         if resource == "workflows":
@@ -397,7 +439,7 @@ class WorkspaceFixture:
             if project_id == "project_alpha"
             else [],
             "issues": [],
-            "jobs": [],
+            "tasks": [],
             "datasets": [{"id": "dataset_support", "name": "Support cases"}]
             if project_id == "project_alpha"
             else [],
@@ -445,12 +487,42 @@ def test_named_agents_and_project_switch_are_scoped(webapp_page):
     assert page.get_by_role("complementary", name="Task details").count() == 0
 
 
+def test_discovered_agents_have_a_clear_review_handoff(webapp_page):
+    page, fixture = webapp_page
+    sidebar = page.locator(".sidebar")
+    assert sidebar.get_by_role("link", name="Agents 1 suggestions").is_visible()
+    assert (
+        page.locator(".summary-card")
+        .filter(has_text="Agent inventory")
+        .get_by_text("Review 1 suggestion", exact=True)
+        .is_visible()
+    )
+
+    sidebar.get_by_role("link", name="Agents 1 suggestions").click()
+    page.wait_for_url("**/projects/project_alpha/agents")
+    assert page.get_by_role("heading", name="Suggestions").is_visible()
+    assert page.get_by_text("Example agent", exact=True).is_visible()
+
+    page.goto("http://agentagon.test/projects/project_alpha/tasks/task_assess")
+    panel = page.get_by_role("complementary", name="Task details")
+    panel.get_by_role("heading", name="1 agent ready for review").wait_for()
+    panel.get_by_role("link", name="Review suggested agents").click()
+    page.wait_for_url("**/projects/project_alpha/agents")
+
+    for agent in fixture.agents["project_alpha"]:
+        agent["status"] = "suggested"
+    page.goto("http://agentagon.test/projects/project_alpha/home")
+    page.get_by_role("heading", name="Review discovered agents").wait_for()
+    assert page.get_by_text("2 code-backed agents are ready for confirmation.").is_visible()
+    assert page.get_by_text("Set up", exact=True).count() == 0
+
+
 def test_agent_goal_workspace_uses_one_stage_rail(webapp_page):
     page, _ = webapp_page
     page.locator(".sidebar").get_by_role("link", name="Support agent").click()
     page.get_by_role("heading", name="Support agent").wait_for()
     assert page.get_by_role("button", name="Edit agent").count() == 1
-    assert page.get_by_role("button", name="Add focus").count() == 0
+    assert page.get_by_role("button", name="Add goal_record").count() == 0
     page.get_by_role("link", name="Task success and correctness").click()
     rail = page.get_by_role("navigation", name="Goal stages")
     rail.get_by_role("button").first.wait_for()
@@ -467,10 +539,10 @@ def test_agent_goal_workspace_uses_one_stage_rail(webapp_page):
 
 def test_skills_and_goal_actions_share_task_submission(webapp_page):
     page, fixture = webapp_page
-    page.get_by_role("link", name="Skills").click()
-    page.get_by_role("heading", name="Skills").wait_for()
-    assert page.locator(".skill-card").count() == 5
-    page.locator(".skill-card").filter(has_text="Design measurements").get_by_role(
+    page.get_by_role("link", name="Workflows").click()
+    page.get_by_role("heading", name="Workflows").wait_for()
+    assert page.locator(".workflow-card").count() == 5
+    page.locator(".workflow-card").filter(has_text="Design measurements").get_by_role(
         "button", name="Start"
     ).click()
     dialog = page.get_by_role("dialog")
@@ -487,7 +559,7 @@ def test_skills_and_goal_actions_share_task_submission(webapp_page):
         "operation_id": request["payload"]["operation_id"],
         "workflow": "design",
         "agent_id": "agent_support",
-        "goal_id": "goal_correctness",
+        "input": {"type": "goal", "id": "goal_correctness"},
         "options": {},
     }
     assert page.get_by_role("complementary", name="Task details").is_visible()
@@ -502,7 +574,7 @@ def test_task_history_has_stable_urls_and_bound_decisions(webapp_page):
     panel.get_by_role("button", name="Send response").click()
     page.wait_for_timeout(50)
     reply = fixture.mutations[-1]
-    assert reply["path"] == "/api/projects/project_alpha/tasks/task_decision/reply"
+    assert reply["path"] == "/api/projects/project_alpha/tasks/task_decision/answer"
     assert uuid.UUID(reply["payload"].pop("operation_id"))
     assert reply["payload"] == {
         "question_id": "question_candidate",
@@ -579,7 +651,75 @@ def test_new_user_sees_project_onboarding():
         fixture.projects = []
         page.route("**/*", fixture.route)
         page.goto("http://agentagon.test/")
-        page.get_by_role("heading", name="Measure what matters. Improve what is proven.").wait_for()
+        page.get_by_role("heading", name="Recursive self-improvement for AI agents.").wait_for()
         page.get_by_role("button", name="Add project").click()
         page.get_by_role("dialog").get_by_label("Project directory").fill("/projects/new")
+        browser.close()
+
+
+def test_real_service_trace_discovery_and_memory(tmp_path):
+    import json
+
+    from test_webapp import running
+    from test_webapp_jobs import manifest
+    from test_workflow_runtime import finding, trace_data
+
+    from agentagon.workflows.service import Application
+
+    playwright = pytest.importorskip("playwright.sync_api")
+    root = tmp_path / "real-project"
+    root.mkdir()
+    (root / "agent.py").write_text("def answer(): return 42\n")
+
+    def brain(request, emit, *_):
+        emit({"type": "session", "session_id": "discovery-session", "model": "test-model"})
+        task = manifest(request)
+        assert task["kind"] == "discover"
+        return {
+            "state": "completed",
+            "session_id": "discovery-session",
+            "text": json.dumps({"issues": [finding()], "summary": "One supported failure"}),
+        }
+
+    app = Application(tmp_path / "real-service", execute=brain)
+    project = app.register(str(root))
+    app.save_application_agent(project["id"], {"name": "Weather", "code_scopes": ["agent.py"]})
+    with running(app) as (_client, server), playwright.sync_playwright() as value:
+        browser = value.chromium.launch(
+            headless=True, executable_path=os.environ.get("AGENTAGON_TEST_CHROMIUM")
+        )
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(f"http://127.0.0.1:{server.server_port}/projects/{project['id']}/issues")
+        page.get_by_label("JSON or JSONL").fill(json.dumps(trace_data()))
+        page.get_by_role("button", name="Import and discover issues", exact=True).click()
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_role("button", name="Start task").click()
+        page.wait_for_url("**/tasks/task_*")
+        page.get_by_text("One supported failure", exact=False).first.wait_for()
+        page.get_by_role("link", name="Issues", exact=True).click()
+        page.get_by_text("Weather times out", exact=True).wait_for()
+        page.get_by_text("Evidence and repair attempts", exact=True).click()
+        page.get_by_role("button", name="Read diagnosis", exact=True).click()
+        page.get_by_text("The weather span reports timeout", exact=True).wait_for()
+        page.get_by_role("link", name="Goals", exact=True).click()
+        page.get_by_role("heading", name="Goals", exact=True).wait_for()
+        page.get_by_role("button", name="Add goal", exact=True).wait_for()
+        assert len(app.runtime.list(project["id"])) == 1
+        assert app.runtime.list(project["id"])[0]["kind"] == "discover"
+        page.get_by_role("link", name="Memory", exact=True).click()
+        page.get_by_label("Name", exact=True).fill("Private lessons")
+        page.get_by_label("Empty folder location").fill(str(tmp_path / "lessons"))
+        page.get_by_role("button", name="Register group").click()
+        page.get_by_role("button", name="Private lessons", exact=False).click()
+        page.get_by_label("Stable entry key").fill("timeout")
+        page.get_by_label("Lesson", exact=True).fill("Check timeouts before repeating tool calls")
+        page.get_by_label("Evidence references, one per line").fill("trace-1")
+        page.get_by_role("button", name="Record version").click()
+        page.get_by_text("Check timeouts before repeating tool calls", exact=True).wait_for()
+        assert not errors, errors
+        if destination := os.environ.get("AGENTAGON_TEST_SCREENSHOT"):
+            page.evaluate("window.scrollTo(0, 0)")
+            page.screenshot(path=destination, full_page=True)
         browser.close()

@@ -9,9 +9,9 @@ import pytest
 from click.testing import CliRunner
 from support.experiments import git
 
-from agentagon.cli.main import main
+from agentagon.capabilities.experiments import delivery, patches, runners, store
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError
-from agentagon.experiments import delivery, patches, runners, store
 
 
 def start(workspace, *, checks=None, **updates):

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import click
 
+from agentagon.capabilities.experiments import baselines, journeys
+from agentagon.capabilities.experiments.host_bridge import HostBridge
 from agentagon.core.records import AuditError, load_json
-from agentagon.experiments import baselines, journeys
-from agentagon.experiments.host_bridge import HostBridge
 from agentagon.storage.workspace import Workspace
 
 FILE = click.Path(exists=True, dir_okay=False, path_type=Path)
@@ -44,7 +44,7 @@ def register(main, output):
     @click.pass_obj
     @output
     def export(path, baseline_id, run_id):
-        from agentagon.reporting import export_journey_report
+        from agentagon.capabilities.reporting import export_journey_report
 
         if bool(baseline_id) == bool(run_id):
             raise AuditError("choose exactly one baseline or fix run")
@@ -117,7 +117,7 @@ def register(main, output):
     @click.pass_obj
     @output
     def score_traces(path, baseline_id):
-        from agentagon.experiments import trace_scoring
+        from agentagon.capabilities.experiments import trace_scoring
 
         return trace_scoring.advance(Workspace(path), baseline_id)
 

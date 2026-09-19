@@ -19,7 +19,7 @@ def main():
 
     def cli(*arguments):
         result = subprocess.run(
-            [sys.executable, "-m", "agentagon", "--workspace", str(app), *arguments],
+            [sys.executable, "-m", "agentagon", "_internal", "--workspace", str(app), *arguments],
             env=environment,
             check=True,
             capture_output=True,

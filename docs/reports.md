@@ -4,7 +4,7 @@ Start with the report’s scope and completion state, then examine its findings.
 
 ## Find your report
 
-Choose **ag:dashboard** in Codex or run `/ag:dashboard` in Claude Code to open the [dashboard](dashboard.md). Find your audit, review, or fix run and inspect its status, findings, evidence, and results.
+Choose **Dashboard** in Codex or run `Dashboard` in Claude Code to open the [dashboard](dashboard.md). Find your audit, review, or fix run and inspect its status, findings, evidence, and results.
 
 For a specific result, ask your coding agent to open it in the dashboard. If you need Markdown or JSON reports, ask the agent for the saved report files. Direct commands are listed in the [CLI reference](reference/cli.md).
 
@@ -47,7 +47,7 @@ Related findings can be retained as issues across audits. Use the dashboard to i
 
 Ask your coding agent to update an issue with the reason and appropriate evidence. Selecting a branch or creating a PR does not resolve it. Verified resolution must refer to a verified run and candidate that support this issue, and the current checkout must match the tested application state.
 
-The complete [issue-history reference](../skills/audit/references/history.md) documents CLI status updates. Use supported commands; do not rewrite saved history files.
+The complete [issue-history reference](../src/agentagon/workflows/audit/references/history.md) documents CLI status updates. Use supported commands; do not rewrite saved history files.
 
 ## Read a fix comparison
 

@@ -7,7 +7,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from agentagon.experiments import engine
+from agentagon.capabilities.experiments import engine
 from support.experiments import git
 
 

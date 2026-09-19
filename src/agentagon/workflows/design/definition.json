@@ -1,0 +1,22 @@
+{
+  "id": "design-measurements",
+  "version": 1,
+  "name": "Design measurements",
+  "purpose": "Turn an outcome into a measurement plan you can review and accept.",
+  "requires_goal": true,
+  "inputs": [
+    "Agent",
+    "Goal",
+    "Optional evidence"
+  ],
+  "outputs": [
+    "Editable measurement plan"
+  ],
+  "references": [
+    "workflows/shared/define-goal.md",
+    "workflows/shared/analyze-evidence.md",
+    "workflows/shared/design-measurement.md",
+    "workflows/shared/adapt-evaluation.md"
+  ],
+  "workflow": "design"
+}

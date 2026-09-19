@@ -13,9 +13,9 @@ from pathlib import Path
 import pytest
 from support.runners import FakeRemote, command, request
 
+from agentagon.capabilities.experiments import runners, worker
+from agentagon.capabilities.experiments.evidence import DEFAULT_LIMITS
 from agentagon.core.records import validate_record
-from agentagon.experiments import runners, worker
-from agentagon.experiments.evidence import DEFAULT_LIMITS
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def source(tmp_path):
     return root
 
 
-HELPERS = Path(__file__).parents[1] / "skills" / "eval" / "helpers"
+HELPERS = Path(__file__).parents[1] / "src" / "agentagon" / "workflows" / "evaluate" / "helpers"
 
 
 @pytest.mark.parametrize("language", ["python", "node"])

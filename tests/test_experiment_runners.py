@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 from support.runners import FakeRemote, command, request
 
+from agentagon.capabilities.experiments import checkouts, runners
 from agentagon.core.records import AuditError
-from agentagon.experiments import checkouts, runners
 
 
 @pytest.fixture
@@ -122,7 +122,7 @@ def test_reconnect_after_controller_exits_does_not_repeat_command(source, tmp_pa
     code = "import time; from pathlib import Path; p=Path('count'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); time.sleep(.6)"
     args = request([command("bench", "benchmark", code)])
     script = (
-        "import json; from pathlib import Path; from agentagon.experiments.runners import execute; execute({},Path("
+        "import json; from pathlib import Path; from agentagon.capabilities.experiments.runners import execute; execute({},Path("
         + repr(str(source))
         + "),Path("
         + repr(str(attempt))

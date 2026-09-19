@@ -2,9 +2,10 @@
 
 import click
 
+from agentagon.capabilities.evaluation import datasets
+from agentagon.capabilities.traces import snapshots
+from agentagon.storage.state import AppState
 from agentagon.storage.workspace import Workspace
-from agentagon.webapp import datasets, snapshots
-from agentagon.webapp.state import AppState
 
 
 def register(main, output):

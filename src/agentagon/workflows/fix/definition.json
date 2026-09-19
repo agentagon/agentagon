@@ -1,0 +1,19 @@
+{
+  "id": "fix-issue",
+  "version": 1,
+  "name": "Fix an issue",
+  "purpose": "Reproduce, repair, and verify a specific issue or trace failure.",
+  "requires_goal": false,
+  "inputs": [
+    "Issue, trace, or problem description"
+  ],
+  "outputs": [
+    "Verified repair and evidence"
+  ],
+  "references": [
+    "workflows/fix/instructions.md",
+    "workflows/evaluate/references/preparation.md",
+    "workflows/optimize/references/evaluation.md"
+  ],
+  "workflow": "fix"
+}

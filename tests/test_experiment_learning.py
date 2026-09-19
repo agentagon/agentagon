@@ -7,9 +7,9 @@ import pytest
 from support.controls import submit
 from support.experiments import baseline, executions, propose, verify
 
+from agentagon.capabilities.experiments import engine, learning
+from agentagon.capabilities.experiments.store import load_run
 from agentagon.core.records import AuditError, digest, encoded
-from agentagon.experiments import engine, learning
-from agentagon.experiments.store import load_run
 from agentagon.storage.config import Config
 
 

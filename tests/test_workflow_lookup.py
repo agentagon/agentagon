@@ -11,13 +11,13 @@ from click.testing import CliRunner
 from support.evaluation import draft
 
 from agentagon import usage
-from agentagon.cli.main import main
+from agentagon.capabilities.experiments import engine, preparation, store
+from agentagon.capabilities.intelligence.client import lookup
+from agentagon.capabilities.reporting import build_fix_report
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError
-from agentagon.experiments import engine, preparation, store
-from agentagon.lookup.client import lookup
-from agentagon.operations import start
-from agentagon.reporting import build_fix_report
 from agentagon.storage.config import Config
+from agentagon.workflows.audit.operations import start
 
 RESPONSE = {
     "knowledge_version": "synthetic-workflow-guidance-v1",
@@ -626,7 +626,7 @@ def test_busy_workflow_lookup_returns_promptly_without_overwriting_state(
 def test_workflow_cli_requires_approval_then_sends_only_prepared_fields(
     workflow_owners, workflow, tmp_path, monkeypatch
 ):
-    from agentagon.lookup import client
+    from agentagon.capabilities.intelligence import client
 
     workspace, evaluation_id, run_id = workflow_owners
     if workflow == "audit":

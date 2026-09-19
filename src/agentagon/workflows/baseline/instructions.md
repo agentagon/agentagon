@@ -1,0 +1,1 @@
+Advance the saved baseline with baseline run. Service its exact pending host grading and independent-review requests, then advance again without repeating completed executions. Keep benchmark and recent-trace scores separate. Missing provider acquisition authorization remains pending. Do not change the evaluator or application source.

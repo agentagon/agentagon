@@ -38,7 +38,7 @@ The bundled synthetic example needs no network after installation. Evidence is s
 
 ## Does it keep running when I close the coding agent?
 
-The web app owns its managed coding-agent sessions. Closing the browser leaves tasks running while the local service stays open. Stopping the service interrupts work; resume it explicitly after restarting. Optional skill workflows depend on their coding host, and saved evidence supports resumption there. See [task lifecycle](app.md#keep-or-resume-work).
+The web app owns its managed coding-agent sessions. Closing the browser leaves tasks running while the local service stays open. Stopping the service interrupts work; resume it explicitly after restarting. Optional skill workflows depend on their coding host, and saved evidence supports resumption there. See [task lifecycle](app.md).
 
 ## Does a verified candidate mean the application is safe to deploy?
 

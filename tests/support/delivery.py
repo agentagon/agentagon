@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agentagon.experiments import delivery, engine, store
+from agentagon.capabilities.experiments import delivery, engine, store
 from support.experiments import baseline, git, propose, verify
 
 

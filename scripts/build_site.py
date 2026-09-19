@@ -144,12 +144,12 @@ def assemble(destination, *, preview=False):
         "message.html",
         "/welcome/",
         "A new way to use Agentagon",
-        "Get started with the Agentagon CLI and plugin for your coding agent.",
+        "Start Agentagon through its dashboard or local MCP interface.",
         label="A new way to use Agentagon",
         heading="Bring Agentagon to your coding agent.",
         message="The previous web workspace and demo are retired. "
-        "Install the CLI and ag plugin, open your agent’s code repo in Codex or Claude Code, "
-        "and start with an audit. Core workflows need no Agentagon account.",
+        "Install Agentagon, open its dashboard in your agent’s project, "
+        "then discover issues, fix a trace, or optimize a goal. Core workflows need no Agentagon account.",
     )
     render(
         "message.html",

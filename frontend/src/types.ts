@@ -4,7 +4,7 @@ export type Project = {
   path: string;
   branch?: string | null;
   available?: boolean;
-  active_jobs?: number;
+  active_tasks?: number;
 };
 
 export type Agent = {
@@ -62,7 +62,7 @@ export type TaskDetail = TaskSummary & {
   revision?: number;
 };
 
-export type SkillDefinition = {
+export type WorkflowDefinition = {
   id: string;
   version: number;
   name: string;
@@ -117,7 +117,7 @@ export type ProjectOverview = {
   runs: Array<Record<string, unknown>>;
   baselines: Array<Record<string, unknown>>;
   issues: Array<Record<string, unknown>>;
-  jobs: Array<Record<string, unknown>>;
+  tasks: Array<Record<string, unknown>>;
   datasets: Array<Record<string, unknown>>;
   traces: Array<Record<string, unknown>>;
   settings: { settings: Record<string, unknown>; profiles: Record<string, unknown> };

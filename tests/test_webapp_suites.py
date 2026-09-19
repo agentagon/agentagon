@@ -7,19 +7,19 @@ import pytest
 from test_suites import _host, _suite
 from test_webapp_jobs import validation_job
 
+from agentagon.capabilities.experiments import optimize_run, suites
+from agentagon.capabilities.experiments.host_bridge import HostBridge
+from agentagon.capabilities.experiments.store import load_run
 from agentagon.core.records import AuditError
-from agentagon.experiments import optimize_run, suites
-from agentagon.experiments.host_bridge import HostBridge
-from agentagon.experiments.store import load_run
-from agentagon.webapp import workflows
-from agentagon.webapp.service import Application
+from agentagon.workflows import procedures as workflows
+from agentagon.workflows.service import Application
 
 
 @pytest.mark.parametrize("quality,expected", [(0.9, "completed"), (0.7, "completed_with_limits")])
 def test_suite_completion_requires_each_managed_child_reviewer(
     application, specification, quality, expected, tmp_path
 ):
-    job = validation_job("fix", engine="gepa", finalist_count=1)
+    job = validation_job("optimize", engine="gepa", finalist_count=1)
     run_id, manifest = _suite(application, specification)
     job.update(agent="codex", session_id="author", actual_model="fake")
     job["options"]["suite_manifest"] = manifest
@@ -87,8 +87,8 @@ def test_suite_completion_requires_each_managed_child_reviewer(
         )
         with app.state.db.transaction() as tx:
             for member in manifest["members"]:
-                focus = {
-                    "id": member["focus_id"],
+                goal_record = {
+                    "id": member["goal_id"],
                     "agent_id": agent["id"],
                     "name": member["name"],
                     "created_at": job["created_at"],
@@ -98,14 +98,14 @@ def test_suite_completion_requires_each_managed_child_reviewer(
                         "agent_binding_digest": agent["binding_digest"],
                     },
                 }
-                tx.put_record(project["id"], "focuses", focus["id"], focus)
+                tx.put_record(project["id"], "goals", goal_record["id"], goal_record)
                 tx.put_record(
                     project["id"],
-                    "focus_versions",
-                    "version_" + focus["id"],
-                    {"focus_id": focus["id"], "definition": focus},
+                    "goal_versions",
+                    "version_" + goal_record["id"],
+                    {"goal_id": goal_record["id"], "definition": goal_record},
                 )
-            tx.put_record(project["id"], "jobs", "job_" + "a" * 24, job)
+            tx.put_record(project["id"], "tasks", "task_" + "a" * 24, job)
         metrics = app.catalog.metrics(project["id"], agent["id"])
         assert metrics["limitations"] == []
         assert {row["evaluator_digest"] for row in metrics["metrics"]} == {
@@ -124,7 +124,7 @@ def test_suite_completion_requires_each_managed_child_reviewer(
             assert row["execution_digest"]
             assert {point.get("baseline_id") for point in row["measurements"]} - {None}
         for member in manifest["members"]:
-            retained = app.catalog.focus(project["id"], agent["id"], member["focus_id"])
+            retained = app.catalog.goal_record(project["id"], agent["id"], member["goal_id"])
             assert retained["measurement"]["baseline_id"] == member["baseline_id"]
     finally:
         app.close()
@@ -135,13 +135,13 @@ def test_browser_delivery_rejects_missing_required_suite(selected, tmp_path, mon
     try:
         project = app.register(str(selected["workspace"].root))
         job = {
-            "kind": "fix",
+            "kind": "optimize",
             "state": "running",
             "options": {"suite_manifest": {"digest": "required-suite"}},
             "workflow_ids": {"run_id": selected["run_id"]},
         }
-        monkeypatch.setattr(app.jobs, "list", lambda _: [job])
-        request = {"kind": "fix", "source_id": selected["run_id"], "publish": False}
+        monkeypatch.setattr(app.runtime, "list", lambda _: [job])
+        request = {"kind": "optimize", "source_id": selected["run_id"], "publish": False}
         with pytest.raises(AuditError, match="finish this task"):
             app.deliver(project["id"], request)
         job["state"] = "completed"

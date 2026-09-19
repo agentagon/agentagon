@@ -1,6 +1,6 @@
 # Audit existing evals and benchmark readiness
 
-Use **ag:audit** to assess an existing eval dataset, either broadly or for a particular issue. Audit checks coverage, label correctness, duplication, representativeness, provenance, leakage and whether the evaluator catches known failures.
+Use **Audit** to assess an existing eval dataset, either broadly or for a particular issue. Audit checks coverage, label correctness, duplication, representativeness, provenance, leakage and whether the evaluator catches known failures.
 
 ```text
 Audit the support agent's existing evals for duplicate-ticket failures.
@@ -17,16 +17,16 @@ Audit saves a **benchmark draft** with content-pinned dataset and entrypoint ref
 
 A runnable benchmark also needs trusted expectations, a harness, metrics, clean committed source, an execution profile and authorized limits. When ready, Audit continues through validation, baseline measurements, sensitivity checks and independent review. Otherwise it reports what is missing and completes the assessment.
 
-Audit reuses suitable existing evals. If none exist or they are unusable, it proposes cases and confirms the finding and proposed creation/running before editing, unless that work was already requested. **ag:eval** is also independently available to create or repair evals and prepare delivery. Dataset changes become a new evaluator version; coverage and sensitivity comparisons use fixed application source. Scores from changed datasets do not establish application improvement.
+Audit reuses suitable existing evals. If none exist or they are unusable, it proposes cases and confirms the finding and proposed creation/running before editing, unless that work was already requested. **Prepare evaluation** is also independently available to create or repair evals and prepare delivery. Dataset changes become a new evaluator version; coverage and sensitivity comparisons use fixed application source. Scores from changed datasets do not establish application improvement.
 
 ## Direct commands
 
-The host prepares the assessment using the [assessment procedure](../skills/audit/references/benchmarks.md) and versioned contract returned by `agentagon resources`.
+The host prepares the assessment using the [assessment procedure](../src/agentagon/workflows/audit/references/benchmarks.md) and versioned contract returned by the managed task context’s resource paths.
 
 ```sh
-agentagon benchmark draft --assessment ASSESSMENT_JSON --audit AUDIT_ID
-agentagon benchmark status BENCHMARK_ID
-agentagon benchmark prepare BENCHMARK_ID --profile local --budget BUDGET_JSON --author AUTHOR
+agentagon _internal benchmark draft --assessment ASSESSMENT_JSON --audit AUDIT_ID
+agentagon _internal benchmark status BENCHMARK_ID
+agentagon _internal benchmark prepare BENCHMARK_ID --profile local --budget BUDGET_JSON --author AUTHOR
 ```
 
 `--audit` is optional. Repeating preparation with the same source, profile, budget and author resumes the linked evaluation without granting more trials. To explicitly start again with changed limits or settings, create a new benchmark draft using `benchmark draft --assessment ASSESSMENT_JSON --new`. A changed committed application revision produces a distinct draft automatically.

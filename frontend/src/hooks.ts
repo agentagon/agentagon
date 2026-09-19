@@ -9,7 +9,7 @@ import type {
   Project,
   ProjectConnector,
   ProjectOverview,
-  SkillDefinition,
+  WorkflowDefinition,
   TaskDetail,
   TaskSummary,
 } from "./types";
@@ -87,10 +87,10 @@ export function useOverview(projectId?: string) {
   });
 }
 
-export function useSkills() {
+export function useWorkflows() {
   return useQuery({
-    queryKey: ["skills"],
-    queryFn: ({ signal }) => api<{ skills: SkillDefinition[] }>("/api/skills", { signal }),
+    queryKey: ["workflows"],
+    queryFn: ({ signal }) => api<{ workflows: WorkflowDefinition[] }>("/api/workflows", { signal }),
   });
 }
 

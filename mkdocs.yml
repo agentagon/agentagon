@@ -1,6 +1,6 @@
 site_name: Agentagon Docs
 site_url: https://agentagon.ai/docs/
-site_description: Inspect and improve AI agents with measured fixes and custom scores.
+site_description: Recursive self-improvement for AI agents.
 repo_url: https://github.com/agentagon/agentagon
 repo_name: agentagon/agentagon
 edit_uri: edit/main/docs/
@@ -73,7 +73,11 @@ extra:
       name: Agentagon on GitHub
 copyright: Agentagon · Apache 2.0
 nav:
-  - Web app: app.md
+  - Dashboard: app.md
+  - Workflows: workflows.md
+  - Memory: memory.md
+  - Production: production.md
+  - MCP: mcp.md
   - Getting started:
       - Introduction: README.md
       - Install: getting-started/install.md

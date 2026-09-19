@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from agentagon.core.records import load_json
-from agentagon.operations import prepare, start, submit
+from agentagon.workflows.audit.operations import prepare, start, submit
 
 
 def respond(workspace, audit_id, stage, edit):

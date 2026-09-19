@@ -7,10 +7,10 @@ from click.testing import CliRunner
 from support.evaluation import BUDGET, draft, review_for
 from support.experiments import git
 
-from agentagon.cli.main import main
+from agentagon.capabilities.experiments import benchmarks, preparation
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError, digest
-from agentagon.dashboard import _benchmark_drafts
-from agentagon.experiments import benchmarks, preparation
+from agentagon.dashboard.evidence import _benchmark_drafts
 from agentagon.storage.config import Config
 from agentagon.storage.workspace import Workspace
 

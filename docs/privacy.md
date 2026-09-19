@@ -20,7 +20,7 @@ Agentagon saves evidence locally, but the location of storage and the location o
 
 `.agentagon/` is private workflow state and is excluded from Git locally when initialized in a repository. Use supported CLI commands to manage records. Do not commit this directory or rewrite immutable evidence to alter a result.
 
-CLI settings use your user configuration file, with project overrides and environment-variable references for credentials. Web-app connections belong to one local project and retain credential references in the app database. Provider credentials automatically use a supported OS credential store when available, or session memory until the service stops. Secret values are not written to configuration or returned to the browser. See [connection setup](app.md#connect-traces-and-datasets).
+CLI settings use your user configuration file, with project overrides and environment-variable references for credentials. Web-app connections belong to one local project and retain credential references in the app database. Provider credentials automatically use a supported OS credential store when available, or session memory until the service stops. Secret values are not written to configuration or returned to the browser. See [connection setup](app.md).
 
 Retained trace and task data use recognized-secret redaction. Pattern redaction is additional protection, not a guarantee that personal, proprietary, or sensitive content has been removed. Decide what your host and services may inspect before supplying it.
 
@@ -29,7 +29,7 @@ Retained trace and task data use recognized-secret redaction. Pattern redaction 
 For your user:
 
 ```sh
-agentagon setup --scope user --set telemetry.enabled false
+agentagon _internal setup --scope user --set telemetry.enabled false
 ```
 
 Or for a process and its children:

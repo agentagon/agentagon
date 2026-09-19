@@ -3,7 +3,7 @@
 import copy
 import json
 
-from agentagon.experiments import preparation
+from agentagon.capabilities.experiments import preparation
 
 BUDGET = {"max_trials": 12, "max_elapsed_seconds": 600, "trial_timeout_seconds": 10}
 

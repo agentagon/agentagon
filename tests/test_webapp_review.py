@@ -4,10 +4,10 @@ import pytest
 from support.evaluation import draft
 from support.experiments import propose, verify
 
+from agentagon.capabilities.experiments import delivery, engine, preparation
+from agentagon.capabilities.traces import snapshots
 from agentagon.core.records import AuditError
-from agentagon.experiments import delivery, engine, preparation
-from agentagon.webapp import snapshots
-from agentagon.webapp.service import Application
+from agentagon.workflows.service import Application
 
 
 def test_publication_rejects_a_changed_selection_after_package_review(
@@ -17,7 +17,7 @@ def test_publication_rejects_a_changed_selection_after_package_review(
     try:
         workspace = selected["workspace"]
         project = app.register(str(workspace.root))
-        payload = {"kind": "fix", "source_id": selected["run_id"]}
+        payload = {"kind": "optimize", "source_id": selected["run_id"]}
         prepared = app.deliver(project["id"], {**payload, "publish": False})
         other, _ = propose(
             workspace, selected["run_id"], latency=85, quality=0.9, variant="different-selection"

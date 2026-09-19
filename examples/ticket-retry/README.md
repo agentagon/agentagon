@@ -32,8 +32,8 @@ The default preparation budget permits eight trials; a clean first validation us
 Use the returned evaluation ID and plan path:
 
 ```sh
-agentagon --workspace /tmp/my-ticket-agent eval check EVALUATION_ID --plan-file /tmp/my-ticket-agent/.agentagon/demo/plan.json
-agentagon --workspace /tmp/my-ticket-agent dashboard
+agentagon _internal --workspace /tmp/my-ticket-agent eval check EVALUATION_ID --plan-file /tmp/my-ticket-agent/.agentagon/demo/plan.json
+agentagon --workspace /tmp/my-ticket-agent
 ```
 
 The baseline should create one ticket for an ordinary request and two for the timeout case. The `false-completion` negative variant claims success without writing a ticket; all three checks must reject it. Missing or malformed verifier input exits with code 2, which is an execution failure rather than successful sensitivity evidence.
@@ -41,8 +41,8 @@ The baseline should create one ticket for an ordinary request and two for the ti
 Have a different coding-host agent inspect the exact preparation files, plan, all current trial artifacts and the returned `review_template`. The reviewer checks relevance, sensitivity, provenance, leakage and delivery scope, and writes a completed copy to `.agentagon/demo/evaluation-review.json`. It must preserve the template's binding and use a reviewer distinct from `ticket-demo-author`. Then:
 
 ```sh
-agentagon --workspace /tmp/my-ticket-agent eval freeze EVALUATION_ID --review-file /tmp/my-ticket-agent/.agentagon/demo/evaluation-review.json
-agentagon --workspace /tmp/my-ticket-agent fix start --evaluation EVALUATION_ID --profile ticket-demo
+agentagon _internal --workspace /tmp/my-ticket-agent eval freeze EVALUATION_ID --review-file /tmp/my-ticket-agent/.agentagon/demo/evaluation-review.json
+agentagon _internal --workspace /tmp/my-ticket-agent fix start --evaluation EVALUATION_ID --profile ticket-demo
 ```
 
 The evaluator asserts the recorded ticket count, request identity, title and returned confirmation. A separate deterministic check proves different requests remain distinct. Every benchmark resets the service; candidate files and the evaluator are frozen through the normal engine. Local worktrees are not a machine/network sandbox.
@@ -62,8 +62,8 @@ Create each proposed change through `fix new`, copy only the chosen variant into
 Example candidate creation:
 
 ```sh
-agentagon --workspace /tmp/my-ticket-agent fix new RUN_ID --hypothesis 'Use a request-scoped idempotency key' --author ticket-demo-author
-agentagon --workspace /tmp/my-ticket-agent fix run RUN_ID CANDIDATE_ID
+agentagon _internal --workspace /tmp/my-ticket-agent fix new RUN_ID --hypothesis 'Use a request-scoped idempotency key' --author ticket-demo-author
+agentagon _internal --workspace /tmp/my-ticket-agent fix run RUN_ID CANDIDATE_ID
 ```
 
 Apply the variant between these commands, at the exact candidate worktree returned by `fix new`. Do not change the evaluator or copy a variant over the origin application. Inspect every repetition and failed attempt; an incomplete model run is not a measured repair. Use the dashboard's task evidence to inspect actual model decisions and ticket state.
@@ -81,3 +81,5 @@ python -m unittest test_ticket_retry
 All three tests must pass. In a disposable copy of that delivered checkout, replace only `application.py` with the retained `baseline.py`; the timeout test must fail while ordinary and distinct requests still pass. Run the same test command on subsequent PRs in existing CI. These retained tests exercise the deterministic retry layer; the live-model benchmark remains separately available for broader agent checks.
 
 For a customer case, use [Bring one failure](../../docs/getting-started/bring-one-failure.md). Establish expected behavior and permitted state from that application before reusing this fixture.
+
+This example exercises part of Agentagon’s recursive self-improvement loop. It does not deploy changes or establish production recovery. Use the [production guide](../../docs/production.md) to connect verified improvements to observed releases.

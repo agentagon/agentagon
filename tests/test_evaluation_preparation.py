@@ -9,9 +9,9 @@ from click.testing import CliRunner
 from support.evaluation import BUDGET, draft, review_for
 from support.experiments import git, passing_review, verify
 
-from agentagon.cli.main import main
+from agentagon.capabilities.experiments import delivery, engine, preparation
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError
-from agentagon.experiments import delivery, engine, preparation
 
 
 def test_existing_benchmark_freezes_then_drives_verified_fix(application, specification):

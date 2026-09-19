@@ -9,8 +9,8 @@ from support.delivery import selected as selected
 from support.experiments import application as application
 from support.experiments import specification as specification
 
-from agentagon.operations import import_traces, start
 from agentagon.storage.workspace import Workspace
+from agentagon.workflows.audit.operations import import_traces, start
 
 
 @pytest.fixture(autouse=True)

@@ -6,8 +6,8 @@ import pytest
 from support.experiments import baseline, executions, passing_review, propose
 from support.recovery import gate_path, install_gate, invocation, wait_for_gate
 
+from agentagon.capabilities.experiments import engine, runners
 from agentagon.core.records import AuditError
-from agentagon.experiments import engine, runners
 from agentagon.storage.config import Config
 
 

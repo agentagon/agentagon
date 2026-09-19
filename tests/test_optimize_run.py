@@ -7,9 +7,9 @@ from support.experiments import executions, passing_review
 from support.optimizer import candidate_text, proposal_response
 from test_scoring import definition
 
+from agentagon.capabilities.experiments import engine, optimize_run
+from agentagon.capabilities.experiments.store import load_run
 from agentagon.core.records import AuditError
-from agentagon.experiments import engine, optimize_run
-from agentagon.experiments.store import load_run
 
 
 def _start(
@@ -105,7 +105,7 @@ def test_application_proposal_cannot_touch_evaluator(application, specification)
 
 @pytest.mark.parametrize("max_trials", [19, 20])
 def test_repeated_trials_leave_room_for_every_omni_stage(application, specification, max_trials):
-    from agentagon.experiments.budget import BudgetLedger
+    from agentagon.capabilities.experiments.budget import BudgetLedger
 
     run_id = _start(
         application, specification, "omni", repetitions=3, max_trials=max_trials, finalist_count=1
@@ -153,7 +153,7 @@ def test_target_stops_search_after_independent_final_verification(application, s
 
 
 def test_application_review_pending_replays_without_duplicate_trial(application, specification):
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     run_id = _start(application, specification, target=0.62)
     first = optimize_run.advance(application, run_id)
@@ -188,8 +188,8 @@ def test_application_review_pending_replays_without_duplicate_trial(application,
 
 
 def test_saved_intent_budget_and_scoring_are_reused(application, specification):
-    from agentagon.experiments import journeys
-    from agentagon.experiments.budget import BudgetLedger
+    from agentagon.capabilities.experiments import journeys
+    from agentagon.capabilities.experiments.budget import BudgetLedger
 
     specification["scoring"] = definition()
     intent = journeys.save(
@@ -282,7 +282,7 @@ def test_failed_target_verification_continues_search_with_remaining_budget(
 def test_process_driver_lock_prevents_concurrent_application_advances(application, specification):
     import fcntl
 
-    from agentagon.experiments.budget import BudgetLedger
+    from agentagon.capabilities.experiments.budget import BudgetLedger
 
     run_id = _start(application, specification)
     with (BudgetLedger(application, run_id).directory / "application.lock").open("w") as lock:
@@ -300,7 +300,7 @@ def test_optimizers_measure_distinct_candidates_concurrently_in_real_worktrees(
 
     from support.experiments import git
 
-    from agentagon.experiments.orchestration import DEFAULT_SETTINGS
+    from agentagon.capabilities.experiments.orchestration import DEFAULT_SETTINGS
     from agentagon.storage.config import Config
 
     # The actual benchmark processes rendezvous. A serialized implementation cannot
@@ -412,8 +412,8 @@ def test_finalist_count_and_background_are_frozen_before_execution(application, 
 
 
 def test_parallel_pending_reviews_resume_without_duplicate_trials(application, specification):
-    from agentagon.experiments.host_bridge import HostBridge
-    from agentagon.experiments.orchestration import DEFAULT_SETTINGS
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments.orchestration import DEFAULT_SETTINGS
     from agentagon.storage.config import Config
 
     profile = Config().profile(application.root, "local")
@@ -468,8 +468,8 @@ def test_parallel_pending_reviews_resume_without_duplicate_trials(application, s
 
 
 def test_only_completed_owner_intelligence_is_frozen_into_background(application, specification):
+    from agentagon.capabilities.experiments.store import save_run
     from agentagon.core.records import digest
-    from agentagon.experiments.store import save_run
 
     specification["scoring"] = definition()
     specification.update(repetitions=1, seeds=[0])

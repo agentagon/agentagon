@@ -7,7 +7,7 @@ export default defineConfig({
   root: "frontend",
   plugins: [react()],
   build: {
-    outDir: "../src/agentagon/dashboard_assets",
+    outDir: "../src/agentagon/dashboard/assets",
     emptyOutDir: false,
     cssCodeSplit: false,
     sourcemap: false,

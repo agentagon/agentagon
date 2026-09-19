@@ -55,16 +55,20 @@ class Workspace:
 
     def initialize(self) -> dict:
         if (self.state / "config.json").exists():
-            raise AuditError(
-                "unsupported workspace: legacy .agentagon/config.json; start with a fresh .agentagon directory"
-            )
+            raise self._unsupported_state("legacy config.json")
+        config = self.state / "workspace.json"
+        if config.exists():
+            # Reject old state before changing Git excludes or creating any new files.
+            self.require_initialized()
         if self.is_git:
             self._exclude_state_from_git()
         if not self.state.exists():
             self.state.mkdir(mode=0o700)
-        config = self.state / "workspace.json"
         if not config.exists():
-            self.write(config, {"contract_version": CONTRACT_VERSION, "created_at": now()})
+            self.write(
+                config,
+                {"contract_version": CONTRACT_VERSION, "state_version": 2, "created_at": now()},
+            )
         self.require_initialized()
         return {
             "workspace": str(self.root),
@@ -107,14 +111,31 @@ class Workspace:
 
     def require_initialized(self) -> None:
         if (self.state / "config.json").exists():
-            raise AuditError(
-                "unsupported workspace: legacy .agentagon/config.json; start with a fresh .agentagon directory"
-            )
+            raise self._unsupported_state("legacy config.json")
         config = self.state / "workspace.json"
         if not config.exists():
-            raise AuditError("run agentagon init first")
-        if load_json(self.checked(config)).get("contract_version") != CONTRACT_VERSION:
-            raise AuditError("unsupported workspace contract version")
+            raise AuditError(
+                "Initialize this project by starting a workflow from the dashboard or MCP."
+            )
+        metadata = load_json(self.checked(config))
+        if (
+            metadata.get("state_version") != 2
+            or metadata.get("contract_version") != CONTRACT_VERSION
+        ):
+            raise self._unsupported_state(
+                f"saved state_version={metadata.get('state_version', 'missing')!r}, "
+                f"contract_version={metadata.get('contract_version', 'missing')!r}; "
+                f"expected state_version=2, contract_version={CONTRACT_VERSION!r}"
+            )
+
+    def _unsupported_state(self, reason: str) -> AuditError:
+        return AuditError(
+            f"unsupported workspace state in {self.state} ({reason}). "
+            "This release requires fresh project state. Preserve the existing .agentagon "
+            "directory in a backup outside this project, then retry. "
+            "AGENTAGON_APP_STATE only isolates application settings; it does not replace "
+            "project state. Existing data has not been migrated."
+        )
 
     def checked(self, path: Path) -> Path:
         if not path.resolve().is_relative_to(self.state.resolve()):
@@ -234,7 +255,7 @@ class Workspace:
         """Inspect local changes before initialization without writing state."""
         if not self.is_git:
             raise AuditError(
-                "changes reviews require a Git checkout; use ag:audit for this codebase"
+                "changes reviews require a Git checkout; use the Audit workflow for this codebase"
             )
         return snapshot_changes(self.root, scopes or [])
 

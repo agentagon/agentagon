@@ -12,13 +12,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from agentagon import operations
+from agentagon.capabilities.experiments import optimize_run
 from agentagon.core.records import AuditError, digest, load_json, now
-from agentagon.experiments import optimize_run
+from agentagon.domain.projections import task_detail
 from agentagon.storage.config import Config
-from agentagon.webapp import workflows
-from agentagon.webapp.jobs import JobManager
-from agentagon.webapp.state import AppState
+from agentagon.storage.state import AppState
+from agentagon.workflows import procedures as workflows
+from agentagon.workflows.audit import operations
+from agentagon.workflows.runtime import TaskRuntime
 
 
 def payload(kind="audit", **kwargs):
@@ -40,7 +41,7 @@ def manager_factory(tmp_path):
         root.mkdir(exist_ok=True)
         state = AppState(tmp_path / f"app-state-{index}")
         project = state.register(str(root))
-        manager = JobManager(
+        manager = TaskRuntime(
             state, SimpleNamespace(resolve=lambda ref: "test-key"), execute=execute
         )
         managers.append(manager)
@@ -62,9 +63,42 @@ def wait_for(manager, project, job_id, predicate=None, timeout=8):
 
 
 def manifest(request):
-    records = list((Path(request["cwd"]) / ".agentagon/webapp/job-inputs").glob("*-context.json"))
+    records = list((Path(request["cwd"]) / ".agentagon/runtime/task-inputs").glob("*-context.json"))
     # Only one host owns a project; its current context is the last projection refreshed.
     return load_json(max(records, key=lambda path: path.stat().st_mtime_ns))
+
+
+def test_task_projection_hides_host_activity_and_preserves_workflow_progress():
+    detail = task_detail(
+        {
+            "id": "task_" + "a" * 24,
+            "project_id": "project_" + "b" * 24,
+            "kind": "assess",
+            "state": "running",
+            "events": [
+                {"type": "session", "session_id": "session-one"},
+                {"type": "message", "text": "I'll inspect the repository."},
+                {"type": "progress", "text": "Running commandExecution"},
+                {"type": "progress", "text": "Completed commandExecution"},
+                {
+                    "type": "tool_activity",
+                    "tool": "commandExecution",
+                    "state": "running",
+                    "visibility": "diagnostic",
+                },
+                {
+                    "type": "progress",
+                    "text": "Diagnosing retained evidence with the managed coding backend.",
+                },
+            ],
+        }
+    )
+    assert detail["events"] == [
+        {
+            "type": "progress",
+            "text": "Diagnosing retained evidence with the managed coding backend.",
+        }
+    ]
 
 
 def audit_host(request, emit, ask, cancelled):
@@ -98,15 +132,15 @@ def test_audit_idempotent_job_uses_actual_model_and_saved_evidence(manager_facto
     with pytest.raises(AuditError, match="different task settings"):
         manager.submit(project, {**command, "goal": "Changed goal"})
     assert "frozen_settings" not in result
-    assert not (state.workspace(project).state / "webapp/jobs").exists()
-    assert state.db.get_record(project, "jobs", result["id"])["result"] == result["result"]
+    assert not (state.workspace(project).state / "runtime/tasks").exists()
+    assert state.db.get_record(project, "tasks", result["id"])["result"] == result["result"]
 
 
 def test_two_managers_share_atomic_job_idempotency_and_reject_stale_writes(manager_factory):
     manager, state, project = manager_factory(lambda *args: pytest.fail("no host should run"))
     manager.stopping = True
     state.workspace(project).initialize()
-    other = JobManager(AppState(state.directory), manager.credentials, execute=manager.execute)
+    other = TaskRuntime(AppState(state.directory), manager.credentials, execute=manager.execute)
     other.stopping = True
     command = payload()
     try:
@@ -152,19 +186,23 @@ def test_failed_answer_commit_never_releases_host_and_success_is_durable(
 
     monkeypatch.setattr(MetadataTransaction, "put_record", fail_write)
     with pytest.raises(AuditError, match="failed commit"):
-        manager.control(project, job["id"], "reply", command)
+        manager.control(project, job["id"], "answer", command)
     assert key not in manager.answers
     assert not manager.active[key].is_set()
     assert manager._read(project, job["id"])["answers"] == {}
     monkeypatch.setattr(MetadataTransaction, "put_record", original)
-    accepted = manager.control(project, job["id"], "reply", command)
-    saved = AppState(state.directory).db.get_record(project, "jobs", job["id"])
+    accepted = manager.control(project, job["id"], "answer", command)
+    saved = AppState(state.directory).db.get_record(project, "tasks", job["id"])
     assert saved["answers"]["question-one"]["answer"] == {"decision": "accept"}
     assert command["operation_id"] in saved["receipts"]
     assert "answers" not in accepted
-    assert manager.control(project, job["id"], "reply", command)["revision"] == accepted["revision"]
+    assert (
+        manager.control(project, job["id"], "answer", command)["revision"] == accepted["revision"]
+    )
     with pytest.raises(AuditError, match="already has an accepted"):
-        manager.control(project, job["id"], "reply", {**command, "operation_id": str(uuid.uuid4())})
+        manager.control(
+            project, job["id"], "answer", {**command, "operation_id": str(uuid.uuid4())}
+        )
 
 
 def test_context_and_completion_verification_are_preserved(manager_factory):
@@ -172,13 +210,13 @@ def test_context_and_completion_verification_are_preserved(manager_factory):
     observed = []
 
     def verify(workspace, job, result):
-        observed.append((job["application_agent_id"], job["focus_id"], job["options"]))
+        observed.append((job["application_agent_id"], job["goal_id"], job["options"]))
         raise AuditError("Full suite still needs verification")
 
     manager.verify_result = verify
     command = payload(
         application_agent_id="agent_" + "a" * 24,
-        focus_id="focus_" + "b" * 24,
+        goal_id="goal_" + "b" * 24,
         options={
             "investigation_plan": {"hypothesis": "Grounded quality issue"},
             "suite_manifest": {"version": 1},
@@ -188,7 +226,7 @@ def test_context_and_completion_verification_are_preserved(manager_factory):
     result = wait_for(manager, project, job["id"])
     assert result["state"] == "failed"
     assert result["next_action"] == "Full suite still needs verification"
-    assert observed[0][:2] == (command["application_agent_id"], command["focus_id"])
+    assert observed[0][:2] == (command["application_agent_id"], command["goal_id"])
     assert observed[0][2]["suite_manifest"] == {"version": 1}
 
 
@@ -235,13 +273,13 @@ def test_raw_request_replay_preserves_original_frozen_context(manager_factory):
     manager.stopping = True
     original = payload()
     binding = digest(original)
-    prepared = {**original, "options": {"investigation_plan": {"focus_version": 1}}}
+    prepared = {**original, "options": {"investigation_plan": {"goal_version": 1}}}
     first = manager.submit(project, prepared, request_binding=binding)
-    changed_context = {**original, "options": {"investigation_plan": {"focus_version": 2}}}
+    changed_context = {**original, "options": {"investigation_plan": {"goal_version": 2}}}
     replay = manager.submit(project, changed_context, request_binding=binding)
     assert replay == first
     assert manager.existing_submission(project, original["operation_id"], binding) == first
-    assert replay["options"]["investigation_plan"]["focus_version"] == 1
+    assert replay["options"]["investigation_plan"]["goal_version"] == 1
     with pytest.raises(AuditError, match="different task settings"):
         manager.existing_submission(
             project, original["operation_id"], digest({**original, "goal": "Changed"})
@@ -250,7 +288,7 @@ def test_raw_request_replay_preserves_original_frozen_context(manager_factory):
 
 
 def test_reflection_uses_same_capacity_then_resumes_saved_author(manager_factory, monkeypatch):
-    from agentagon.webapp import agents
+    from agentagon.brain import adapters as agents
 
     author_requests = []
     reflection_requests = []
@@ -307,7 +345,7 @@ def test_missing_host_never_creates_an_audit(manager_factory):
 
 
 def test_claude_environment_credentials_work_without_storing_secret(manager_factory, monkeypatch):
-    from agentagon.webapp.providers import CredentialStore
+    from agentagon.capabilities.traces.providers import CredentialStore
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "never-persist-this-api-key")
 
@@ -331,7 +369,7 @@ def test_claude_environment_credentials_work_without_storing_secret(manager_fact
 def test_resume_uses_repaired_claude_credentials_without_changing_session_settings(
     manager_factory, monkeypatch
 ):
-    from agentagon.webapp.providers import CredentialStore
+    from agentagon.capabilities.traces.providers import CredentialStore
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     calls = []
@@ -401,7 +439,7 @@ def test_questions_show_actual_text_and_expire_without_late_resurrection(manager
         manager.control(
             project,
             job["id"],
-            "reply",
+            "answer",
             {
                 "operation_id": str(uuid.uuid4()),
                 "question_id": blocked["question"]["id"],
@@ -488,7 +526,7 @@ def test_restart_charges_elapsed_and_requires_explicit_resume(manager_factory):
         attempt_started_at=(datetime.now(UTC) - timedelta(seconds=3)).isoformat(),
     )
     manager._write(saved)
-    restarted = JobManager(state, manager.credentials, execute=lambda *args: calls.append(args))
+    restarted = TaskRuntime(state, manager.credentials, execute=lambda *args: calls.append(args))
     try:
         recovered = restarted.get(project, job["id"])
         assert recovered["state"] == "interrupted"
@@ -533,7 +571,7 @@ def test_private_config_freezes_selected_profile_and_bounds_native_cli(
     )
     saved = manager._read(project, submitted["id"])
     workflows.freeze_settings(application, saved)
-    path = application.state / "webapp/job-inputs" / f"{saved['id']}-config.json"
+    path = application.state / "runtime/task-inputs" / f"{saved['id']}-config.json"
     monkeypatch.setenv("AGENTAGON_CONFIG", str(path))
     limits = Config().profile(application.root, "local")["limits"]
     assert limits["max_trials"] == 4
@@ -573,8 +611,8 @@ def test_baseline_runs_distinct_managed_reviewer_and_resumes_author(
     from support.experiments import executions, passing_review
     from test_baselines import frozen
 
-    from agentagon.experiments import baselines
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments import baselines
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     evaluation = frozen(application, specification)
     calls = []
@@ -638,9 +676,9 @@ def test_baseline_runs_distinct_managed_reviewer_and_resumes_author(
 def test_completed_optimizer_preserves_exact_verified_choice(application, specification):
     from test_optimize_run import _host, _start
 
-    from agentagon.experiments.store import load_run
+    from agentagon.capabilities.experiments.store import load_run
 
-    job = validation_job("fix", engine="omni")
+    job = validation_job("optimize", engine="omni")
     run_id = _start(application, specification, optimizer="omni", target=0.62)
     finished = optimize_run.advance(application, run_id, host_handler=_host)
     assert finished["state"] == "completed"
@@ -674,8 +712,8 @@ def test_fix_runs_managed_reviewers_for_baseline_candidate_and_final_choice(
     from test_optimize_run import _host
     from test_scoring import definition
 
-    from agentagon.experiments import engine
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments import engine
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     calls = []
 
@@ -733,7 +771,9 @@ def test_fix_runs_managed_reviewers_for_baseline_candidate_and_final_choice(
 
     manager, _, project = manager_factory(host, application.root)
     before = len(executions())
-    submitted = manager.submit(project, payload("fix", options={"permitted_paths": ["app.json"]}))
+    submitted = manager.submit(
+        project, payload("optimize", options={"permitted_paths": ["app.json"]})
+    )
     job = wait_for(manager, project, submitted["id"], timeout=30)
     assert job["state"] == "completed", job.get("next_action")
     assert len(executions()) - before == 3
@@ -758,8 +798,8 @@ def test_suite_children_preserve_primary_job_identity_across_restart(
     from support.experiments import executions, passing_review
     from test_suites import _host, _suite
 
-    from agentagon.experiments import engine, preparation, suites
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments import engine, preparation, suites
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     # Existing reviewed measurements predate the job; its primary Fix is created by its author.
     _, suite_manifest = _suite(application, specification)
@@ -837,7 +877,7 @@ def test_suite_children_preserve_primary_job_identity_across_restart(
     submitted = manager.submit(
         project,
         payload(
-            "fix",
+            "optimize",
             options={
                 "engine": "gepa",
                 "finalist_count": 1,
@@ -862,7 +902,7 @@ def test_suite_children_preserve_primary_job_identity_across_restart(
     trials_at_pause = len(executions())
     manager.close()
     calls_at_restart = len(calls)
-    resumed = JobManager(AppState(state.directory), manager.credentials, execute=host)
+    resumed = TaskRuntime(AppState(state.directory), manager.credentials, execute=host)
     try:
         recovered = resumed.get(project, submitted["id"])
         assert recovered["state"] == "interrupted"
@@ -913,7 +953,7 @@ def test_evaluation_requires_actual_separate_review_session(
 ):
     from support.evaluation import review_for
 
-    from agentagon.experiments import preparation
+    from agentagon.capabilities.experiments import preparation
 
     missing_evidence = review_outcome == "missing"
     review_requests = []
@@ -1032,8 +1072,8 @@ def test_evaluation_requires_actual_separate_review_session(
 def test_parallel_reflections_reserve_capacity_and_queue_distinct_questions(
     manager_factory, monkeypatch, tmp_path
 ):
-    from agentagon.experiments.budget import BudgetLedger
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments.budget import BudgetLedger
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     author_calls, native_calls, answers = [], [], {}
     barrier = threading.Barrier(2)
@@ -1124,7 +1164,7 @@ def test_parallel_reflections_reserve_capacity_and_queue_distinct_questions(
         manager.control(
             project,
             submitted["id"],
-            "reply",
+            "answer",
             {
                 "operation_id": str(uuid.uuid4()),
                 "question_id": question["question"]["id"],
@@ -1143,8 +1183,8 @@ def test_parallel_reflections_reserve_capacity_and_queue_distinct_questions(
 def test_reflection_batch_restart_keeps_completed_sibling_and_native_identity(
     manager_factory, monkeypatch
 ):
-    from agentagon.experiments.budget import BudgetLedger
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments.budget import BudgetLedger
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     sessions, author_calls = [], []
     first_done = threading.Event()
@@ -1224,7 +1264,7 @@ def test_reflection_batch_restart_keeps_completed_sibling_and_native_identity(
     assert interrupted and len(saved["active_reflections"]) == 1
     with state.locked() as settings:
         settings["agents"]["concurrency"] = 1
-    resumed = JobManager(AppState(state.directory), manager.credentials, execute=host)
+    resumed = TaskRuntime(AppState(state.directory), manager.credentials, execute=host)
     try:
         resumed.control(project, job["id"], "resume", {"operation_id": str(uuid.uuid4())})
         queued = resumed.get(project, job["id"])
@@ -1251,8 +1291,8 @@ def test_managed_gepa_batch_completes_two_real_finalists(
     from support.optimizer import candidate_text
     from test_scoring import definition
 
-    from agentagon.experiments import engine
-    from agentagon.experiments.orchestration import DEFAULT_SETTINGS
+    from agentagon.capabilities.experiments import engine
+    from agentagon.capabilities.experiments.orchestration import DEFAULT_SETTINGS
 
     profile = Config().profile(application.root, "local")
     profile["runner"]["independent_capacity"] = True
@@ -1328,7 +1368,7 @@ def test_managed_gepa_batch_completes_two_real_finalists(
     submitted = manager.submit(
         project,
         payload(
-            "fix",
+            "optimize",
             options={
                 "engine": "gepa",
                 "host_concurrency": 2,

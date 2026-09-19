@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from agentagon.core.records import AuditError
-from agentagon.webapp.state import AppState
+from agentagon.storage.state import AppState
 
 
 @pytest.fixture
@@ -105,13 +105,13 @@ def test_domain_transaction_rolls_back_all_updates(registered):
     state, project = registered
     with pytest.raises(AuditError, match="not registered"):
         with state.db.transaction() as transaction:
-            transaction.put_record(project["id"], "focuses", "focus_one", {"name": "Quality"})
-            transaction.put_record("project_" + "f" * 24, "focuses", "focus_two", {})
-    assert state.db.list_records(project["id"], "focuses") == []
+            transaction.put_record(project["id"], "goals", "goal_one", {"name": "Quality"})
+            transaction.put_record("project_" + "f" * 24, "goals", "goal_two", {})
+    assert state.db.list_records(project["id"], "goals") == []
     with state.db.transaction() as transaction:
-        one = transaction.put_record(project["id"], "focuses", "focus_one", {"name": "Quality"})
-        two = transaction.put_record(project["id"], "suites", "suite_one", {"focus_id": one["id"]})
-    assert state.db.get_record(project["id"], "suites", two["id"])["focus_id"] == one["id"]
+        one = transaction.put_record(project["id"], "goals", "goal_one", {"name": "Quality"})
+        two = transaction.put_record(project["id"], "suites", "suite_one", {"goal_id": one["id"]})
+    assert state.db.get_record(project["id"], "suites", two["id"])["goal_id"] == one["id"]
 
 
 def test_domain_records_are_scoped_and_stale_revisions_fail(registered, tmp_path):
@@ -119,19 +119,19 @@ def test_domain_records_are_scoped_and_stale_revisions_fail(registered, tmp_path
     root = tmp_path / "second"
     root.mkdir()
     second = state.register(str(root))
-    record = state.db.put_record(project["id"], "focuses", "focus_one", {"name": "Quality"})
-    assert state.db.get_record(second["id"], "focuses", record["id"]) is None
-    assert state.db.list_records(second["id"], "focuses") == []
+    record = state.db.put_record(project["id"], "goals", "goal_one", {"name": "Quality"})
+    assert state.db.get_record(second["id"], "goals", record["id"]) is None
+    assert state.db.list_records(second["id"], "goals") == []
     with pytest.raises(AuditError, match="another project"):
-        state.db.put_record(second["id"], "focuses", record["id"], record)
+        state.db.put_record(second["id"], "goals", record["id"], record)
     other = AppState(state.directory)
     updated = other.db.put_record(
-        project["id"], "focuses", record["id"], {**record, "name": "Latency"}
+        project["id"], "goals", record["id"], {**record, "name": "Latency"}
     )
     assert updated["revision"] == 2
     with pytest.raises(AuditError, match="changed"):
-        state.db.put_record(project["id"], "focuses", record["id"], record)
-    assert state.db.get_record(project["id"], "focuses", record["id"])["name"] == "Latency"
+        state.db.put_record(project["id"], "goals", record["id"], record)
+    assert state.db.get_record(project["id"], "goals", record["id"])["name"] == "Latency"
 
 
 def test_settings_and_connection_owner_commit_together_and_only_store_references(registered):

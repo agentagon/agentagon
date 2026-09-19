@@ -1,65 +1,23 @@
-<p align="center">
-  <a href="https://agentagon.ai">
-    <img src="docs/assets/logo.png" alt="Agentagon" width="96" />
-  </a>
-</p>
+# Agentagon
 
-<h1 align="center">Agentagon</h1>
+**Recursive self-improvement for AI agents.**
 
-<p align="center">
-  <strong>Turn AI-agent goals and production failures into measured, verified code improvements.</strong>
-</p>
+Improve agents using code, traces and verified experiments. Remember successes, failures and production outcomes to guide the next attempt.
 
-<p align="center">
-  A local web app that connects your code, coding agent, traces, and evaluations—then establishes a baseline and compares fixes before you ship.
-</p>
+Agentagon has five concepts: a **dashboard** for people, a managed coding **brain** for reasoning, **memory** groups for lessons, built-in **workflows** for repeatable work, and shared **capabilities** for evidence and execution. Dashboard and MCP use one local service and one task runtime.
 
-<p align="center">
-  <a href="https://agentagon.ai/docs/"><strong>Docs</strong></a> ·
-  <a href="#installation"><strong>Install</strong></a> ·
-  <a href="#quick-start"><strong>Quick start</strong></a> ·
-  <a href="https://github.com/agentagon/agentagon/issues/new/choose"><strong>Report a bug</strong></a>
-</p>
+```mermaid
+flowchart LR
+    Dashboard --> Runtime[Workflow runtime]
+    MCP --> Runtime
+    Runtime <--> Brain[Managed Codex or Claude]
+    Runtime <--> Memory[Local memory groups]
+    Runtime --> Capabilities[Traces, evaluations, execution and delivery]
+```
 
-<p align="center">
-  <a href="https://pypi.org/project/agentagon/">
-    <img src="https://img.shields.io/pypi/v/agentagon?logo=pypi&logoColor=white" alt="PyPI version" />
-  </a>
-  <a href="https://github.com/agentagon/agentagon/actions/workflows/tests.yml">
-    <img src="https://github.com/agentagon/agentagon/actions/workflows/tests.yml/badge.svg" alt="Tests" />
-  </a>
-  <a href="https://pypi.org/project/agentagon/">
-    <img src="https://img.shields.io/pypi/pyversions/agentagon?logo=python&logoColor=white" alt="Python versions" />
-  </a>
-  <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 license" />
-  </a>
-</p>
+## Install and start
 
-<p align="center">
-  <strong>Local-first · Codex + Claude · Braintrust + LangSmith + Langfuse</strong>
-</p>
-
-<p align="center">
-  If Agentagon looks useful, <a href="https://github.com/agentagon/agentagon"><strong>⭐ star the repository</strong></a>.
-  It helps other agent builders discover the project.
-</p>
-
-Agentagon helps you decide what an AI agent should improve, define how success will be measured, establish a reproducible baseline, and compare verified code changes.
-
-The browser guides the workflow. Coding agents perform reasoning and author changes; Agentagon owns evaluations, budgets, evidence, comparisons, and review boundaries.
-
-## Prerequisites
-
-- **Python 3.12+** with `pip` and `venv`, on macOS or Linux. The implementation uses Unix facilities such as `fcntl`.
-- **Git** to review changes and run evaluation or fix workflows. Full code audits also accept directories without Git.
-- **Codex CLI with working authentication**, or the optional **Claude Agent SDK with an Anthropic API key**, for tasks that use a coding agent. Skill installation is not required by the web app.
-
-Installation downloads Python dependencies. No Agentagon account or API key is required for the quickstart or core workflows; your coding host and configured services have their own access requirements.
-
-## Installation
-
-Install the CLI from PyPI using [pipx](https://pipx.pypa.io/stable/installation/):
+Requires macOS or Linux, Python 3.12+, Git for executable evaluations, and an authenticated Codex CLI or the optional Claude Agent SDK with API-key access.
 
 ```sh
 pipx install agentagon
@@ -67,83 +25,32 @@ cd /path/to/your-agent
 agentagon
 ```
 
-The command opens the web app and reuses an existing local service when available. Keep its launching terminal open while tasks run. Downloadable wheels, source archives and checksums are also available in [GitHub Releases](https://github.com/agentagon/agentagon/releases).
+`agentagon` opens the React dashboard and starts or reuses a detached local service. Closing the browser or terminal does not cancel tasks. `agentagon serve` runs that service in the foreground; `agentagon mcp` serves stdio MCP without opening a browser. Optional extras: `agentagon[claude,credentials]`.
 
-Optional extras are `agentagon[claude]` for the Claude Agent SDK and `agentagon[credentials]` for OS credential storage. Select both at installation with `pipx install 'agentagon[claude,credentials]'`. Claude's managed integration requires API-key access; it does not use subscription authentication.
+## Set up your improvement loop
 
-For source installation in an isolated environment:
+Add or clone a repository, configure the managed coding backend, and optionally connect observability or import a trace. **Analyze project** discovers application agents, proposes code/trace bindings, and recommends next actions. Confirm ownership before repairs. Missing authentication preserves the local scan and acquired evidence.
 
-```sh
-git clone https://github.com/agentagon/agentagon.git
-cd agentagon
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install .
-agentagon --help
-```
+Each agent has persistent improvement history and production observations. Enable monitoring explicitly for an agent and environment. Checks run hourly while the local service and machine are available; scheduled diagnosis runs at most daily with a five-minute limit. Interrupted tasks require explicit resume or discard. Monitoring recommends actions; users start repairs and select/deploy changes.
 
-Ensure `python3 --version` reports 3.12 or newer. Keep this environment active for the following commands; reactivate it in each new shell.
+## Choose a journey
 
-To use skills inside an existing coding host, run `agentagon install --host codex` or `agentagon install --host claude-code`, then start a new host session. See the optional [plugin installer](https://github.com/agentagon/agentagon/blob/main/docs/audit.md#install).
+- **Assess project:** discover agents and next actions from selected code and traces.
+- **Observe production:** retain bounded observations, compare declared release cohorts, and recommend the next improvement.
+- **Discover issues:** import selected traces, diagnose and group supported failures, then choose what to address. Discovery does not launch repairs.
+- **Fix:** supply an issue, a trace, or a problem description. Establish expected behavior, reproduce the failure, author one focused repair, and verify it with independent review. A saved goal and full audit are optional.
+- **Optimize:** define a broader goal, accept a measurement plan, prepare an evaluator and baseline, then compare bounded, verified alternatives.
 
-Anonymous skill and Intelligence usage telemetry is enabled by default. Disable it with `agentagon setup --scope user --set telemetry.enabled false` or `AGENTAGON_TELEMETRY_DISABLED=1`. See [collected fields, privacy and delivery](https://github.com/agentagon/agentagon/blob/main/docs/telemetry.md).
+Evaluation preparation, baseline measurement, measurement design, and full Audit are also built-in workflows. Explicit full audits retain the complete rubric and selected code/trace scope.
 
-Optional Agentagon Intelligence is available through live `/v1/audit`, `/v1/eval` and `/v1/fix` routes. Configure the issued origin explicitly and follow the [workflow-specific request and privacy rules](https://github.com/agentagon/agentagon/blob/main/docs/intelligence.md).
+The service owns task budgets, pending questions, cancellation, and resumption. After a service interruption, resume explicitly. Verified repairs identify the tested source revision; they do not prove production recovery or authorize publication, merge, or deployment.
 
-## Quick start
+## Memory and evidence
 
-Run `agentagon` from **your AI agent's code directory**. `agentagon app` is an alias; the project selector lets you add and switch local directories.
+Named local memory groups can live in separate folders with explicit project/agent access. Improvement lessons and target-agent memory share an interface but use separate bindings. Entries are versioned, bounded, and carry evidence references. Evaluations pin target-agent memory so concurrent writes cannot change comparisons. MCP exposes explicit recall and record operations.
 
-1. In **Settings → Coding agents**, select Codex and a model from its installed catalog, or configure Claude API-key access and its model.
-2. Optionally connect Braintrust, LangSmith or Langfuse under **Settings → Connections** for this project. Enter credentials, choose **Find projects**, select a remote project and connect. Preview selected traces or a dataset before importing.
-3. In **Agents**, discover and confirm application agents or add one manually. Open **Goals**, add a focus describing what matters, and accept its **Measurement plan**.
-4. Use **Eval** to prepare a trusted benchmark, **Run baseline** to measure it, and **Fix** to compare improvements. Existing compatible evidence can be reused.
+SQLite owns mutable project, agent, goal, issue, task and memory-registry metadata. Immutable evidence stays in private project storage. Provider adapters retain normalization, redaction, provenance, integrity checks and import bounds. Optional Intelligence uses separately approved, privacy-safe requests.
 
-Review task progress, questions and permission requests in the browser. Closing the browser leaves tasks running; stopping the local service interrupts them until you explicitly resume. Dataset imports remain drafts until expectations, execution and independent review are ready. See the [web app guide](https://github.com/agentagon/agentagon/blob/main/docs/app.md) for setup and limits, or the [skill quickstart](https://github.com/agentagon/agentagon/blob/main/docs/getting-started/first-audit.md) for the optional host-driven path.
+This breaking release requires fresh application and project state. Existing private data is left untouched. There are no migrations, old CLI aliases, installed public skills, plugin manifests, or host continuation hooks.
 
-Optional examples: [check your installation offline](https://github.com/agentagon/agentagon/blob/main/examples/local-audit/README.md), or [compare fixes in the ticket-retry demonstration](https://github.com/agentagon/agentagon/blob/main/examples/ticket-retry/README.md).
-
-## Workflows
-
-| Goal | Web app and result |
-|---|---|
-| Decide what to improve and how to measure it | [Goals and measurement plans](https://github.com/agentagon/agentagon/blob/main/docs/app.md#select-an-application-agent-and-focus): accepted behaviors, scores, required checks and evaluation choices. |
-| Improve a saved goal or named issue | [Fix](https://github.com/agentagon/agentagon/blob/main/docs/fix.md): bounded optimization, verified comparisons and local delivery. |
-| Define behaviors, custom scores and evals | [Eval](https://github.com/agentagon/agentagon/blob/main/docs/eval.md): agreed expectations, reviewed evaluations and reusable benchmarks. |
-| Inspect history, rerun a baseline or manage settings | [Agents, Metrics, Eval and Settings](https://github.com/agentagon/agentagon/blob/main/docs/app.md): agent focuses, retained measurements, explicit reruns and connections. |
-
-The optional `ag` skills and existing CLI commands remain available, including [Audit](https://github.com/agentagon/agentagon/blob/main/docs/audit.md) for a separate investigation. The web-app journey starts from goals; existing audits and saved findings remain available as evidence. Discovery accepts dirty or non-Git directories; measurement requires clean committed inputs and authorized limits. Without a runnable baseline, Fix reports the blocker; an unmeasured application patch requires an explicit request. Publication, merge and deployment remain separate actions.
-
-Intelligence is optional and asks for approval of each outgoing request by default. Set its explicit **full access** mode through Setup to skip prompts while keeping calls visible. See [Intelligence permissions](https://github.com/agentagon/agentagon/blob/main/docs/intelligence.md).
-
-## Configuration and saved data
-
-The code-only quickstart needs no trace-provider connection, evaluation setup or Intelligence key. To inspect settings for your current directory:
-
-```sh
-agentagon setup
-```
-
-| Setting or location | Purpose |
-|---|---|
-| `--workspace PATH` before the subcommand | Select the application directory; defaults to `.` |
-| `AGENTAGON_CONFIG` | Override the configuration file path |
-| `$XDG_CONFIG_HOME/agentagon/config.json` | Default settings file; falls back to `~/.config/agentagon/config.json` |
-| Sibling `config.app/app.sqlite3`; `AGENTAGON_APP_STATE` overrides its directory | Authoritative app metadata: projects, agents, focuses, project connections, settings, jobs and approvals |
-| `.agentagon/` in the application directory | Engine records, immutable evidence, reports and work areas; initialization excludes it from Git |
-
-Project overrides take precedence over user defaults. App provider connections automatically use an OS credential store when available, with session memory as the fallback. CLI and execution settings use credential references; secret values are not saved in configuration. Use [web-app settings](https://github.com/agentagon/agentagon/blob/main/docs/app.md) for connections and agents, [execution profiles](https://github.com/agentagon/agentagon/blob/main/docs/fix.md#configure-execution-once) for evaluations and fixes, and [Intelligence setup](https://github.com/agentagon/agentagon/blob/main/docs/intelligence.md) for optional guidance.
-
-The app is hosted locally on loopback; hosted/team access is deferred. Evidence is stored locally, while your coding host and configured services determine where model processing occurs. There is no legacy app-state migration; connect each local project's providers explicitly.
-
-## Development and contributing
-
-See [CONTRIBUTING.md](https://github.com/agentagon/agentagon/blob/main/CONTRIBUTING.md) for editable installation, local development, tests and the pull request workflow. The [documentation index](https://github.com/agentagon/agentagon/blob/main/docs/README.md) links deeper guides and references.
-
-To explore the implementation, start with [how Agentagon works](https://github.com/agentagon/agentagon/blob/main/docs/contributing/architecture.md) and the [extension walkthrough](https://github.com/agentagon/agentagon/blob/main/docs/contributing/extending.md). Maintainers can follow [release preparation](https://github.com/agentagon/agentagon/blob/main/docs/contributing/releasing.md).
-
-Report vulnerabilities through [SECURITY.md](https://github.com/agentagon/agentagon/blob/main/SECURITY.md). Participation follows the [Code of Conduct](https://github.com/agentagon/agentagon/blob/main/CODE_OF_CONDUCT.md).
-
-## License
-
-[Apache-2.0](https://github.com/agentagon/agentagon/blob/main/LICENSE).
+Read the [production monitoring guide](docs/production.md), [dashboard guide](docs/app.md), [MCP contract](docs/mcp.md), [memory guide](docs/memory.md), [architecture](docs/contributing/architecture.md), and [contribution guide](CONTRIBUTING.md).

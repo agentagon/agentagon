@@ -14,7 +14,7 @@ from agentagon.core.records import PROVIDERS, AuditError, encoded
 
 ACCESS_MESSAGE = (
     "An optional Agentagon API key unlocks audit, evaluation and fix suggestions from our curated knowledge "
-    "library. Use ag:setup to configure https://brain.agentagon.ai or your supplied service origin "
+    "library. Use Settings to configure https://brain.agentagon.ai or your supplied service origin "
     "and the name of an environment variable containing your API key. "
     "Email hello@agentagon.ai to request access. "
     "Local audits, evaluation preparation and measured fixes remain available without API access."
@@ -114,7 +114,7 @@ def _settings(value: Any, scope: str) -> dict:
 
 
 def _profile(name: str, profile: Any) -> dict:
-    from agentagon.experiments.spec import validate_profile
+    from agentagon.capabilities.experiments.spec import validate_profile
 
     if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", name):
         raise AuditError(

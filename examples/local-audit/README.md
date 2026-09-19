@@ -19,8 +19,10 @@ pending until a coding agent reviews the evidence and submits its judgments.
 To view it, substitute the printed workspace path:
 
 ```sh
-agentagon --workspace /printed/workspace/path dashboard
+agentagon --workspace /printed/workspace/path
 ```
 
 The temporary directory remains available for inspection. Remove that printed example directory
 when finished. See [review and audit](../../docs/audit.md) to continue with a coding host.
+
+This example exercises part of Agentagon’s recursive self-improvement loop. It does not deploy changes or establish production recovery. Use the [production guide](../../docs/production.md) to connect verified improvements to observed releases.

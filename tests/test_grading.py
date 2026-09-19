@@ -6,11 +6,11 @@ import pytest
 from support.evaluation import draft, review_for
 from support.experiments import executions, git, passing_review
 
+from agentagon.capabilities.experiments import delivery, engine, grading, preparation
+from agentagon.capabilities.experiments.budget import BudgetLedger
+from agentagon.capabilities.experiments.host_bridge import HostBridge
+from agentagon.capabilities.experiments.store import load_run
 from agentagon.core.records import AuditError, identifier
-from agentagon.experiments import delivery, engine, grading, preparation
-from agentagon.experiments.budget import BudgetLedger
-from agentagon.experiments.host_bridge import HostBridge
-from agentagon.experiments.store import load_run
 
 BENCHMARK = """import json, os
 from pathlib import Path
@@ -424,7 +424,9 @@ def test_late_grading_response_is_retained_but_not_admitted(
 ):
     data, candidate, _, bridge, request = pending(application, specification)
     claimed = bridge.start(request["request_id"])
-    monkeypatch.setattr("agentagon.experiments.budget.time.time", lambda: claimed["deadline"] + 1)
+    monkeypatch.setattr(
+        "agentagon.capabilities.experiments.budget.time.time", lambda: claimed["deadline"] + 1
+    )
     completed = reply(bridge, request, judgment(request))
     assert completed["deadline_exceeded"]
     assert completed["response"]["metrics"]["quality"] == 1
@@ -437,7 +439,7 @@ def test_preparation_propagates_trial_deadline_and_rejects_late_execution(
 ):
     from datetime import datetime
 
-    from agentagon.experiments import runners
+    from agentagon.capabilities.experiments import runners
 
     start(application, specification, prepare_only=True)
     started, plan = draft(application, specification)
@@ -453,7 +455,7 @@ def test_preparation_propagates_trial_deadline_and_rejects_late_execution(
         result = execute(profile, source, attempt, request)
         budget = ledger.snapshot()
         expired = budget["started_at"] + budget["limits"]["max_elapsed_seconds"] + 1
-        monkeypatch.setattr("agentagon.experiments.budget.time.time", lambda: expired)
+        monkeypatch.setattr("agentagon.capabilities.experiments.budget.time.time", lambda: expired)
         return result
 
     monkeypatch.setattr(runners, "execute", delayed_collection)

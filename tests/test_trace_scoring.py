@@ -6,10 +6,10 @@ import sys
 
 import pytest
 
+from agentagon.capabilities.experiments import baselines, preparation, trace_scoring
+from agentagon.capabilities.experiments.budget import BudgetLedger
+from agentagon.capabilities.experiments.host_bridge import HostBridge
 from agentagon.core.records import AuditError, digest, identifier
-from agentagon.experiments import baselines, preparation, trace_scoring
-from agentagon.experiments.budget import BudgetLedger
-from agentagon.experiments.host_bridge import HostBridge
 
 
 @pytest.fixture
@@ -250,7 +250,7 @@ def test_sample_cap_and_frozen_rubric_are_enforced(acquired):
 def repository_judge(acquired, monkeypatch):
     from support.experiments import git
 
-    from agentagon.experiments.spec import validate_profile
+    from agentagon.capabilities.experiments.spec import validate_profile
 
     workspace, record = acquired["workspace"], acquired["record"]
     code = b"""import json, os
@@ -335,7 +335,7 @@ def test_repository_trace_command_cannot_overwrite_tracked_application_source(
 def test_repository_trace_execution_recovers_lost_collection_without_new_spending(
     acquired, monkeypatch
 ):
-    from agentagon.experiments import trace_execution
+    from agentagon.capabilities.experiments import trace_execution
 
     logfile = repository_judge(acquired, monkeypatch)
     execute = trace_execution.runners.execute
@@ -386,7 +386,7 @@ def test_repository_trace_budget_shortfall_never_scores_only_successful_subset(
 
 
 def test_foreign_repository_runner_result_is_retained_but_cannot_score(acquired, monkeypatch):
-    from agentagon.experiments import trace_execution
+    from agentagon.capabilities.experiments import trace_execution
 
     repository_judge(acquired, monkeypatch)
     execute = trace_execution.runners.execute

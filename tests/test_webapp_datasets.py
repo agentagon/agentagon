@@ -6,11 +6,12 @@ import uuid
 import pytest
 from click.testing import CliRunner
 
-from agentagon.cli.main import main
+from agentagon.capabilities.evaluation import datasets
+from agentagon.capabilities.traces import snapshots
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError, digest
-from agentagon.webapp import datasets, snapshots
-from agentagon.webapp.jobs import JobManager
-from agentagon.webapp.state import AppState
+from agentagon.storage.state import AppState
+from agentagon.workflows.runtime import TaskRuntime
 
 
 @pytest.fixture
@@ -181,7 +182,7 @@ def test_final_partition_rejected_by_development_tools_and_other_project(registe
         main, ["--workspace", str(workspace.root), "dataset", "inspect", final]
     )
     assert cli.exit_code != 0 and "reserved" in cli.output
-    manager = JobManager(state, None, execute=lambda *_: pytest.fail("host should not run"))
+    manager = TaskRuntime(state, None, execute=lambda *_: pytest.fail("host should not run"))
     try:
         with pytest.raises(AuditError, match="final verification"):
             manager.submit(
@@ -219,8 +220,8 @@ def test_final_claim_requires_actual_suite_binding_and_reviewed_rule_then_one_de
 ):
     from test_baselines import frozen
 
-    from agentagon.experiments import engine, preparation, suites
-    from agentagon.experiments.store import load_run
+    from agentagon.capabilities.experiments import engine, preparation, suites
+    from agentagon.capabilities.experiments.store import load_run
 
     evaluation = frozen(application, specification)
     state = AppState(tmp_path / "app")
@@ -300,7 +301,7 @@ def test_final_claim_requires_actual_suite_binding_and_reviewed_rule_then_one_de
 def test_http_derivation_and_split_require_session_and_hide_reserved_payloads(registered):
     from test_webapp import running
 
-    from agentagon.webapp.service import Application
+    from agentagon.workflows.service import Application
 
     state, project, workspace = registered
     (workspace.root / "app.py").write_text("def agent(): return 'test'\n")

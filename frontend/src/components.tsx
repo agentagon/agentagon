@@ -4,15 +4,15 @@ import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { api, operationId, post, projectPath } from "./api";
 import { useAgents, useGoals, useTask } from "./hooks";
-import type { Agent, Goal, Project, SkillDefinition, WorkflowReadiness } from "./types";
+import type { Agent, Goal, Project, WorkflowDefinition, WorkflowReadiness } from "./types";
 
-type IconName = "home" | "tasks" | "agent" | "skill" | "connector" | "settings" | "plus" | "close" | "arrow" | "moon" | "sun" | "menu";
+type IconName = "home" | "tasks" | "agent" | "workflow" | "connector" | "settings" | "plus" | "close" | "arrow" | "moon" | "sun" | "menu";
 
 const iconPaths: Record<IconName, ReactNode> = {
   home: <><path d="M3 10.8 12 3l9 7.8" /><path d="M5.5 9.8V21h13V9.8M9 21v-7h6v7" /></>,
   tasks: <><path d="M7 4h10M7 12h10M7 20h10" /><path d="m3 4 .7.7L5 3.3M3 12l.7.7L5 11.3M3 20l.7.7L5 19.3" /></>,
   agent: <><path d="M12 3 4.5 7.2v9.6L12 21l7.5-4.2V7.2L12 3Z" /><circle cx="12" cy="12" r="3" /></>,
-  skill: <><path d="M8 3h8l1 5 4 3-4 3-1 7H8l-1-7-4-3 4-3 1-5Z" /><path d="m9.5 12 1.7 1.7 3.6-4" /></>,
+  workflow: <><path d="M8 3h8l1 5 4 3-4 3-1 7H8l-1-7-4-3 4-3 1-5Z" /><path d="m9.5 12 1.7 1.7 3.6-4" /></>,
   connector: <><path d="M8 12h8M5 8v8M19 8v8" /><rect x="2" y="6" width="5" height="12" rx="2" /><rect x="17" y="6" width="5" height="12" rx="2" /></>,
   settings: <><circle cx="12" cy="12" r="3" /><path d="M19 13.5v-3l-2-.7-.7-1.7.9-1.9-2.1-2.1-1.9.9-1.7-.7-.7-2h-3l-.7 2-1.7.7-1.9-.9-2.1 2.1.9 1.9-.7 1.7-2 .7v3l2 .7.7 1.7-.9 1.9 2.1 2.1 1.9-.9 1.7.7.7 2h3l.7-2 1.7-.7 1.9.9 2.1-2.1-.9-1.9.7-1.7 2-.7Z" /></>,
   plus: <path d="M12 5v14M5 12h14" />,
@@ -58,7 +58,7 @@ export function PageHeader({ eyebrow, title, children, actions }: { eyebrow?: st
   return <header className="page-header"><div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h1>{title}</h1>{children && <div className="page-intro">{children}</div>}</div>{actions && <div className="page-actions">{actions}</div>}</header>;
 }
 
-export function Sidebar({ projects, project, agents, open, onClose, onAddProject, onAddAgent }: { projects: Project[]; project: Project; agents: Agent[]; open: boolean; onClose: () => void; onAddProject: () => void; onAddAgent: () => void }) {
+export function Sidebar({ projects, project, agents, suggestionCount, open, onClose, onAddProject, onAddAgent }: { projects: Project[]; project: Project; agents: Agent[]; suggestionCount: number; open: boolean; onClose: () => void; onAddProject: () => void; onAddAgent: () => void }) {
   const navigate = useNavigate();
   const projectBase = `/projects/${project.id}`;
   const switchProject = (id: string) => navigate(`/projects/${id}/home`);
@@ -71,13 +71,17 @@ export function Sidebar({ projects, project, agents, open, onClose, onAddProject
     <div className="project-control"><label htmlFor="project-picker">Project</label><select id="project-picker" value={project.id} onChange={(event) => switchProject(event.target.value)}>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><Button tone="quiet" onClick={onAddProject}><Icon name="plus" size={15} /> Add project</Button></div>
     <nav className="primary-nav" onClick={onClose}>
       <NavLink to={`${projectBase}/home`} className={linkClass}><Icon name="home" />Home</NavLink>
+      <NavLink to={`${projectBase}/agents`} end className={linkClass}><Icon name="agent" />Agents{suggestionCount > 0 && <span className="nav-link-count" aria-label={`${suggestionCount} suggestions`}>{suggestionCount}</span>}</NavLink>
       <NavLink to={`${projectBase}/tasks`} className={linkClass}><Icon name="tasks" />Tasks</NavLink>
     </nav>
-    <div className="nav-section"><div className="nav-heading"><span>Agents</span><Button tone="quiet" aria-label="Add agent" onClick={onAddAgent}><Icon name="plus" size={15} /></Button></div>
-      <nav className="agent-links" onClick={onClose}>{agents.map((agent) => <NavLink key={agent.id} to={`${projectBase}/agents/${agent.id}/overview`} className={linkClass}><span className="agent-glyph" aria-hidden="true">A</span><span>{agent.name}</span></NavLink>)}{!agents.length && <button className="nav-empty" onClick={onAddAgent}>Add your first agent</button>}</nav>
+    <div className="nav-section"><div className="nav-heading"><span>Agent workspaces</span><Button tone="quiet" aria-label="Add agent" onClick={onAddAgent}><Icon name="plus" size={15} /></Button></div>
+      <nav className="agent-links" onClick={onClose}>{agents.map((agent) => <NavLink key={agent.id} to={`${projectBase}/agents/${agent.id}/overview`} className={linkClass}><span className="agent-glyph" aria-hidden="true">A</span><span>{agent.name}</span></NavLink>)}{!agents.length && (suggestionCount > 0 ? <Link className="nav-empty" to={`${projectBase}/agents`}>Review {suggestionCount} suggestion{suggestionCount === 1 ? "" : "s"}</Link> : <button className="nav-empty" onClick={onAddAgent}>Add your first agent</button>)}</nav>
     </div>
     <nav className="primary-nav sidebar-resources" onClick={onClose}>
-      <NavLink to={`${projectBase}/skills`} className={linkClass}><Icon name="skill" />Skills</NavLink>
+      <NavLink to={`${projectBase}/goals`} className={linkClass}><Icon name="workflow" />Goals</NavLink>
+      <NavLink to={`${projectBase}/issues`} className={linkClass}><Icon name="tasks" />Issues</NavLink>
+      <NavLink to={`${projectBase}/memory`} className={linkClass}><Icon name="agent" />Memory</NavLink>
+      <NavLink to={`${projectBase}/workflows`} className={linkClass}><Icon name="workflow" />Workflows</NavLink>
       <NavLink to={`${projectBase}/connectors`} className={linkClass}><Icon name="connector" />Connectors</NavLink>
     </nav>
     <div className="sidebar-bottom"><NavLink to={`${projectBase}/settings/assistants`} className={linkClass} onClick={onClose}><Icon name="settings" />Settings</NavLink><p className="local"><span />Local workspace</p></div>
@@ -92,7 +96,7 @@ export function Topbar({ project, taskCount, onMenu }: { project: Project; taskC
     document.documentElement.dataset.theme = next ? "dark" : "light";
     localStorage.setItem("agentagon-theme", next ? "dark" : "light");
   };
-  return <header className="topbar"><div className="topbar-project"><Button tone="quiet" className="mobile-only" aria-label="Open navigation" onClick={onMenu}><Icon name="menu" /></Button><span className="scope-dot" /><span>{project.name}</span>{project.branch && <span className="branch">{project.branch}</span>}</div><div className="topbar-actions"><Link className="activity-link" to={`/projects/${project.id}/tasks`}>Needs attention <strong>{taskCount}</strong></Link><Button tone="quiet" aria-label={dark ? "Use light theme" : "Use dark theme"} onClick={toggle}><Icon name={dark ? "sun" : "moon"} /></Button></div></header>;
+  return <header className="topbar"><div className="topbar-project"><Button tone="quiet" className="mobile-only" aria-label="Open navigation" onClick={onMenu}><Icon name="menu" /></Button><span className="scope-dot" /><span>{project.name}</span>{project.branch && <span className="branch">{project.branch}</span>}</div><div className="topbar-actions"><Link className="activity-link" to={`/projects/${project.id}/home`}>Needs attention <strong>{taskCount}</strong></Link><Button tone="quiet" aria-label={dark ? "Use light theme" : "Use dark theme"} onClick={toggle}><Icon name={dark ? "sun" : "moon"} /></Button></div></header>;
 }
 
 export function TaskPanel({ projectId, taskId, onClose }: { projectId: string; taskId: string; onClose: () => void }) {
@@ -100,6 +104,10 @@ export function TaskPanel({ projectId, taskId, onClose }: { projectId: string; t
   const task = useTask(projectId, taskId);
   const [answer, setAnswer] = useState("");
   const mutate = useMutation({ mutationFn: ({ action, body }: { action: string; body: Record<string, unknown> }) => post(projectPath(projectId, `/tasks/${taskId}/${action}`), { operation_id: operationId(), ...body }), onSuccess: () => { setAnswer(""); queryClient.invalidateQueries({ queryKey: ["projects", projectId, "tasks"] }); } });
+  const assessmentCandidates = task.data?.result?.candidates;
+  const assessmentCandidateCount = task.data?.workflow === "assess" && Array.isArray(assessmentCandidates)
+    ? assessmentCandidates.filter((candidate) => typeof candidate !== "object" || candidate === null || (candidate as Record<string, unknown>).keep !== false).length
+    : 0;
   return <aside className="task-panel" aria-label="Task details">
     <header className="task-panel-header"><div><p className="eyebrow">Task</p><h2>{task.data?.title || "Loading task…"}</h2></div><Button tone="quiet" aria-label="Close task" onClick={onClose}><Icon name="close" /></Button></header>
     {task.isError && <p className="error-banner">{task.error.message}</p>}
@@ -109,8 +117,10 @@ export function TaskPanel({ projectId, taskId, onClose }: { projectId: string; t
         {task.data.events.map((event, index) => <article className="task-event" key={index}><span>{event.type || "Progress"}</span><p>{event.text}</p></article>)}
         {!task.data.conversation.length && !task.data.events.length && <p className="quiet-copy">Waiting for the first update.</p>}
       </div>
-      {task.data.question?.kind === "approval" && <div className="decision"><h3>Approval needed</h3><p>{task.data.question.text || task.data.question.prompt}</p><div className="task-controls"><Button disabled={mutate.isPending} onClick={() => mutate.mutate({ action: "reply", body: { question_id: task.data!.question!.id, answer: { decision: "accept" } } })}>Approve</Button><Button tone="secondary" disabled={mutate.isPending} onClick={() => mutate.mutate({ action: "reply", body: { question_id: task.data!.question!.id, answer: { decision: "decline" } } })}>Decline</Button></div></div>}
-      {task.data.question && task.data.question.kind !== "approval" && <form className="decision" onSubmit={(event) => { event.preventDefault(); mutate.mutate({ action: "reply", body: { question_id: task.data!.question!.id, answer: { text: answer } } }); }}><h3>Decision needed</h3><p>{task.data.question.prompt || task.data.question.text}</p><textarea aria-label="Response" value={answer} onChange={(event) => setAnswer(event.target.value)} required rows={3} /><Button type="submit" disabled={mutate.isPending}>Send response</Button></form>}
+      {task.data.question?.kind === "approval" && <div className="decision"><h3>Approval needed</h3><p>{task.data.question.text || task.data.question.prompt}</p><div className="task-controls"><Button disabled={mutate.isPending} onClick={() => mutate.mutate({ action: "answer", body: { question_id: task.data!.question!.id, answer: { decision: "accept" } } })}>Approve</Button><Button tone="secondary" disabled={mutate.isPending} onClick={() => mutate.mutate({ action: "answer", body: { question_id: task.data!.question!.id, answer: { decision: "decline" } } })}>Decline</Button></div></div>}
+      {task.data.question && task.data.question.kind !== "approval" && <form className="decision" onSubmit={(event) => { event.preventDefault(); mutate.mutate({ action: "answer", body: { question_id: task.data!.question!.id, answer: { text: answer } } }); }}><h3>Decision needed</h3><p>{task.data.question.prompt || task.data.question.text}</p><textarea aria-label="Response" value={answer} onChange={(event) => setAnswer(event.target.value)} required rows={3} /><Button type="submit" disabled={mutate.isPending}>Send response</Button></form>}
+      {typeof task.data.result?.summary === "string" && <p className="task-result">{task.data.result.summary}</p>}
+      {assessmentCandidateCount > 0 && <section className="task-handoff"><p className="eyebrow">Next step</p><h3>{assessmentCandidateCount} agent{assessmentCandidateCount === 1 ? "" : "s"} ready for review</h3><p>Confirm the application agents you want Agentagon to improve. Discovery does not start repairs.</p><Link className="button button-primary" to={`/projects/${projectId}/agents`}>Review suggested agents<Icon name="arrow" size={15} /></Link></section>}
       {task.data.next_action && <p className="next-action">{task.data.next_action}</p>}
       <div className="task-controls">{task.data.can_resume && <Button onClick={() => mutate.mutate({ action: "resume", body: {} })}>Resume</Button>}{task.data.can_cancel && <Button tone="secondary" onClick={() => mutate.mutate({ action: "cancel", body: {} })}>Cancel</Button>}</div>
       {task.data.result && <details className="tool-detail"><summary>Result details</summary><pre>{JSON.stringify(task.data.result, null, 2)}</pre></details>}
@@ -122,8 +132,9 @@ export function AddProjectModal({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [path, setPath] = useState("");
-  const mutation = useMutation({ mutationFn: () => post<Project>("/api/projects", { path }), onSuccess: async (project) => { await queryClient.invalidateQueries({ queryKey: ["projects"] }); onClose(); navigate(`/projects/${project.id}/home`); } });
-  return <Modal title="Add a project" eyebrow="Local checkout" onClose={onClose}><form className="form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><label>Project directory<input value={path} onChange={(event) => setPath(event.target.value)} placeholder="/Users/you/code/my-agent" required autoFocus /></label>{mutation.error && <p className="error-banner">{mutation.error.message}</p>}<footer className="form-actions"><Button tone="secondary" type="button" onClick={onClose}>Cancel</Button><Button type="submit" disabled={mutation.isPending}>Add project</Button></footer></form></Modal>;
+  const [repository, setRepository] = useState("");
+  const mutation = useMutation({ mutationFn: () => post<Project>(repository ? "/api/projects/clone" : "/api/projects", repository ? { path, repository } : { path }), onSuccess: async (project) => { await queryClient.invalidateQueries({ queryKey: ["projects"] }); onClose(); navigate(`/projects/${project.id}/onboarding`); } });
+  return <Modal title="Add a project" eyebrow="Local checkout" onClose={onClose}><form className="form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><label>Repository URL (optional; clone into the directory)<input value={repository} onChange={event => setRepository(event.target.value)} /></label><label>Project directory<input value={path} onChange={(event) => setPath(event.target.value)} placeholder="/Users/you/code/my-agent" required autoFocus /></label>{mutation.error && <p className="error-banner">{mutation.error.message}</p>}<footer className="form-actions"><Button tone="secondary" type="button" onClick={onClose}>Cancel</Button><Button type="submit" disabled={mutation.isPending}>Add project</Button></footer></form></Modal>;
 }
 
 export function AddAgentModal({ projectId, suggestion, onClose }: { projectId: string; suggestion?: Agent; onClose: () => void }) {
@@ -132,21 +143,21 @@ export function AddAgentModal({ projectId, suggestion, onClose }: { projectId: s
   const [description, setDescription] = useState(suggestion?.responsibility || suggestion?.description || "");
   const [paths, setPaths] = useState(suggestion?.code_scopes.join(", ") || "");
   const mutation = useMutation({ mutationFn: () => post<Agent>(projectPath(projectId, suggestion ? `/agents/${suggestion.id}` : "/agents"), { name, description, code_scopes: paths.split(",").map((item) => item.trim()).filter(Boolean), shared_dependencies: suggestion?.shared_dependencies || [], trace_selector: suggestion?.trace_selector || {}, status: "confirmed", ...(suggestion?.revision ? { expected_revision: suggestion.revision } : {}) }), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["projects", projectId, "agents"] }); onClose(); } });
-  return <Modal title={suggestion ? "Confirm agent" : "Add agent"} eyebrow="Agent configuration" onClose={onClose}><form className="form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><label>Agent name<input value={name} onChange={(event) => setName(event.target.value)} required autoFocus /></label><label>Responsibility<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></label><label>Code paths<input value={paths} onChange={(event) => setPaths(event.target.value)} placeholder="src/agent.py, src/tools" required /></label>{mutation.error && <p className="error-banner">{mutation.error.message}</p>}<footer className="form-actions"><Button tone="secondary" type="button" onClick={onClose}>Cancel</Button><Button type="submit" disabled={mutation.isPending}>{suggestion ? "Confirm agent" : "Add agent"}</Button></footer></form></Modal>;
+  return <Modal title={suggestion ? "Confirm agent" : "Add agent"} eyebrow="Agent configuration" onClose={onClose}><form className="form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><label>Agent name<input value={name} onChange={(event) => setName(event.target.value)} required autoFocus /></label><label>Responsibility<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></label><label>Code paths<input value={paths} onChange={(event) => setPaths(event.target.value)} placeholder="src/agent.py, src/tools" required={!suggestion?.trace_selector || !Object.keys(suggestion.trace_selector).length} /></label>{mutation.error && <p className="error-banner">{mutation.error.message}</p>}<footer className="form-actions"><Button tone="secondary" type="button" onClick={onClose}>Cancel</Button><Button type="submit" disabled={mutation.isPending}>{suggestion ? "Confirm agent" : "Add agent"}</Button></footer></form></Modal>;
 }
 
-export function AddGoalModal({ projectId, agentId, onClose }: { projectId: string; agentId: string; onClose: () => void }) {
+export function AddGoalModal({ projectId, agentId, defaultCategory, defaultObjective, onClose }: { projectId: string; agentId: string; defaultCategory?: string; defaultObjective?: string; onClose: () => void }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [category, setCategory] = useState("correctness");
+  const [category, setCategory] = useState(defaultCategory || "correctness");
   const [name, setName] = useState("");
-  const [objective, setObjective] = useState("");
+  const [objective, setObjective] = useState(defaultObjective || "");
   const [ideal, setIdeal] = useState("");
   const mutation = useMutation({ mutationFn: () => post<Goal>(projectPath(projectId, `/agents/${agentId}/goals`), { category, ...(category === "custom" ? { name } : {}), objective, ideal_behavior: ideal || null }), onSuccess: async (goal) => { await queryClient.invalidateQueries({ queryKey: ["projects", projectId, "agents", agentId, "goals"] }); onClose(); navigate(`/projects/${projectId}/agents/${agentId}/goals/${goal.id}`); } });
   return <Modal title="Create a goal" eyebrow="Outcome to improve" onClose={onClose}><form className="form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><label>Goal category<select value={category} onChange={(event) => setCategory(event.target.value)}><option value="correctness">Task success and correctness</option><option value="reliability">Reliability and tool use</option><option value="grounding">Grounding and factuality</option><option value="safety">Safety and policy</option><option value="latency">Latency</option><option value="cost">Cost and efficiency</option><option value="custom">Custom objective</option></select></label>{category === "custom" && <label>Goal name<input value={name} onChange={(event) => setName(event.target.value)} required /></label>}<label>Objective<textarea value={objective} onChange={(event) => setObjective(event.target.value)} rows={4} required autoFocus /></label><label>Ideal behavior <span className="optional">Optional</span><textarea value={ideal} onChange={(event) => setIdeal(event.target.value)} rows={3} /></label>{mutation.error && <p className="error-banner">{mutation.error.message}</p>}<footer className="form-actions"><Button tone="secondary" type="button" onClick={onClose}>Cancel</Button><Button type="submit" disabled={mutation.isPending}>Create goal</Button></footer></form></Modal>;
 }
 
-export function LaunchWorkflowModal({ projectId, skill, defaultAgentId, defaultGoalId, onClose }: { projectId: string; skill: SkillDefinition; defaultAgentId?: string; defaultGoalId?: string; onClose: () => void }) {
+export function LaunchWorkflowModal({ projectId, workflow, defaultAgentId, defaultGoalId, defaultInput, onClose }: { projectId: string; workflow: WorkflowDefinition; defaultAgentId?: string; defaultGoalId?: string; defaultInput?: {type: string; id?: string; text?: string}; onClose: () => void }) {
   const navigate = useNavigate();
   const agents = useAgents(projectId);
   const confirmed = agents.data?.confirmed || [];
@@ -154,11 +165,16 @@ export function LaunchWorkflowModal({ projectId, skill, defaultAgentId, defaultG
   const goals = useGoals(projectId, agentId);
   const [goalId, setGoalId] = useState(defaultGoalId || "");
   useEffect(() => { if (!agentId && confirmed.length === 1) setAgentId(confirmed[0].id); }, [agentId, confirmed]);
-  useEffect(() => { if (skill.requires_goal && !goalId && goals.data?.goals.length === 1) setGoalId(goals.data.goals[0].id); }, [goalId, goals.data, skill.requires_goal]);
+  useEffect(() => { if (workflow.requires_goal && !goalId && goals.data?.goals.length === 1) setGoalId(goals.data.goals[0].id); }, [goalId, goals.data, workflow.requires_goal]);
+  const [problem, setProblem] = useState(defaultInput?.text || "");
+  const traces = useQuery({ queryKey: ["projects", projectId, "traces"], queryFn: () => api<{traces: Array<{id: string; name: string; count: number}>}>(projectPath(projectId, "/traces")) });
+  const [traceId, setTraceId] = useState(defaultInput?.type === "trace" ? defaultInput.id || "" : "");
+  const [operation] = useState(operationId);
+  const input = defaultInput || (workflow.requires_goal ? {type: "goal", id: goalId} : traceId ? {type: "trace", id: traceId} : workflow.workflow === "fix" ? {type: "description", text: problem} : {type: "agent"});
   const params = new URLSearchParams({ ...(agentId ? { agent_id: agentId } : {}), ...(goalId ? { goal_id: goalId } : {}) });
-  const readiness = useQuery({ queryKey: ["projects", projectId, "workflows", skill.workflow, "readiness", agentId, goalId], queryFn: () => api<WorkflowReadiness>(projectPath(projectId, `/workflows/${skill.workflow}/readiness?${params}`)) });
-  const mutation = useMutation({ mutationFn: () => post<{ id: string }>(projectPath(projectId, "/tasks"), { operation_id: operationId(), workflow: skill.workflow, agent_id: agentId, ...(goalId ? { goal_id: goalId } : {}), options: {} }), onSuccess: (task) => { onClose(); navigate(`/projects/${projectId}/tasks/${task.id}`); } });
-  return <Modal title={skill.name} eyebrow="Start workflow" onClose={onClose}><form className="form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><p className="modal-purpose">{skill.purpose}</p><label>Agent<select value={agentId} onChange={(event) => { setAgentId(event.target.value); setGoalId(""); }} required><option value="">Select an agent</option>{confirmed.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label>{skill.requires_goal && <label>Goal<select value={goalId} onChange={(event) => setGoalId(event.target.value)} required><option value="">Select a goal</option>{goals.data?.goals.map((goal) => <option key={goal.id} value={goal.id}>{goal.name}</option>)}</select></label>}{readiness.data && !readiness.data.ready && <div className="blockers">{readiness.data.blockers.map((blocker) => <p key={blocker.code}>{blocker.message}</p>)}</div>}{mutation.error && <p className="error-banner">{mutation.error.message}</p>}<footer className="form-actions"><Button tone="secondary" type="button" onClick={onClose}>Cancel</Button><Button type="submit" disabled={!readiness.data?.ready || mutation.isPending}>Start task</Button></footer></form></Modal>;
+  const readiness = useQuery({ queryKey: ["projects", projectId, "workflows", workflow.workflow, "readiness", agentId, goalId], queryFn: () => api<WorkflowReadiness>(projectPath(projectId, `/workflows/${workflow.workflow}/readiness?${params}`)) });
+  const mutation = useMutation({ mutationFn: () => post<{ id: string }>(projectPath(projectId, "/tasks"), { operation_id: operation, workflow: workflow.workflow, ...(agentId ? {agent_id: agentId} : {}), input, options: {} }), onSuccess: (task) => { onClose(); navigate(`/projects/${projectId}/tasks/${task.id}`); } });
+  return <Modal title={workflow.name} eyebrow="Start workflow" onClose={onClose}><form className="form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><p className="modal-purpose">{workflow.purpose}</p><label>Agent<select value={agentId} onChange={(event) => { setAgentId(event.target.value); setGoalId(""); }} required={workflow.workflow !== "discover"}><option value="">Select an agent</option>{confirmed.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label>{workflow.requires_goal && <label>Goal<select value={goalId} onChange={(event) => setGoalId(event.target.value)} required><option value="">Select a goal</option>{goals.data?.goals.map((goal) => <option key={goal.id} value={goal.id}>{goal.name}</option>)}</select></label>}{!defaultInput && ["fix", "discover"].includes(workflow.workflow) && <><label>Selected traces<select value={traceId} onChange={event => setTraceId(event.target.value)} required={workflow.workflow === "discover"}><option value="">Describe a problem instead</option>{traces.data?.traces.map(trace => <option key={trace.id} value={trace.id}>{trace.name} · {trace.count} spans</option>)}</select></label>{workflow.workflow === "fix" && !traceId && <label>Problem and expected behavior<textarea value={problem} onChange={event => setProblem(event.target.value)} required /></label>}</>}{readiness.data && !readiness.data.ready && <div className="blockers">{readiness.data.blockers.map((blocker) => <p key={blocker.code}>{blocker.message}</p>)}</div>}{mutation.error && <p className="error-banner">{mutation.error.message}</p>}<footer className="form-actions"><Button tone="secondary" type="button" onClick={onClose}>Cancel</Button><Button type="submit" disabled={!readiness.data?.ready || mutation.isPending || (workflow.workflow === "discover" && !traceId) || (workflow.workflow === "fix" && !defaultInput && !traceId && !problem.trim())}>Start task</Button></footer></form></Modal>;
 }
 
 export function useSelectedTask(projectId: string) {

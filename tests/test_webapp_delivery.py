@@ -6,7 +6,7 @@ import pytest
 from support.delivery import creates, pushes
 
 from agentagon.core.records import AuditError
-from agentagon.webapp.service import Application
+from agentagon.workflows.service import Application
 
 
 @pytest.fixture
@@ -18,7 +18,7 @@ def app(tmp_path):
 
 def test_prepare_download_and_explicit_publish(app, selected, github, tmp_path):
     project = app.register(str(selected["workspace"].root))
-    payload = {"kind": "fix", "source_id": selected["run_id"], "publish": False}
+    payload = {"kind": "optimize", "source_id": selected["run_id"], "publish": False}
     with pytest.raises(AuditError, match="prepare the local"):
         app.deliver(
             project["id"],
@@ -61,7 +61,7 @@ def test_prepare_download_and_explicit_publish(app, selected, github, tmp_path):
 
 def test_run_controls_require_current_revision_and_reject_host_ack(app, selected):
     project = app.register(str(selected["workspace"].root))
-    run = app.result(project["id"], "fix", selected["run_id"])
+    run = app.result(project["id"], "optimize", selected["run_id"])
     request = {
         "version": 1,
         "operation_id": str(uuid.uuid4()),

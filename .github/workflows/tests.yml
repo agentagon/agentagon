@@ -20,7 +20,7 @@ jobs:
       - run: npm run check
       - run: npm run build
       - name: Verify shipped frontend assets
-        run: git diff --exit-code -- src/agentagon/dashboard_assets/webapp.html src/agentagon/dashboard_assets/webapp.css src/agentagon/dashboard_assets/webapp.js
+        run: git diff --exit-code -- src/agentagon/dashboard/assets/webapp.html src/agentagon/dashboard/assets/webapp.css src/agentagon/dashboard/assets/webapp.js
 
   test:
     runs-on: ${{ matrix.os }}
@@ -45,14 +45,13 @@ jobs:
         with:
           node-version: '22'
       - run: python -m pip install '.[dev]'
-      - run: python -m ruff check src tests skills/eval/helpers scripts examples
-      - run: python -m ruff format --check src tests skills/eval/helpers scripts examples
+      - run: python -m ruff check src tests scripts examples
+      - run: python -m ruff format --check src tests scripts examples
       - name: Check shipped JavaScript and shell syntax
         run: |
-          for script in src/agentagon/dashboard_assets/*.js skills/eval/helpers/*.cjs; do
+          for script in src/agentagon/dashboard/assets/*.js src/agentagon/workflows/evaluate/helpers/*.cjs; do
             node --check "$script"
           done
-          sh -n scripts/install.sh
       - run: python -m pytest -q
       - run: python -m build
       - name: Install and exercise the built wheel outside the checkout
@@ -74,7 +73,7 @@ jobs:
           python-version: '3.13'
       - run: python -m pip install '.[dev,browser]'
       - run: python -m playwright install --with-deps chromium
-      - run: python -m pytest tests/test_dashboard_browser.py tests/test_webapp_browser.py -q
+      - run: python -m pytest tests/test_webapp_browser.py tests/test_production_runtime.py -q
 
   source-package:
     name: Source package and website

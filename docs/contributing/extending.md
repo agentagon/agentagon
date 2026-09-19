@@ -8,9 +8,9 @@ Use an editable development checkout as described in [CONTRIBUTING.md](../../CON
 
 ## 1. Trace the existing behavior
 
-Read the `braintrust` branch of `_native()` in [normalize.py](../../src/agentagon/telemetry/normalize.py). It maps provider fields into a common intermediate representation. `normalize()` converts those values into a canonical span.
+Read the `braintrust` branch of `_native()` in [normalize.py](../../src/agentagon/capabilities/traces/normalize.py). It maps provider fields into a common intermediate representation. `normalize()` converts those values into a canonical span.
 
-The importer in [ingest.py](../../src/agentagon/telemetry/ingest.py) validates that span against [trace.json](../../contracts/v1/trace.json), groups it into a trace and calls [measure()](../../src/agentagon/core/signals.py). Measurements are retained with the audit and used in reports.
+The importer in [ingest.py](../../src/agentagon/capabilities/traces/ingest.py) validates that span against [trace.json](../../contracts/v1/trace.json), groups it into a trace and calls [measure()](../../src/agentagon/core/signals.py). Measurements are retained with the audit and used in reports.
 
 The existing `first()` helper chooses the first value that is not `None`. This preserves a reported zero. `number()` rejects invalid measurements; `normalize()` additionally rejects fractional token counts. Missing values remain `None`.
 
@@ -96,10 +96,10 @@ Run the existing normalization and edge-case tests, then focused style checks:
 
 ```sh
 python -m pytest tests/test_telemetry.py tests/test_edge_cases.py -q
-python -m ruff check src/agentagon/telemetry/normalize.py tests/test_telemetry.py
-python -m ruff format --check src/agentagon/telemetry/normalize.py tests/test_telemetry.py
+python -m ruff check src/agentagon/capabilities/traces/normalize.py tests/test_telemetry.py
+python -m ruff format --check src/agentagon/capabilities/traces/normalize.py tests/test_telemetry.py
 ```
 
-For a real provider change, confirm the field against authoritative provider documentation or an appropriately redacted export. Update [accepted export formats](../../skills/audit/references/formats.md) with the exact mapping and precedence, and link relevant coverage from the [implementation map](capabilities.md#2-runtime-evidence).
+For a real provider change, confirm the field against authoritative provider documentation or an appropriately redacted export. Update [accepted export formats](../../workflows/audit/references/formats.md) with the exact mapping and precedence, and link relevant coverage from the [implementation map](capabilities.md).
 
-An input alias can fit the existing canonical schema. A new provider, output field, rubric or record shape has wider implications: review provider choices, contracts, saved-state compatibility and packaging before changing them. Use [release preparation](releasing.md) and the [full checks](../../CONTRIBUTING.md#run-checks-before-submitting) before submitting a feature.
+An input alias can fit the existing canonical schema. A new provider, output field, rubric or record shape has wider implications: review provider choices, contracts, saved-state compatibility and packaging before changing them. Use [release preparation](releasing.md) and the [full checks](../../CONTRIBUTING.md) before submitting a feature.

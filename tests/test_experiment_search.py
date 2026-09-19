@@ -9,10 +9,10 @@ import support.recovery as recovery
 import support.runners as runner_fixtures
 from support.experiments import baseline, git, passing_review, propose, verify
 
+from agentagon.capabilities.experiments import engine, evaluation, runners, search
+from agentagon.capabilities.experiments.spec import validate_profile, validate_spec
+from agentagon.capabilities.experiments.store import load_run, locked, save_run
 from agentagon.core.records import AuditError, validate_record
-from agentagon.experiments import engine, evaluation, runners, search
-from agentagon.experiments.spec import validate_profile, validate_spec
-from agentagon.experiments.store import load_run, locked, save_run
 from agentagon.storage.config import Config
 
 

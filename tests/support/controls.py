@@ -2,8 +2,8 @@
 
 import uuid
 
-from agentagon.experiments import controls
-from agentagon.experiments.store import load_run
+from agentagon.capabilities.experiments import controls
+from agentagon.capabilities.experiments.store import load_run
 
 
 def request(workspace, run_id, action, **fields):

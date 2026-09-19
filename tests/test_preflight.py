@@ -6,8 +6,8 @@ import pytest
 from support.experiments import baseline, executions, git, propose, verify
 from support.runners import command, request
 
+from agentagon.capabilities.experiments import engine, inspection, runners
 from agentagon.core.records import AuditError
-from agentagon.experiments import engine, inspection, runners
 
 
 def test_failed_candidate_preflight_skips_benchmark_and_cannot_be_selected(

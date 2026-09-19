@@ -4,9 +4,9 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from agentagon.cli.main import main
+from agentagon.capabilities.reporting import build_report
+from agentagon.cli.internal import main
 from agentagon.core.records import catalog, load_json
-from agentagon.reporting import build_report
 from agentagon.storage.config import Config
 
 WINDOW = ["--from", "2026-08-10T00:00:00Z", "--to", "2026-08-11T00:00:00Z", "--limit", "5"]
@@ -140,7 +140,11 @@ def test_first_run_onboarding_is_suppressed_after_setup_and_reinitialization(wor
     assert not repeated["traces"]["onboarding_pending"]
     assert not invoke(workspace.root, "status")["traces"]["onboarding_pending"]
     assert not (workspace.state / "config.json").exists()
-    assert set(load_json(workspace.state / "workspace.json")) == {"contract_version", "created_at"}
+    assert set(load_json(workspace.state / "workspace.json")) == {
+        "state_version",
+        "contract_version",
+        "created_at",
+    }
 
 
 def test_goal_survives_cli_workflow_and_does_not_allow_skipping_rubric_facets(workspace):
@@ -190,14 +194,25 @@ def test_build_report_is_read_only_even_when_a_report_already_exists(workspace, 
     assert files() == before
 
 
-def test_resources_expose_all_bundled_skills(workspace):
-    result = invoke(workspace.root, "resources")
-    assert set(result["skills"]) == {"init", "fix", "dashboard", "audit", "eval", "setup"}
-    for name, path in result["skills"].items():
-        text = Path(path).read_text()
-        assert f"name: {name}" in text
-    assert Path(result["catalog"]).is_file()
-    assert Path(result["contracts"], "selection.json").is_file()
+def test_built_in_workflow_resources_are_packaged():
+    from agentagon.core.records import resource_path
+    from agentagon.workflows.registry import REGISTRY, instruction_text
+
+    assert {
+        "discover",
+        "fix",
+        "optimize",
+        "audit",
+        "baseline",
+        "eval",
+        "design",
+        "assess",
+        "observe",
+    } == set(REGISTRY)
+    for name, definition in REGISTRY.items():
+        assert instruction_text(name)
+        for reference in definition["references"]:
+            assert resource_path(reference).is_file()
 
 
 @pytest.mark.parametrize(

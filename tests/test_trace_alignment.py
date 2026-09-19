@@ -1,6 +1,6 @@
 import pytest
 
-from agentagon.telemetry.alignment import trace_alignment
+from agentagon.capabilities.traces.alignment import trace_alignment
 
 REVISION = "1234567890abcdef1234567890abcdef12345678"
 

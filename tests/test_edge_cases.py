@@ -6,12 +6,12 @@ from unittest.mock import patch
 import pytest
 from support.audit import cluster, diagnose_failure, finish, respond, review_unknown
 
+from agentagon.capabilities.reporting import report
+from agentagon.capabilities.traces.normalize import normalize, redact, unpack
 from agentagon.core.records import AuditError, load_json
 from agentagon.core.signals import measure
-from agentagon.operations import import_traces, prepare, start, submit
-from agentagon.reporting import report
-from agentagon.storage.issues import list_issues, update_issue
-from agentagon.telemetry.normalize import normalize, redact, unpack
+from agentagon.domain.issues import list_issues, update_issue
+from agentagon.workflows.audit.operations import import_traces, prepare, start, submit
 
 
 def test_malformed_nested_span_does_not_discard_healthy_siblings(workspace, fixtures, tmp_path):
@@ -103,7 +103,7 @@ def test_phoenix_context_identity_and_snake_case_nanos(fixtures):
 def test_later_runtime_occurrence_reopens_resolved_issue(workspace, imported, fixtures, tmp_path):
     finish(workspace, imported)
     issue_id = list_issues(workspace)[0]["issue_id"]
-    with patch("agentagon.storage.issues.now", return_value="2026-08-11T00:00:00+00:00"):
+    with patch("agentagon.domain.issues.now", return_value="2026-08-11T00:00:00+00:00"):
         update_issue(
             workspace,
             {
@@ -193,12 +193,24 @@ def test_atomic_write_failure_preserves_previous_audit(workspace, imported):
     assert not list(workspace.state.rglob(".pending-*"))
 
 
-def test_incompatible_state_is_rejected_without_rewrite(workspace):
+@pytest.mark.parametrize(
+    "metadata", [{"contract_version": "1"}, {"contract_version": "99", "state_version": 2}]
+)
+def test_incompatible_state_is_rejected_without_rewrite(workspace, metadata):
     path = workspace.state / "workspace.json"
-    path.write_text('{"contract_version":"99"}', encoding="utf-8")
-    with pytest.raises(AuditError, match="unsupported workspace"):
-        workspace.require_initialized()
-    assert "99" in path.read_text()
+    original = json.dumps(metadata)
+    path.write_text(original, encoding="utf-8")
+    exclude = workspace.root / ".git/info/exclude"
+    exclude.write_text("# Existing project preferences\n")
+    before = {str(p): p.read_bytes() for p in workspace.state.rglob("*") if p.is_file()}
+    for action in (workspace.initialize, workspace.require_initialized):
+        with pytest.raises(AuditError, match="unsupported workspace") as error:
+            action()
+        assert str(workspace.state) in str(error.value)
+        assert "expected state_version=2" in str(error.value)
+        assert "backup outside this project" in str(error.value)
+    assert {str(p): p.read_bytes() for p in workspace.state.rglob("*") if p.is_file()} == before
+    assert exclude.read_text() == "# Existing project preferences\n"
 
 
 def test_bounded_packet_keeps_all_judgments_and_validates_referenced_details(workspace, imported):
@@ -219,7 +231,7 @@ def test_bounded_packet_keeps_all_judgments_and_validates_referenced_details(wor
     assert "required_judgments" not in load_json(Path(diagnosis["packet"]))["units"][0]
 
 
-def test_historical_verification_is_preserved_but_new_handwritten_receipts_are_rejected(
+def test_fresh_state_ignores_deleted_store_and_rejects_handwritten_verification(
     workspace, imported, tmp_path
 ):
     finish(workspace, imported)
@@ -250,22 +262,14 @@ def test_historical_verification_is_preserved_but_new_handwritten_receipts_are_r
         "reason": "Verified locally",
         "evidence": [],
     }
-    # A pre-engine historical record remains visible with its original provenance.
-    original_receipt = workspace.artifact(data)
-    historical = {
-        **event,
-        "event_id": "event_" + "a" * 24,
-        "at": "2026-08-13T00:00:00Z",
-        "verification": original_receipt,
-    }
-    workspace.write(workspace.state / "cases" / "events" / "historical.json", historical)
-    issue = list_issues(workspace)[0]
-    assert issue["status"] == "resolved_verified"
-    stored = workspace.read_artifact(issue["history"][-1]["verification"])
-    assert stored == data
-    assert "provenance" not in stored
+    # Fresh-state releases reject hand-written events from the deleted store.
+    workspace.write(
+        workspace.state / "cases" / "events" / "historical.json",
+        {**event, "verification": workspace.artifact(data)},
+    )
+    assert list_issues(workspace)[0]["status"] == "open"
     data["trials"][1]["exit_code"] = 1
     receipt.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(AuditError, match="manual verification receipts"):
         update_issue(workspace, event, receipt)
-    assert len(list_issues(workspace)[0]["history"]) == 1
+    assert list_issues(workspace)[0]["history"] == []

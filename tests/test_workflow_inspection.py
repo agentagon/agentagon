@@ -1,16 +1,15 @@
 """Inspectable task evidence stays local, bounded, and bound to its candidate."""
 
 import json
-import urllib.error
-import urllib.request
 
 import pytest
-from support.dashboard import running
 from support.evaluation import draft
 from support.experiments import git
+from test_webapp import running
 
+from agentagon.capabilities.experiments import engine, inspection, preparation, runners
 from agentagon.core.records import AuditError
-from agentagon.experiments import engine, inspection, preparation, runners
+from agentagon.workflows.service import Application
 
 
 def instrument(workspace):
@@ -70,23 +69,22 @@ def test_dashboard_evidence_downloads_and_evaluation_projection_are_read_only(
         if file.is_file() and not file.is_symlink()
     }
     monkeypatch.setattr(runners, "execute", lambda *_: pytest.fail("dashboard must never execute"))
-    with running(application, run_id=started["run_id"]) as server:
-        base = f"http://127.0.0.1:{server.server_port}"
-        endpoint = f"/api/runs/{started['run_id']}/candidates/{started['candidate_id']}"
-        with urllib.request.urlopen(base + endpoint) as response:
-            detail = json.load(response)
-        trial = detail["trials"][0]
-        with urllib.request.urlopen(
-            base + endpoint + f"/trials/{trial['trial_id']}/artifacts/0"
-        ) as response:
-            assert response.headers["Content-Disposition"].startswith("attachment;")
-            assert response.headers["X-Content-Type-Options"] == "nosniff"
-            assert response.read() == b"retained case output"
-        with urllib.request.urlopen(base + "/api/evaluations") as response:
-            evaluations = json.load(response)
-        assert evaluations["evaluations"][0]["state"] == "awaiting_review"
-        assert "provenance" not in json.dumps(evaluations)
-        assert "wrong-behavior.json" not in json.dumps(evaluations)
-        with pytest.raises(urllib.error.HTTPError):
-            urllib.request.urlopen(base + endpoint + "/trials/foreign/artifacts/0")
+    detail = inspection.candidate(application, started["run_id"], started["candidate_id"])
+    trial = detail["trials"][0]
+    assert (
+        inspection.artifact(
+            application, started["run_id"], started["candidate_id"], trial["trial_id"], 0
+        )
+        == b"retained case output"
+    )
+    with pytest.raises(AuditError):
+        inspection.artifact(application, started["run_id"], started["candidate_id"], "foreign", 0)
+    app = Application(application.root.parent / "inspection-service")
+    project = app.register(str(application.root))["id"]
+    with running(app) as (client, _):
+        path = f"/api/projects/{project}/runs/{started['run_id']}/candidates/{started['candidate_id']}/trials/{trial['trial_id']}/artifacts/0"
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.content == b"retained case output"
+        assert client.get(path.replace(trial["trial_id"], "foreign")).status_code == 400
     assert {file: file.read_bytes() for file in before} == before

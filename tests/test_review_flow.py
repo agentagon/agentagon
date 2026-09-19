@@ -6,12 +6,12 @@ import pytest
 from click.testing import CliRunner
 from support.audit import cluster, respond, review_unknown
 
-from agentagon.cli.main import main
+from agentagon.capabilities.reporting import build_report
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError, load_json
-from agentagon.operations import import_traces, prepare, start, submit
-from agentagon.reporting import build_report
+from agentagon.domain.issues import list_issues
 from agentagon.storage.config import Config
-from agentagon.storage.issues import list_issues
+from agentagon.workflows.audit.operations import import_traces, prepare, start, submit
 
 
 def commit(root: Path) -> None:

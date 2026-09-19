@@ -4,8 +4,8 @@ import pytest
 from support.audit import finish
 
 from agentagon.core.records import identifier
-from agentagon.operations import import_traces, start
-from agentagon.storage.issues import list_issues
+from agentagon.domain.issues import list_issues
+from agentagon.workflows.audit.operations import import_traces, start
 
 
 @pytest.mark.parametrize(
@@ -32,7 +32,7 @@ def test_latest_issue_audit_uses_timestamps_with_reverse_sorted_ids(
         ["2026-09-11T00:00:00+00:00", "2026-09-12T00:00:00+00:00"],
         strict=True,
     ):
-        monkeypatch.setattr("agentagon.operations.now", lambda at=created: at)
+        monkeypatch.setattr("agentagon.workflows.audit.operations.now", lambda at=created: at)
         audit_id = start(
             workspace,
             mode="traces",
@@ -47,7 +47,7 @@ def test_latest_issue_audit_uses_timestamps_with_reverse_sorted_ids(
             request_id=request,
         )["audit_id"]
         import_traces(workspace, audit_id, fixtures / "braintrust.json")
-        monkeypatch.setattr("agentagon.operations.now", lambda at=assigned: at)
+        monkeypatch.setattr("agentagon.workflows.audit.operations.now", lambda at=assigned: at)
         finish(workspace, audit_id)
         audits.append(audit_id)
     older, newer = audits
