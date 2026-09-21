@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from agentagon.core.records import AuditError
+from agentagon.memory.store import MemoryGroups
 from agentagon.storage.state import AppState
 
 
@@ -47,6 +48,40 @@ def test_registration_canonical_path_restarts_and_reactivation_keep_id(registere
     workspace = restarted.workspace(project["id"])
     assert workspace.project_id == project["id"]
     assert workspace.metadata_store is restarted.db
+
+
+def test_registration_identity_survives_a_fresh_application_database(tmp_path):
+    root = tmp_path / "checkout"
+    root.mkdir()
+
+    first = AppState(tmp_path / "first-application").register(str(root))
+    second = AppState(tmp_path / "second-application").register(str(root))
+
+    assert second["id"] == first["id"]
+
+
+def test_fresh_application_database_reuses_built_in_improvement_memory(tmp_path):
+    root = tmp_path / "checkout"
+    root.mkdir()
+    first_state = AppState(tmp_path / "first-application")
+    first_project = first_state.register(str(root))["id"]
+    first_memory = MemoryGroups(first_state)
+    group = first_memory.improvement_groups(first_project)[0]
+    entry = first_memory.record(
+        first_project,
+        group["id"],
+        {"key": "verified-fix", "text": "Retain the regression check."},
+    )
+
+    second_state = AppState(tmp_path / "second-application")
+    second_project = second_state.register(str(root))["id"]
+    adopted = MemoryGroups(second_state).improvement_groups(second_project)
+
+    assert second_project == first_project
+    assert [item["id"] for item in adopted] == [group["id"]]
+    assert MemoryGroups(second_state).recall(
+        second_project, group["id"], "regression"
+    )["entries"] == [entry]
 
 
 def test_database_rejects_previous_format_without_migration(registered):

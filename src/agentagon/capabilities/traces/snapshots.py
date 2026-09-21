@@ -96,11 +96,21 @@ def summary(record):
 
 
 def list_snapshots(workspace):
-    return [
-        summary(load(workspace, path.stem))
-        for path in sorted(private_directory(workspace, "imports").glob("*.json"), reverse=True)
-        if not path.is_symlink()
-    ]
+    records = []
+    for path in sorted(private_directory(workspace, "imports").glob("*.json"), reverse=True):
+        if path.is_symlink():
+            continue
+        candidate = load_json(workspace.checked(path))
+        # Private state can outlive an application database. Evidence carrying
+        # another project identity remains inaccessible, but it must not make
+        # the current project's inventory or onboarding unusable.
+        if candidate.get("origin") != str(workspace.root) or (
+            getattr(workspace, "project_id", None) is not None
+            and candidate.get("project_id") != workspace.project_id
+        ):
+            continue
+        records.append(summary(load(workspace, path.stem)))
+    return records
 
 
 def input_payload(record):

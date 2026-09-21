@@ -14,6 +14,7 @@ from agentagon.storage.state import atomic_write
 
 MAX_ENTRY_BYTES = 32000
 MAX_ENTRIES = 2000
+_GROUP = re.compile(r"group_[a-f0-9]{24}")
 
 
 class MemoryStore(Protocol):
@@ -209,15 +210,58 @@ class MemoryGroups:
                 return groups
             workspace = self.state.workspace(project_id)
             workspace.initialize()
-            created = self._create(
-                project_id,
-                {
-                    "name": "Improvement lessons",
-                    "purpose": "improvement",
-                    "path": str(workspace.state / "memory" / "improvement"),
-                },
-            )
+            path = (workspace.state / "memory" / "improvement").resolve()
+            created = self._adopt_default_improvement_group(project_id, path)
+            if created is None:
+                created = self._create(
+                    project_id,
+                    {
+                        "name": "Improvement lessons",
+                        "purpose": "improvement",
+                        "path": str(path),
+                    },
+                )
             return [*groups, created]
+
+    def _adopt_default_improvement_group(self, project_id, path):
+        """Restore the built-in registry record after local app-state recreation."""
+        if not path.exists():
+            return None
+        marker = path / ".agentagon-memory.json"
+        if not path.is_dir() or path.is_symlink() or not marker.is_file() or marker.is_symlink():
+            raise AuditError(
+                "existing improvement memory cannot be safely reused; inspect the project's "
+                ".agentagon/memory/improvement folder"
+            )
+        metadata = load_json(marker)
+        group_id = metadata.get("group_id") if isinstance(metadata, dict) else None
+        if metadata != {"version": 1, "group_id": group_id} or not isinstance(
+            group_id, str
+        ) or not _GROUP.fullmatch(group_id):
+            raise AuditError(
+                "existing improvement memory has an unsupported identity; preserve it and "
+                "choose a fresh project-state folder"
+            )
+        group = {
+            "id": group_id,
+            "name": "Improvement lessons",
+            "path": str(path),
+            "purpose": "improvement",
+            "provider": "local",
+            "project_ids": [project_id],
+            "write_project_ids": [project_id],
+            "agent_ids": [],
+            "owner_project_id": project_id,
+        }
+        try:
+            # Validate every retained revision before restoring registry access.
+            FolderStore(group).entries()
+        except (AuditError, KeyError, OSError, TypeError, ValueError) as exc:
+            raise AuditError(
+                "existing improvement memory failed its integrity check; preserved files were "
+                "not changed"
+            ) from exc
+        return self.state.db.put_record(project_id, "memory_groups", group_id, group)
 
     def create(self, project_id, payload):
         with self.registry_lock():
