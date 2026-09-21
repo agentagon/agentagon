@@ -625,7 +625,7 @@ def test_discovered_agents_have_a_clear_review_handoff(webapp_page):
 
     sidebar.get_by_role("link", name="Agents 1 suggestions").click()
     page.wait_for_url("**/projects/project_alpha/agents")
-    assert page.get_by_role("heading", name="Agents").is_visible()
+    page.get_by_role("heading", name="Agents").wait_for()
     assert page.get_by_role("searchbox", name="Search").is_visible()
     assert page.get_by_text("Example agent", exact=True).is_visible()
     page.get_by_role("button", name="Review").click()
