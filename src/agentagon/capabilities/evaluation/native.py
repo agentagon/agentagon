@@ -23,15 +23,28 @@ _EXCLUDED = {".git", ".agentagon", ".venv", "venv", "node_modules", "dist", "bui
 _EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".json", ".toml", ".ini", ".cfg", ".sh"}
 
 
-def _source(workspace, name):
+def _excluded(name):
+    return name in _EXCLUDED or name.startswith(".agentagon.")
+
+
+def _source_path(workspace, name):
     relative = path(name)
     target = workspace.root / relative
-    if relative == "." or any(part in _EXCLUDED for part in Path(relative).parts):
+    if relative == "." or any(_excluded(part) for part in Path(relative).parts):
         raise AuditError("choose evaluator source outside private or generated directories")
     if any(p.is_symlink() for p in (target, *target.parents)):
         raise AuditError("evaluator source cannot use symlinks")
-    if not target.is_file() or target.stat().st_size > MAX_FILE_BYTES:
-        raise AuditError("evaluator source must be a regular file no larger than 200 KB")
+    return relative, target
+
+
+def _source(workspace, name):
+    relative, target = _source_path(workspace, name)
+    if not target.exists():
+        raise AuditError(f"evaluator source does not exist: {relative}")
+    if not target.is_file():
+        raise AuditError("evaluator source must be a regular file")
+    if target.stat().st_size > MAX_FILE_BYTES:
+        raise AuditError("evaluator source exceeds 200 KB")
     with target.open("rb") as stream:
         content = stream.read(MAX_FILE_BYTES + 1)
     if len(content) > MAX_FILE_BYTES:
@@ -57,7 +70,7 @@ def discover(workspace, code_scopes=None):
                 if visited > 10000 or scanned >= MAX_FILES or total >= MAX_SCAN_BYTES:
                     truncated = True
                     break
-                if entry.name in _EXCLUDED or entry.is_symlink():
+                if _excluded(entry.name) or entry.is_symlink():
                     continue
                 relative = str(Path(entry.path).relative_to(workspace.root))
                 if not any(
@@ -207,8 +220,13 @@ def prepare_plan(workspace, payload):
     blockers, sources = [], []
     entrypoint = payload.get("entrypoint")
     if entrypoint:
-        content = _source(workspace, entrypoint)
-        sources.append({"path": path(entrypoint), "digest": hashlib.sha256(content).hexdigest()})
+        relative, target = _source_path(workspace, entrypoint)
+        body["entrypoint"] = relative
+        # Reuse binds an existing evaluator. Create may name the future output
+        # that the managed author will prepare after the design is accepted.
+        if payload["mode"] == "reuse" or target.exists():
+            content = _source(workspace, relative)
+            sources.append({"path": relative, "digest": hashlib.sha256(content).hexdigest()})
     elif payload["mode"] == "reuse":
         blockers.append("Choose the existing evaluator entrypoint.")
     native = payload.get("command")

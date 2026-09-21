@@ -97,6 +97,27 @@ def test_acceptance_is_explicit_versioned_and_keeps_original_score_and_gates(app
     assert len(app.state.db.list_records(ids[0], "accepted_designs")) == 2
 
 
+def test_create_design_can_name_a_future_evaluator_entrypoint(app, tmp_path):
+    ids = setup(app, tmp_path)
+    evaluation = {
+        "mode": "create",
+        "framework": "braintrust",
+        "entrypoint": "app/evals/run_activity_customization_eval.py",
+        "command": {
+            "argv": ["python", "-m", "app.evals.run_activity_customization_eval"],
+            "cwd": ".",
+        },
+        "scorer": "Require every retained correctness gate to pass.",
+        "output_mapping": {"quality": "summary.quality"},
+    }
+
+    draft = app.designs.save(*ids, proposal(evaluation=evaluation))
+
+    assert draft["native_plan"]["state"] == "ready"
+    assert draft["native_plan"]["entrypoint"] == evaluation["entrypoint"]
+    assert draft["native_plan"]["source_files"] == []
+
+
 def test_stale_writes_scope_and_source_changes_cannot_be_accepted(app, tmp_path):
     ids = setup(app, tmp_path)
     root = app.state.workspace(ids[0]).root

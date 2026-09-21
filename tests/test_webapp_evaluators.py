@@ -84,6 +84,9 @@ def test_discovery_is_bounded_read_only_and_distinguishes_frameworks(project, mo
     outside = project.root.parent / "outside.py"
     outside.write_text("from deepeval import evaluate\n")
     (project.root / "linked_eval.py").symlink_to(outside)
+    private_backup = project.root / ".agentagon.backup"
+    private_backup.mkdir()
+    (private_backup / "test_old_eval.py").write_text("def test_private(): pass\n")
     result = evaluators.discover(project)
     assert {candidate["framework"] for candidate in result["candidates"]} == evaluators.FRAMEWORKS
     script = next(
@@ -96,6 +99,7 @@ def test_discovery_is_bounded_read_only_and_distinguishes_frameworks(project, mo
     )
     assert instrumentation["command"] is None and instrumentation["confidence"] == "low"
     assert not any(item["entrypoint"] == "linked_eval.py" for item in result["candidates"])
+    assert not any(".agentagon.backup" in item["entrypoint"] for item in result["candidates"])
     monkeypatch.setattr(evaluators, "MAX_FILES", 1)
     assert evaluators.discover(project)["truncated"] is True
 
@@ -140,6 +144,39 @@ def test_new_plan_keeps_unresolved_expectations_actionable(project):
     assert plan["state"] == "draft"
     assert len(plan["blockers"]) == 4
     assert "Missing references" in plan["blockers"][-1]
+
+
+def test_create_plan_can_name_the_evaluator_that_will_be_authored(project):
+    payload = {
+        "mode": "create",
+        "framework": "braintrust",
+        "entrypoint": "app/evals/run_activity_customization_eval.py",
+        "command": {
+            "argv": ["python", "-m", "app.evals.run_activity_customization_eval"],
+            "cwd": ".",
+        },
+        "scorer": "Require every retained correctness gate to pass.",
+        "output_mapping": {"quality": "summary.quality"},
+    }
+
+    plan = evaluators.prepare_plan(project, payload)
+
+    assert plan["state"] == "ready"
+    assert plan["entrypoint"] == payload["entrypoint"]
+    assert plan["source_files"] == []
+    assert evaluators.validate_plan(project, plan) == plan
+
+
+def test_reuse_plan_requires_its_named_evaluator_to_exist(project):
+    with pytest.raises(AuditError, match="does not exist"):
+        evaluators.prepare_plan(
+            project,
+            {
+                "mode": "reuse",
+                "framework": "custom",
+                "entrypoint": "missing-evaluator.py",
+            },
+        )
 
 
 @pytest.mark.parametrize(
