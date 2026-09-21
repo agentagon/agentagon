@@ -235,9 +235,11 @@ class MemoryGroups:
             )
         metadata = load_json(marker)
         group_id = metadata.get("group_id") if isinstance(metadata, dict) else None
-        if metadata != {"version": 1, "group_id": group_id} or not isinstance(
-            group_id, str
-        ) or not _GROUP.fullmatch(group_id):
+        if (
+            metadata != {"version": 1, "group_id": group_id}
+            or not isinstance(group_id, str)
+            or not _GROUP.fullmatch(group_id)
+        ):
             raise AuditError(
                 "existing improvement memory has an unsupported identity; preserve it and "
                 "choose a fresh project-state folder"

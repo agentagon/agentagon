@@ -79,9 +79,9 @@ def test_fresh_application_database_reuses_built_in_improvement_memory(tmp_path)
 
     assert second_project == first_project
     assert [item["id"] for item in adopted] == [group["id"]]
-    assert MemoryGroups(second_state).recall(
-        second_project, group["id"], "regression"
-    )["entries"] == [entry]
+    assert MemoryGroups(second_state).recall(second_project, group["id"], "regression")[
+        "entries"
+    ] == [entry]
 
 
 def test_database_rejects_previous_format_without_migration(registered):

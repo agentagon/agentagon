@@ -507,9 +507,7 @@ def test_copied_snapshot_retains_its_original_project_binding(app, tmp_path, kin
         app.result(second["id"], kind, saved["id"])
     assert all(item["id"] != saved["id"] for item in snapshots.list_snapshots(target))
     overview = app.overview(second["id"])
-    assert all(
-        item["id"] != saved["id"] for item in [*overview["datasets"], *overview["traces"]]
-    )
+    assert all(item["id"] != saved["id"] for item in [*overview["datasets"], *overview["traces"]])
     assert app.result(first["id"], kind, saved["id"])["project_id"] == first["id"]
 
 

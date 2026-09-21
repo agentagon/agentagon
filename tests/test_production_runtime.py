@@ -137,6 +137,51 @@ def test_assessment_is_idempotent_async_and_retains_partial_progress(app):
     assert any(r["basis"] == "not_measured" for r in instance.production.recommendations(project))
 
 
+def test_assessment_starts_after_local_application_state_is_recreated(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "agent.py").write_text('from agents import Agent\nweather = Agent(name="Weather")\n')
+
+    def response(*_):
+        return {
+            "state": "completed",
+            "text": json.dumps({"summary": "Assessment complete", "issues": []}),
+        }
+
+    first = Application(tmp_path / "first-state", execute=response)
+    first.scheduler.close()
+    project = first.register(str(root))["id"]
+    group = first.memory.improvement_groups(project)[0]
+    first.memory.record(
+        project,
+        group["id"],
+        {"key": "previous-assessment", "text": "Keep the evidence bounds explicit."},
+    )
+    first.close()
+
+    restarted = Application(tmp_path / "second-state", execute=response)
+    restarted.scheduler.close()
+    try:
+        registered = restarted.register(str(root))["id"]
+        restarted.agents = lambda: {
+            "agents": [{"id": "codex", "available": False, "authenticated": False}]
+        }
+        task = restarted.submit_task(
+            registered,
+            {
+                "operation_id": str(uuid.uuid4()),
+                "workflow": "assess",
+                "input": {"type": "project", "id": registered},
+            },
+        )
+
+        assert registered == project
+        assert task["task_id"]
+        assert restarted.memory.improvement_groups(registered)[0]["id"] == group["id"]
+    finally:
+        restarted.close()
+
+
 def test_assessment_blocks_an_unavailable_selected_trace_connection_but_allows_code_only(app):
     instance, project, _ = app
     connection_id = "connection_" + "c" * 24
