@@ -22,6 +22,14 @@ TERMINAL = {"completed", "completed_with_limits", "failed", "cancelled"}
 BUDGET_DEFAULTS = {"max_trials": 24, "max_elapsed_seconds": 1800, "trial_timeout_seconds": 60}
 
 
+def task_sandbox(job):
+    if job["kind"] in {"design", "discover", "assess", "observe"}:
+        return "read-only"
+    if job["kind"] == "audit" and job.get("options", {}).get("agent_review_scope"):
+        return "read-only"
+    return "workspace-write"
+
+
 def operation_id(value):
     try:
         return str(uuid.UUID(value))
@@ -176,6 +184,7 @@ class TaskRuntime:
             "monitor_policy",
             "window",
             "scheduled",
+            "agent_review_scope",
         }
         if set(options) - allowed:
             raise AuditError("unsupported task options")
@@ -185,7 +194,12 @@ class TaskRuntime:
                 not isinstance(value, str) or not re.fullmatch(r"[a-z_]+_[a-f0-9]{24}", value)
             ):
                 raise AuditError(f"invalid {key}")
-        for key in ("investigation_plan", "suite_manifest", "measurement_design"):
+        for key in (
+            "investigation_plan",
+            "suite_manifest",
+            "measurement_design",
+            "agent_review_scope",
+        ):
             value = options.get(key)
             if value is not None and (
                 not isinstance(value, dict) or len(json.dumps(value).encode()) > 1_000_000
@@ -263,12 +277,10 @@ class TaskRuntime:
                     project_id, payload.get("application_agent_id")
                 )
             if not payload.get("improvement_memory"):
-                memory.improvement_groups(project_id, payload.get("application_agent_id"))
+                groups = memory.improvement_groups(project_id, payload.get("application_agent_id"))
                 payload["improvement_memory"] = [
                     memory.recall(project_id, g["id"], goal, payload.get("application_agent_id"))
-                    for g in memory.list(
-                        project_id, payload.get("application_agent_id"), "improvement"
-                    )
+                    for g in groups
                 ]
             job = {
                 "version": 1,
@@ -438,9 +450,7 @@ class TaskRuntime:
                     "cwd": str(workspace.root),
                     "session_id": job.get("session_id"),
                     "prompt": workflows.prompt(workspace, job),
-                    "sandbox": "read-only"
-                    if job["kind"] in {"design", "discover", "assess", "observe"}
-                    else "workspace-write",
+                    "sandbox": task_sandbox(job),
                     "timeout_seconds": remaining,
                     "env": {
                         "AGENTAGON_APP_STATE": str(self.state.directory),
@@ -541,9 +551,9 @@ class TaskRuntime:
                 try:
                     self.record_outcome(workspace, job)
                 except (AuditError, OSError, ValueError) as exc:
-                    job["memory_note"] = (
-                        f"Outcome retained; recording memory requires attention: {exc}"
-                    )
+                    job["memory_note"] = f"Lesson recording failed: {exc}"
+                    job["memory_retry_count"] = 1
+                    job["memory_retry_at"] = now()
 
                 self._write(job)
                 self.active.pop((project_id, job_id), None)
@@ -878,13 +888,15 @@ class TaskRuntime:
             return answer
 
     def control(self, project_id, job_id, action, payload):
-        if action not in {"answer", "pause", "resume", "cancel", "message"}:
+        if action not in {"answer", "pause", "resume", "cancel", "message", "retry-memory"}:
             raise AuditError("unsupported task control")
         allowed = {"operation_id", "question_id", "answer", "message"}
         if not isinstance(payload, dict) or set(payload) - allowed:
             raise AuditError("unsupported task control fields")
         op = operation_id(payload.get("operation_id"))
         binding = digest({"action": action, "payload": payload})
+        if action == "retry-memory":
+            return self._retry_memory(project_id, job_id, op, binding)
         with self.condition:
             key = (project_id, job_id)
             answer = None
@@ -980,6 +992,43 @@ class TaskRuntime:
                 self.active[key].set()
             self._dispatch()
             return public_task(job)
+
+    def _retry_memory(self, project_id, job_id, operation, binding):
+        """Retry only outcome-memory recording; retained workflow evidence is untouched."""
+
+        with self.condition:
+            job = self._read(project_id, job_id)
+            previous = job["receipts"].get(operation)
+            if previous:
+                if previous != binding:
+                    raise AuditError("operation_id already belongs to a different task control")
+                return public_task(job)
+            if job["state"] not in TERMINAL:
+                raise AuditError("lesson recording can retry only after the task finishes")
+            if not job.get("memory_note"):
+                return public_task(job)
+            retained = copy.deepcopy(job)
+        try:
+            self.record_outcome(self.state.workspace(project_id), retained)
+        except (AuditError, OSError, ValueError) as exc:
+            with self.condition:
+                latest = self._read(project_id, job_id)
+                latest["memory_retry_count"] = int(latest.get("memory_retry_count", 0)) + 1
+                latest["memory_retry_at"] = now()
+                latest["memory_note"] = f"Lesson recording failed: {exc}"
+                self._write(latest)
+            raise AuditError(f"lesson recording still needs attention: {exc}") from exc
+        with self.condition:
+            with self.state.db.transaction() as transaction:
+                latest = transaction.get_record(project_id, "tasks", job_id)
+                if latest is None:
+                    raise AuditError("task not found in this project")
+                latest.pop("memory_note", None)
+                latest.pop("memory_retry_count", None)
+                latest.pop("memory_retry_at", None)
+                latest["receipts"][operation] = binding
+                self._write(latest, transaction)
+            return public_task(latest)
 
     @staticmethod
     def _charge_attempt(job):

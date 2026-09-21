@@ -5,7 +5,7 @@ import math
 import re
 
 from agentagon.capabilities.traces import snapshots
-from agentagon.capabilities.traces.normalize import normalize, unpack
+from agentagon.capabilities.traces.normalize import normalize, redact, unpack
 from agentagon.core.records import AuditError, digest, load_json, now
 from agentagon.storage.state import identifier, private_directory
 
@@ -111,6 +111,158 @@ def derive(workspace, project_id, trace_snapshot_id, selection):
             "missing_expectations": len(items),
         },
         "items": items,
+    }
+    return snapshots.summary(snapshots.save(workspace, project_id, preview))
+
+
+def _redacted_value_count(value):
+    count = 0
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            pending.extend(current.values())
+        elif isinstance(current, list):
+            pending.extend(current)
+        elif isinstance(current, str) and "[REDACTED]" in current:
+            count += 1
+    return count
+
+
+def propose_case(workspace, project_id, trace_snapshot_id, proposal):
+    """Freeze one user-reviewed expectation without treating an observed output as truth."""
+    _workspace(workspace, project_id)
+    if not isinstance(proposal, dict) or set(proposal) - {
+        "trace_id",
+        "case_name",
+        "expected_behavior",
+        "reviewed",
+    }:
+        raise AuditError("provide one trace, a case name, and reviewed expected behavior")
+    trace_id = proposal.get("trace_id")
+    if not isinstance(trace_id, str) or not trace_id.strip() or len(trace_id) > 2048:
+        raise AuditError("choose one bounded trace identity")
+    trace_id = trace_id.strip()
+    expected = proposal.get("expected_behavior")
+    if (
+        not isinstance(expected, str)
+        or not expected.strip()
+        or len(expected.encode("utf-8")) > 8000
+    ):
+        raise AuditError("expected behavior must be between 1 and 8000 UTF-8 bytes")
+    expected = expected.strip()
+    name = proposal.get("case_name")
+    if name is None or (isinstance(name, str) and not name.strip()):
+        name = f"Reviewed trace case {trace_id[:80]}"
+    if not isinstance(name, str) or len(name.strip().encode("utf-8")) > 200:
+        raise AuditError("case name must be at most 200 UTF-8 bytes")
+    name = name.strip()
+    if proposal.get("reviewed") is not True:
+        raise AuditError("review the expected behavior before saving this proposed case")
+
+    source = snapshots.load(workspace, trace_snapshot_id)
+    if source["kind"] != "traces":
+        raise AuditError("create an evaluation case from a trace snapshot")
+    provider = source["provenance"].get("provider")
+    project = (
+        source["selection"].get("project") or source["provenance"].get("project") or project_id
+    )
+    roots, saw_trace, invalid = {}, False, 0
+    for row, locator in unpack(source["items"], provider):
+        try:
+            clean = redact(row)
+            span = normalize(clean, provider, project, locator)
+        except (AuditError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            invalid += 1
+            continue
+        if span["trace_id"] != trace_id:
+            continue
+        saw_trace = True
+        if (
+            span["parent_span_ids"]
+            or span["started_ns"] is None
+            or span["ended_ns"] is None
+            or span["ended_ns"] < span["started_ns"]
+            or span["input"] is None
+        ):
+            continue
+        roots[span["source_digest"]] = span
+    if not saw_trace:
+        raise AuditError("trace not found in this snapshot")
+    if len(roots) != 1:
+        raise AuditError(
+            "the selected trace must contain exactly one complete root span with an input"
+        )
+    span = next(iter(roots.values()))
+    metadata = {**span["metadata"], **span["attributes"]}
+    if span.get("session_id"):
+        metadata.setdefault("conversation_id", span["session_id"])
+    redacted_values = _redacted_value_count(
+        {"input": span["input"], "output": span["output"], "metadata": metadata}
+    )
+    source_reference = {
+        "snapshot_id": source["id"],
+        "snapshot_digest": source["digest"],
+        "snapshot_version": source["version"],
+        "trace_id": trace_id,
+        "span_id": span["span_id"],
+        "provider": provider,
+        "redaction": {
+            "applied": True,
+            "policy": "common credential keys and token patterns",
+            "redacted_value_count": redacted_values,
+            "limitation": "This is not a general PII detector.",
+        },
+    }
+    item = {
+        "id": "example_"
+        + digest(
+            {
+                "source": source["digest"],
+                "trace": trace_id,
+                "expectation": expected,
+            }
+        )[:24],
+        "input": copy.deepcopy(span["input"]),
+        "observed_output": copy.deepcopy(span["output"]),
+        "expected": expected,
+        "expected_present": True,
+        "metadata": metadata,
+        "source": source_reference,
+    }
+    preview = {
+        "kind": "dataset",
+        "connection_id": source["connection_id"],
+        "selection": {
+            "dataset_id": name,
+            "source_snapshot_id": source["id"],
+            "trace_ids": [trace_id],
+        },
+        "provenance": {
+            "provider": provider,
+            "project": project,
+            "source_snapshot_id": source["id"],
+            "source_digest": source["digest"],
+            "source_snapshot_version": source["version"],
+            "source_provenance_digest": digest(source["provenance"]),
+            "source_trace_id": trace_id,
+            "source_span_id": span["span_id"],
+            "derivation": "reviewed_trace_evaluation_case",
+            "dataset_partition": "unsplit",
+            "expectation_status": "reviewed",
+            "expectation_source": "user_supplied",
+            "observed_outputs_are_expectations": False,
+            "redaction": source_reference["redaction"],
+        },
+        "completeness": {
+            "count": 1,
+            "complete": True,
+            "source_complete": bool(source["completeness"].get("complete")),
+            "source_unusable_records": source["completeness"].get("unusable_records", 0),
+            "normalization_failures": invalid,
+            "missing_expectations": 0,
+        },
+        "items": [item],
     }
     return snapshots.summary(snapshots.save(workspace, project_id, preview))
 

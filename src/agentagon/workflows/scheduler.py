@@ -160,17 +160,32 @@ class Scheduler:
 
         for project in self.app.state.read()["projects"]:
             for job in self.app.runtime.list(project):
-                if job.get("memory_note") and job["state"] in {
-                    "completed",
-                    "completed_with_limits",
-                    "failed",
-                    "cancelled",
-                }:
+                if (
+                    job.get("memory_note")
+                    and int(job.get("memory_retry_count", 0)) < 3
+                    and job["state"]
+                    in {
+                        "completed",
+                        "completed_with_limits",
+                        "failed",
+                        "cancelled",
+                    }
+                ):
                     try:
                         record_outcome(self.app, self.app.state.workspace(project), job)
-                    except (AuditError, OSError):
+                    except (AuditError, OSError) as exc:
+                        with self.app.runtime.condition:
+                            latest = self.app.runtime._read(project, job["id"])
+                            latest["memory_retry_count"] = (
+                                int(latest.get("memory_retry_count", 0)) + 1
+                            )
+                            latest["memory_retry_at"] = now()
+                            latest["memory_note"] = f"Lesson recording failed: {exc}"
+                            self.app.runtime._write(latest)
                         continue
                     with self.app.runtime.condition:
                         latest = self.app.runtime._read(project, job["id"])
                         latest.pop("memory_note", None)
+                        latest.pop("memory_retry_count", None)
+                        latest.pop("memory_retry_at", None)
                         self.app.runtime._write(latest)

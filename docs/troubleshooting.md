@@ -6,7 +6,7 @@ Inspect the task in the dashboard or with MCP `inspect_task`. Its state, pending
 
 Activate the Python environment where Agentagon is installed and run `agentagon --version`. Open a project with `agentagon --workspace /path/to/project`. MCP clients launch `agentagon mcp` and reuse the same local service without opening a browser. Configure the managed backend in Settings. Public skills and native registration are no longer used.
 
-This release requires fresh state. It rejects older metadata and project schemas without rewriting them. Use a separate `AGENTAGON_APP_STATE` folder and a fresh project checkout; preserve old private state for inspection.
+This release requires fresh state. It rejects older metadata and project schemas without rewriting them. Use a separate `AGENTAGON_APP_STATE` folder and fresh project state; preserve an existing `.agentagon` directory outside the selected folder for inspection. GitHub and a new clone are not required.
 
 ## Interrupted or queued tasks
 
@@ -28,7 +28,7 @@ Evaluation and repair need a clean committed Git checkout. Full Audit can inspec
 
 ## Trace import and issue ownership
 
-Check the selected provider, connection, trace ID and supported [trace formats](traces.md). Pasted or uploaded JSON/JSONL is bounded. Missing parents, incomplete provider retrieval and malformed spans remain explicit limitations. Choose which issues to fix after discovery; discovery never starts bulk repairs. Confirm the owning application agent and code scope when a trace cannot establish them.
+Choose **Check trace** before importing. Check the detected provider, connection, trace ID, usable-span count, and supported [trace formats](traces.md). Pasted or uploaded JSON/JSONL is bounded. Missing parents, incomplete provider retrieval and malformed spans remain explicit limitations. A blocked preview retains no project snapshot; correct the input and check it again. Choose which issues to fix after discovery; discovery never starts bulk repairs. Confirm the owning application agent and code scope when a trace cannot establish them.
 
 ## Memory and Intelligence
 

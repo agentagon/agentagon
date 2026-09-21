@@ -199,7 +199,7 @@ def create_server(application, port=0):
 
         def _get(self, parts):
             if parts == ["api", "health"]:
-                return {"application": "agentagon", "version": 1}
+                return application.diagnostics()
             if parts == ["api", "projects"]:
                 return application.projects()
             if parts == ["api", "workflows"]:
@@ -253,26 +253,47 @@ def create_server(application, port=0):
                     if len(parts) == 6 and parts[5] == "datasets":
                         return application.connection_datasets(project_id, parts[4])
                 if resource == "issues" and len(parts) in {4, 5}:
-                    from agentagon.domain.issues import issue_detail, list_issues
-
-                    workspace = application.state.workspace(project_id)
                     return (
-                        {"issues": list_issues(workspace)}
+                        application.issues(project_id)
                         if len(parts) == 4
-                        else issue_detail(workspace, parts[4])
+                        else application.issue(project_id, parts[4])
                     )
                 if resource == "memory" and len(parts) == 4:
                     return {"groups": application.memory.list(project_id)}
-                if resource == "traces" and len(parts) == 4:
-                    from agentagon.capabilities.traces.snapshots import list_snapshots
+                if resource == "funnel" and len(parts) == 4:
+                    return application.local_funnel(project_id)
+                if resource == "lessons" and len(parts) in {4, 6}:
+                    query = parse_qs(urlsplit(self.path).query)
+                    agent_id = query.get("agent_id", [None])[0]
+                    return (
+                        application.lessons(project_id, agent_id)
+                        if len(parts) == 4
+                        else application.lesson(project_id, parts[4], parts[5], agent_id)
+                    )
+                if resource == "traces":
+                    if len(parts) == 4:
+                        from agentagon.capabilities.traces.snapshots import list_snapshots
 
-                    return {
-                        "traces": [
-                            s
-                            for s in list_snapshots(application.state.workspace(project_id))
-                            if s["kind"] == "traces"
-                        ]
-                    }
+                        return {
+                            "traces": [
+                                s
+                                for s in list_snapshots(application.state.workspace(project_id))
+                                if s["kind"] == "traces"
+                            ]
+                        }
+                    if len(parts) == 5:
+                        query = parse_qs(urlsplit(self.path).query)
+                        raw_limit = query.get("max_spans", ["100"])[0]
+                        try:
+                            max_spans = int(raw_limit)
+                        except (TypeError, ValueError) as exc:
+                            raise AuditError("max_spans must be an integer") from exc
+                        return application.trace_detail(
+                            project_id,
+                            parts[4],
+                            query.get("trace_id", [None])[0],
+                            max_spans,
+                        )
                 if resource == "tasks":
                     if len(parts) == 4:
                         query = {
@@ -283,14 +304,6 @@ def create_server(application, port=0):
                         return application.tasks(project_id, query)
                     if len(parts) == 5:
                         return application.task(project_id, parts[4])
-                if resource == "workflows" and len(parts) == 6 and parts[5] == "readiness":
-                    query = parse_qs(urlsplit(self.path).query)
-                    return application.workflow_readiness(
-                        project_id,
-                        parts[4],
-                        query.get("agent_id", [None])[0],
-                        query.get("goal_id", [None])[0],
-                    )
                 if resource == "overview" and len(parts) == 4:
                     return application.overview(project_id)
                 if resource == "settings" and len(parts) == 4:
@@ -365,6 +378,12 @@ def create_server(application, port=0):
                 application.state.project(project_id)
                 if resource == "onboarding" and len(parts) == 4:
                     return application.production.save_onboarding(project_id, body)
+                if resource == "recommendations" and len(parts) == 6 and parts[5] == "disposition":
+                    return application.production.disposition_recommendation(
+                        project_id, parts[4], body
+                    )
+                if resource == "issues" and len(parts) == 5:
+                    return application.update_issue(project_id, parts[4], body)
                 if resource == "deployments" and len(parts) == 4:
                     from agentagon.domain.improvements import deploy
 
@@ -378,6 +397,14 @@ def create_server(application, port=0):
                         return application.monitoring.control(project_id, parts[4], parts[5])
                 if resource == "traces" and len(parts) == 5 and parts[4] == "import":
                     return application.import_trace(project_id, body)
+                if resource == "traces" and len(parts) == 5 and parts[4] == "preview":
+                    return application.preview_trace_import(project_id, body)
+                if resource == "traces" and len(parts) == 6 and parts[5] == "select":
+                    if set(body) != {"trace_id"}:
+                        raise AuditError("choose one trace identity")
+                    return application.select_trace(project_id, parts[4], body["trace_id"])
+                if resource == "traces" and len(parts) == 6 and parts[5] == "evaluation-case":
+                    return application.propose_evaluation_case(project_id, parts[4], body)
                 if resource == "memory":
                     if len(parts) == 4:
                         return application.memory.create(project_id, body)
@@ -393,6 +420,8 @@ def create_server(application, port=0):
                         return application.memory.record(
                             project_id, parts[4], body.get("entry", {}), body.get("agent_id")
                         )
+                if resource == "lessons" and len(parts) == 6:
+                    return application.correct_lesson(project_id, parts[4], parts[5], body)
                 if resource == "agents":
                     if len(parts) in {8, 9} and parts[5] == "goals" and parts[7] == "design":
                         if len(parts) == 8:
@@ -405,6 +434,16 @@ def create_server(application, port=0):
                         )
                     if len(parts) == 5 and parts[4] == "discover":
                         return application.discover_application_agents(project_id, body)
+                    if len(parts) == 6 and parts[5] == "infer-responsibility":
+                        return application.infer_application_agent_responsibility(
+                            project_id, parts[4], body
+                        )
+                    if len(parts) == 6 and parts[5] == "confirm":
+                        return application.confirm_application_agent(project_id, parts[4], body)
+                    if len(parts) == 6 and parts[5] == "exclude":
+                        return application.exclude_application_agent(project_id, parts[4], body)
+                    if len(parts) == 6 and parts[5] == "restore":
+                        return application.restore_application_agent(project_id, parts[4], body)
                     if len(parts) == 4:
                         return application.save_application_agent(project_id, body)
                     if len(parts) == 5:
@@ -425,10 +464,14 @@ def create_server(application, port=0):
                         return result
                     if len(parts) == 6:
                         return application.runtime.control(project_id, parts[4], parts[5], body)
+                if resource == "workflows" and len(parts) == 5 and parts[4] == "prepare":
+                    return application.prepare_workflow_start(project_id, body)
                 if resource == "settings" and len(parts) == 4:
                     return application.update_settings(project_id, body)
                 if resource == "deliveries" and len(parts) == 4:
                     return application.deliver(project_id, body)
+                if resource == "results" and len(parts) == 7 and parts[6] == "decision":
+                    return application.decide_result(project_id, parts[4], parts[5], body)
                 if resource == "runs" and len(parts) == 6 and parts[5] == "control":
                     return application.control_run(project_id, parts[4], body)
                 if resource == "imports":

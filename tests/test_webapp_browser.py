@@ -45,10 +45,32 @@ class WorkspaceFixture:
                     "project_id": "project_alpha",
                     "name": "Example agent",
                     "responsibility": "",
+                    "responsibility_inference": {
+                        "state": "pending",
+                        "reason": "Awaiting bounded coding-backend review.",
+                        "source_discovery_key": "discovery-example",
+                    },
                     "status": "suggested",
                     "code_scopes": ["examples/example_agent.py"],
                     "shared_dependencies": [],
                     "trace_selector": {},
+                    "evidence": [
+                        {
+                            "kind": "code",
+                            "path": "examples/example_agent.py",
+                            "symbol": "example_agent",
+                            "line": 2,
+                            "call": "agents.Agent",
+                            "context": {
+                                "start_line": 1,
+                                "end_line": 2,
+                                "source": (
+                                    "from agents import Agent\n"
+                                    'example_agent = Agent(name="Example agent")'
+                                ),
+                            },
+                        }
+                    ],
                     "revision": 1,
                 },
             ],
@@ -185,6 +207,42 @@ class WorkspaceFixture:
             ],
             "project_beta": [],
         }
+        self.issues = {
+            "project_alpha": {
+                "issue_missing_citation": {
+                    "id": "issue_missing_citation",
+                    "issue_id": "issue_missing_citation",
+                    "project_id": "project_alpha",
+                    "revision": 3,
+                    "agent_id": None,
+                    "title": "Missing citation",
+                    "summary": "The answer omits the evidence source.",
+                    "severity": "medium",
+                    "confidence": 0.9,
+                    "status": "open",
+                    "historical_affected_traces": 1,
+                    "occurrences": [],
+                    "diagnoses": [
+                        {
+                            "reference": ".agentagon/evidence/diagnosis.json",
+                            "summary": "The final answer contains no citation.",
+                            "expected_behavior": "Cite the selected source.",
+                            "evidence": ["trace-one"],
+                        }
+                    ],
+                    "history": [],
+                    "facets": {
+                        "triage": {"state": "open"},
+                        "work": {"state": "not_started", "attempts": []},
+                        "test_verification": {"state": "not_verified", "changes": []},
+                        "delivery": {"state": "not_selected"},
+                        "production": {"state": "not_observed"},
+                    },
+                    "next_actions": ["start_fix"],
+                }
+            },
+            "project_beta": {},
+        }
         self.discovery = None
 
     @staticmethod
@@ -278,6 +336,15 @@ class WorkspaceFixture:
                     "concurrency": 1,
                 },
             }
+        if path == "/api/health":
+            return {
+                "package_version": "test",
+                "build_id": "test-build",
+                "frontend_asset_version": "test-assets",
+                "service_started_at": "2026-09-17T09:00:00Z",
+                "python_version": "3.13",
+                "state_contracts": {"workspace": 1},
+            }
         parts = path.strip("/").split("/")
         project_id, resource = parts[2:4]
         if resource == "onboarding":
@@ -299,6 +366,7 @@ class WorkspaceFixture:
                     "agents": records,
                     "confirmed": [item for item in records if item["status"] == "confirmed"],
                     "suggestions": [item for item in records if item["status"] != "confirmed"],
+                    "excluded": [],
                 }
             agent_id = parts[4]
             if len(parts) == 5:
@@ -381,6 +449,40 @@ class WorkspaceFixture:
                 task.update(state="running", needs_attention=False, question=None)
             return task
         if resource == "workflows":
+            if len(parts) == 5 and parts[4] == "prepare" and method == "POST":
+                return {
+                    "state": "ready",
+                    "normalized_intent": {
+                        "workflow": payload["workflow"],
+                        "agent_id": payload.get("agent_id"),
+                        "input": payload["input"],
+                        "options": {},
+                        "limits": {
+                            "max_trials": 24,
+                            "max_elapsed_seconds": 1800,
+                            "trial_timeout_seconds": 60,
+                        },
+                        "expected_revisions": {
+                            "project": "project-revision",
+                            "settings": "settings-revision",
+                            "agent": "suggested-agent-revision",
+                            "code_source": "source-revision",
+                            "brain": "brain-revision",
+                        },
+                    },
+                    "prerequisites": [
+                        {
+                            "code": "suggested_agent_read_only",
+                            "state": "satisfied",
+                            "blocking": False,
+                            "evidence_refs": [],
+                            "context": {"read_only": True},
+                        }
+                    ],
+                    "limitations": [],
+                    "expected_outputs": ["audit_findings", "evidence_report"],
+                    "revisions": {},
+                }
             params = {key: values[0] for key, values in parse_qs(query).items()}
             blockers = []
             if not params.get("agent_id"):
@@ -420,6 +522,34 @@ class WorkspaceFixture:
             if method == "DELETE":
                 self.connections[project_id].remove(connection)
             return connection
+        if resource == "issues":
+            records = self.issues[project_id]
+            if len(parts) == 4:
+                return {"issues": list(records.values())}
+            issue = records[parts[4]]
+            if method == "POST":
+                assert payload["expected_revision"] == issue["revision"]
+                action = payload["action"]
+                if action == "assign":
+                    issue["agent_id"] = payload["agent_id"]
+                elif action == "set_expectation":
+                    issue["expected_behavior"] = payload["expected_behavior"]
+                elif action == "dismiss":
+                    issue["status"] = "dismissed"
+                    issue["facets"]["triage"]["state"] = "dismissed"
+                elif action == "reopen":
+                    issue["status"] = "reopened"
+                    issue["facets"]["triage"]["state"] = "reopened"
+                issue["history"].append(
+                    {
+                        "event_id": f"event_{issue['revision']}",
+                        "action": action,
+                        "reason": payload.get("reason", ""),
+                        "at": "2026-09-18T12:00:00Z",
+                    }
+                )
+                issue["revision"] += 1
+            return issue
         if resource == "settings":
             return {
                 "settings": {},
@@ -476,7 +606,7 @@ def test_named_agents_and_project_switch_are_scoped(webapp_page):
     sidebar = page.locator(".sidebar")
     assert sidebar.get_by_role("link", name="Support agent").count() == 1
     assert sidebar.get_by_role("link", name="Research agent").count() == 0
-    sidebar.get_by_role("link", name="Tasks", exact=True).click()
+    sidebar.get_by_role("link", name="Activity", exact=True).click()
     page.get_by_role("link", name="Improve duplicate ticket handling").click()
     page.get_by_role("complementary", name="Task details").wait_for()
     page.locator("#project-picker").select_option("project_beta")
@@ -491,37 +621,65 @@ def test_discovered_agents_have_a_clear_review_handoff(webapp_page):
     page, fixture = webapp_page
     sidebar = page.locator(".sidebar")
     assert sidebar.get_by_role("link", name="Agents 1 suggestions").is_visible()
-    assert (
-        page.locator(".summary-card")
-        .filter(has_text="Agent inventory")
-        .get_by_text("Review 1 suggestion", exact=True)
-        .is_visible()
-    )
+    assert page.get_by_text("Review discovered agents", exact=True).is_visible()
 
     sidebar.get_by_role("link", name="Agents 1 suggestions").click()
     page.wait_for_url("**/projects/project_alpha/agents")
-    assert page.get_by_role("heading", name="Suggestions").is_visible()
+    assert page.get_by_role("heading", name="Agents").is_visible()
+    assert page.get_by_role("searchbox", name="Search").is_visible()
     assert page.get_by_text("Example agent", exact=True).is_visible()
+    page.get_by_role("button", name="Review").click()
+    review = page.get_by_role("dialog", name="Example agent")
+    assert review.get_by_text("Review suggested identity", exact=True).is_visible()
+    assert review.get_by_text("Read only", exact=True).is_visible()
+    assert review.get_by_text("examples/example_agent.py:2", exact=True).is_visible()
+    assert review.get_by_text(
+        'example_agent = Agent(name="Example agent")', exact=True
+    ).is_visible()
+    assert review.get_by_role("button", name="Confirm this exact scope").is_disabled()
+    review.get_by_role("button", name="Run read-only audit").click()
+    page.wait_for_url("**/projects/project_alpha/tasks/task_started")
+    audit_start = next(
+        item for item in fixture.mutations if item["path"] == "/api/projects/project_alpha/tasks"
+    )
+    assert audit_start["payload"]["workflow"] == "audit"
+    assert audit_start["payload"]["agent_id"] == "agent_suggested"
+    assert audit_start["payload"]["expected_revisions"]["agent"] == ("suggested-agent-revision")
 
     page.goto("http://agentagon.test/projects/project_alpha/tasks/task_assess")
     panel = page.get_by_role("complementary", name="Task details")
-    panel.get_by_role("heading", name="1 agent ready for review").wait_for()
-    panel.get_by_role("link", name="Review suggested agents").click()
+    panel.get_by_role("heading", name="Project assessed with limits").wait_for()
+    panel.get_by_role("link", name="Review discovered agents").click()
     page.wait_for_url("**/projects/project_alpha/agents")
 
     for agent in fixture.agents["project_alpha"]:
         agent["status"] = "suggested"
     page.goto("http://agentagon.test/projects/project_alpha/home")
-    page.get_by_role("heading", name="Review discovered agents").wait_for()
-    assert page.get_by_text("2 code-backed agents are ready for confirmation.").is_visible()
+    page.get_by_text("Review discovered agents", exact=True).wait_for()
+    assert page.get_by_text(
+        "2 suggested identities; choose only the ones you want to use.", exact=True
+    ).is_visible()
     assert page.get_by_text("Set up", exact=True).count() == 0
+
+
+def test_direct_suggested_agent_route_is_a_read_only_review_gate(webapp_page):
+    page, _ = webapp_page
+    page.goto("http://agentagon.test/projects/project_alpha/agents/agent_suggested/overview")
+    page.get_by_role("heading", name="Example agent").wait_for()
+    assert page.get_by_text("Confirm this identity to open its workspace", exact=True).is_visible()
+    assert page.get_by_role("button", name="Edit identity").count() == 0
+    assert page.get_by_role("link", name="Evaluations").count() == 0
+    page.get_by_role("button", name="Review exact scope").click()
+    review = page.get_by_role("dialog", name="Example agent")
+    assert review.get_by_role("button", name="Run read-only audit").is_visible()
+    assert review.get_by_role("button", name="Confirm this exact scope").is_disabled()
 
 
 def test_agent_goal_workspace_uses_one_stage_rail(webapp_page):
     page, _ = webapp_page
     page.locator(".sidebar").get_by_role("link", name="Support agent").click()
     page.get_by_role("heading", name="Support agent").wait_for()
-    assert page.get_by_role("button", name="Edit agent").count() == 1
+    assert page.get_by_role("button", name="Edit identity").count() == 1
     assert page.get_by_role("button", name="Add goal_record").count() == 0
     page.get_by_role("link", name="Task success and correctness").click()
     rail = page.get_by_role("navigation", name="Goal stages")
@@ -530,7 +688,7 @@ def test_agent_goal_workspace_uses_one_stage_rail(webapp_page):
         "✓\nDefine\nCOMPLETE",
         "✓\nMeasure\nCOMPLETE",
         "3\nImprove\nREADY",
-        "4\nReview\nLOCKED",
+        "4\nReview\nNEEDS_INPUT",
     ]
     page.get_by_role("button", name="Measure").click()
     page.get_by_text("eval_support", exact=True).wait_for()
@@ -539,16 +697,15 @@ def test_agent_goal_workspace_uses_one_stage_rail(webapp_page):
 
 def test_skills_and_goal_actions_share_task_submission(webapp_page):
     page, fixture = webapp_page
-    page.get_by_role("link", name="Workflows").click()
-    page.get_by_role("heading", name="Workflows").wait_for()
-    assert page.locator(".workflow-card").count() == 5
-    page.locator(".workflow-card").filter(has_text="Design measurements").get_by_role(
-        "button", name="Start"
-    ).click()
+    goal = fixture.goals["agent_support"][0]
+    goal["measurement_plan"] = None
+    goal["measurement"] = None
+    page.goto(
+        "http://agentagon.test/projects/project_alpha/agents/agent_support/goals/goal_correctness"
+    )
+    page.get_by_role("button", name="Design measurements").click()
     dialog = page.get_by_role("dialog")
-    dialog.get_by_role("combobox").nth(0).select_option("agent_support")
-    dialog.get_by_role("combobox").nth(1).select_option("goal_correctness")
-    dialog.get_by_role("button", name="Start task").click()
+    dialog.get_by_role("button", name="Create evaluation proposal").click()
     page.wait_for_timeout(100)
     assert any(item["path"] == "/api/projects/project_alpha/tasks" for item in fixture.mutations)
     page.wait_for_url("**/projects/project_alpha/tasks/task_started")
@@ -561,6 +718,18 @@ def test_skills_and_goal_actions_share_task_submission(webapp_page):
         "agent_id": "agent_support",
         "input": {"type": "goal", "id": "goal_correctness"},
         "options": {},
+        "limits": {
+            "max_trials": 24,
+            "max_elapsed_seconds": 1800,
+            "trial_timeout_seconds": 60,
+        },
+        "expected_revisions": {
+            "project": "project-revision",
+            "settings": "settings-revision",
+            "agent": "suggested-agent-revision",
+            "code_source": "source-revision",
+            "brain": "brain-revision",
+        },
     }
     assert page.get_by_role("complementary", name="Task details").is_visible()
 
@@ -579,6 +748,31 @@ def test_task_history_has_stable_urls_and_bound_decisions(webapp_page):
     assert reply["payload"] == {
         "question_id": "question_candidate",
         "answer": {"text": "Use the safer verified candidate."},
+    }
+
+
+def test_activity_view_and_filters_survive_task_detail(webapp_page):
+    page, _ = webapp_page
+    page.get_by_role("link", name="Activity", exact=True).click()
+    page.get_by_role("button", name="All", exact=True).click()
+    page.get_by_text("Filter activity", exact=False).click()
+    page.get_by_label("Filter by workflow").select_option("optimize")
+    assert parse_qs(urlsplit(page.url).query) == {
+        "view": ["all"],
+        "workflow": ["optimize"],
+    }
+    page.get_by_role("link", name="Improve duplicate ticket handling").click()
+    page.get_by_role("complementary", name="Task details").wait_for()
+    assert parse_qs(urlsplit(page.url).query) == {
+        "view": ["all"],
+        "workflow": ["optimize"],
+    }
+    page.get_by_role("button", name="Close task").click()
+    page.wait_for_url("**/projects/project_alpha/tasks?*")
+    assert urlsplit(page.url).path == "/projects/project_alpha/tasks"
+    assert parse_qs(urlsplit(page.url).query) == {
+        "view": ["all"],
+        "workflow": ["optimize"],
     }
 
 
@@ -604,8 +798,9 @@ def test_task_approvals_send_an_explicit_decision(webapp_page):
 
 def test_connectors_are_project_resources(webapp_page):
     page, _ = webapp_page
-    page.get_by_role("link", name="Connectors").click()
-    page.get_by_role("heading", name="Connectors").wait_for()
+    page.get_by_role("link", name="Settings").click()
+    page.get_by_role("link", name="Connections", exact=True).click()
+    page.get_by_role("heading", name="Connected providers").wait_for()
     assert page.get_by_text("Production support", exact=True).is_visible()
     page.locator(".connector-card").filter(has_text="LangSmith").get_by_role(
         "button", name="Connect"
@@ -622,11 +817,14 @@ def test_assistant_settings_only_request_relevant_credentials(webapp_page):
     page, _ = webapp_page
     page.get_by_role("link", name="Settings").click()
     page.get_by_role("heading", name="Settings").wait_for()
+    page.get_by_role("link", name="Coding backend", exact=True).click()
+    page.get_by_role("heading", name="Available coding backends", exact=True).wait_for()
+    assert page.get_by_label("Coding backend").input_value() == "codex"
     assert page.get_by_label("Claude API key").count() == 0
-    page.get_by_label("Default coding assistant").select_option("claude")
-    assert page.get_by_label("Claude API key").is_visible()
-    page.get_by_label("Default coding assistant").select_option("codex")
-    assert page.get_by_label("Claude API key").count() == 0
+    page.get_by_label("Coding backend").select_option("claude")
+    page.get_by_label("Claude API key").wait_for()
+    page.get_by_label("Coding backend").select_option("codex")
+    page.get_by_label("Claude API key").wait_for(state="detached")
 
 
 def test_mobile_navigation_and_task_panel_are_full_width(webapp_page):
@@ -634,10 +832,54 @@ def test_mobile_navigation_and_task_panel_are_full_width(webapp_page):
     page.set_viewport_size({"width": 390, "height": 844})
     page.get_by_role("button", name="Open navigation").click()
     assert page.locator(".sidebar").evaluate("element => element.classList.contains('is-open')")
-    page.get_by_role("link", name="Tasks", exact=True).click()
+    page.get_by_role("link", name="Activity", exact=True).click()
     page.get_by_role("link", name="Improve duplicate ticket handling").click()
     panel = page.get_by_role("complementary", name="Task details")
     assert panel.bounding_box()["width"] == pytest.approx(390, abs=1)
+
+
+def test_issue_triage_controls_send_current_revision_and_refresh_projection(webapp_page):
+    page, fixture = webapp_page
+    page.goto("http://agentagon.test/projects/project_alpha/issues/issue_missing_citation")
+    page.get_by_role("heading", name="Missing citation").wait_for()
+
+    page.get_by_label("Confirmed agent").select_option("agent_support")
+    page.get_by_role("button", name="Assign agent").click()
+    triage = page.locator(".issue-triage")
+    triage.get_by_text("Support agent", exact=True).wait_for()
+
+    triage.get_by_role("textbox", name="Expected behavior").fill(
+        "Cite every externally supplied claim."
+    )
+    triage.get_by_role("textbox", name="Why is this correct?").fill(
+        "Reviewed against the support response contract."
+    )
+    page.get_by_role("button", name="Save reviewed expectation").click()
+    triage.get_by_text("Cite every externally supplied claim.", exact=True).wait_for()
+
+    page.get_by_label("Why is this not actionable?").fill(
+        "This trace came from an obsolete fixture."
+    )
+    page.get_by_role("button", name="Mark not actionable").click()
+    page.get_by_role("button", name="Reopen issue").wait_for()
+    assert page.get_by_role("button", name="Start fix").count() == 0
+    page.get_by_role("button", name="Reopen issue").click()
+    page.get_by_text("reopened", exact=True).first.wait_for()
+
+    updates = [
+        item["payload"]
+        for item in fixture.mutations
+        if item["path"] == "/api/projects/project_alpha/issues/issue_missing_citation"
+    ]
+    assert [item["action"] for item in updates] == [
+        "assign",
+        "set_expectation",
+        "dismiss",
+        "reopen",
+    ]
+    assert [item["expected_revision"] for item in updates] == [3, 4, 5, 6]
+    assert updates[1]["reason"] == "Reviewed against the support response contract."
+    assert updates[2]["reason"] == "This trace came from an obsolete fixture."
 
 
 def test_new_user_sees_project_onboarding():
@@ -652,8 +894,8 @@ def test_new_user_sees_project_onboarding():
         page.route("**/*", fixture.route)
         page.goto("http://agentagon.test/")
         page.get_by_role("heading", name="Recursive self-improvement for AI agents.").wait_for()
-        page.get_by_role("button", name="Add project").click()
-        page.get_by_role("dialog").get_by_label("Project directory").fill("/projects/new")
+        page.get_by_role("button", name="Open local folder").click()
+        page.get_by_role("dialog").get_by_label("Local folder path").fill("/projects/new")
         browser.close()
 
 
@@ -664,6 +906,7 @@ def test_real_service_trace_discovery_and_memory(tmp_path):
     from test_webapp_jobs import manifest
     from test_workflow_runtime import finding, trace_data
 
+    from agentagon.capabilities.traces import snapshots
     from agentagon.workflows.service import Application
 
     playwright = pytest.importorskip("playwright.sync_api")
@@ -693,31 +936,40 @@ def test_real_service_trace_discovery_and_memory(tmp_path):
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(f"http://127.0.0.1:{server.server_port}/projects/{project['id']}/issues")
         page.get_by_label("JSON or JSONL").fill(json.dumps(trace_data()))
-        page.get_by_role("button", name="Import and discover issues", exact=True).click()
+        page.get_by_role("button", name="Check trace", exact=True).click()
+        preview = page.locator(".trace-preview")
+        preview.get_by_role("heading", name="Trace evidence is ready", exact=True).wait_for()
+        assert preview.get_by_text("otlp · detected", exact=True).is_visible()
+        assert preview.get_by_text("1 of 1", exact=True).is_visible()
+        assert preview.get_by_text("Complete selection", exact=True).is_visible()
+        assert preview.get_by_text(
+            "Recognized secrets are redacted before this evidence is retained.", exact=True
+        ).is_visible()
+        assert snapshots.list_snapshots(app.state.workspace(project["id"])) == []
+        preview.get_by_role("button", name="Import and investigate", exact=True).click()
+        page.wait_for_url("**/traces/snapshot_*?intent=discover")
+        page.get_by_role("button", name="Investigate trace", exact=True).click()
         dialog = page.get_by_role("dialog")
-        dialog.get_by_role("button", name="Start task").click()
+        dialog.get_by_role("button", name="Discover issues").click()
         page.wait_for_url("**/tasks/task_*")
         page.get_by_text("One supported failure", exact=False).first.wait_for()
-        page.get_by_role("link", name="Issues", exact=True).click()
-        page.get_by_text("Weather times out", exact=True).wait_for()
-        page.get_by_text("Evidence and repair attempts", exact=True).click()
-        page.get_by_role("button", name="Read diagnosis", exact=True).click()
+        page.get_by_role("link", name="Overview", exact=True).click()
+        page.get_by_role("link", name="All issues", exact=True).click()
+        page.get_by_role("link", name="Weather times out", exact=True).click()
+        page.get_by_role("heading", name="What failed", exact=True).wait_for()
         page.get_by_text("The weather span reports timeout", exact=True).wait_for()
-        page.get_by_role("link", name="Goals", exact=True).click()
-        page.get_by_role("heading", name="Goals", exact=True).wait_for()
-        page.get_by_role("button", name="Add goal", exact=True).wait_for()
+        page.get_by_role("link", name="Weather", exact=True).click()
+        page.get_by_role("link", name="Evaluations", exact=True).click()
+        page.get_by_role("button", name="Create evaluation", exact=True).first.wait_for()
         assert len(app.runtime.list(project["id"])) == 1
         assert app.runtime.list(project["id"])[0]["kind"] == "discover"
-        page.get_by_role("link", name="Memory", exact=True).click()
+        page.get_by_role("link", name="Settings", exact=True).click()
+        page.get_by_role("link", name="Data & privacy", exact=True).click()
+        page.get_by_text("Register another local memory group", exact=True).click()
         page.get_by_label("Name", exact=True).fill("Private lessons")
         page.get_by_label("Empty folder location").fill(str(tmp_path / "lessons"))
         page.get_by_role("button", name="Register group").click()
-        page.get_by_role("button", name="Private lessons", exact=False).click()
-        page.get_by_label("Stable entry key").fill("timeout")
-        page.get_by_label("Lesson", exact=True).fill("Check timeouts before repeating tool calls")
-        page.get_by_label("Evidence references, one per line").fill("trace-1")
-        page.get_by_role("button", name="Record version").click()
-        page.get_by_text("Check timeouts before repeating tool calls", exact=True).wait_for()
+        page.get_by_role("heading", name="Private lessons", exact=True).wait_for()
         assert not errors, errors
         if destination := os.environ.get("AGENTAGON_TEST_SCREENSHOT"):
             page.evaluate("window.scrollTo(0, 0)")

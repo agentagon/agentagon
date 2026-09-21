@@ -75,6 +75,10 @@ def test_task_projection_hides_host_activity_and_preserves_workflow_progress():
             "project_id": "project_" + "b" * 24,
             "kind": "assess",
             "state": "running",
+            "workflow_ids": {
+                "audit_id": "audit_" + "c" * 24,
+                "private_receipt_id": "receipt_" + "d" * 24,
+            },
             "events": [
                 {"type": "session", "session_id": "session-one"},
                 {"type": "message", "text": "I'll inspect the repository."},
@@ -99,6 +103,7 @@ def test_task_projection_hides_host_activity_and_preserves_workflow_progress():
             "text": "Diagnosing retained evidence with the managed coding backend.",
         }
     ]
+    assert detail["workflow_ids"] == {"audit_id": "audit_" + "c" * 24}
 
 
 def audit_host(request, emit, ask, cancelled):

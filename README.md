@@ -29,7 +29,9 @@ agentagon
 
 ## Set up your improvement loop
 
-Add or clone a repository, configure the managed coding backend, and optionally connect observability or import a trace. **Analyze project** discovers application agents, proposes code/trace bindings, and recommends next actions. Confirm ownership before repairs. Missing authentication preserves the local scan and acquired evidence.
+Open any existing local folder, or choose the separate clone action when you need a new checkout. A Git repository or GitHub remote is not required for assessment. Configure the managed coding backend and optionally connect observability or share a trace. **Analyze project** discovers application agents, proposes code/trace bindings, and recommends next actions. Confirm exact ownership before code-writing work. Missing authentication preserves the local scan and acquired evidence.
+
+The persistent workspace is organized around **Overview**, **Agents**, **Production**, and **Activity**, with project configuration under **Settings**. Goals, issues, evaluations, improvements, connections, and lessons appear in the context where an engineer uses them.
 
 Each agent has persistent improvement history and production observations. Enable monitoring explicitly for an agent and environment. Checks run hourly while the local service and machine are available; scheduled diagnosis runs at most daily with a five-minute limit. Interrupted tasks require explicit resume or discard. Monitoring recommends actions; users start repairs and select/deploy changes.
 
@@ -54,3 +56,7 @@ SQLite owns mutable project, agent, goal, issue, task and memory-registry metada
 This breaking release requires fresh application and project state. Existing private data is left untouched. There are no migrations, old CLI aliases, installed public skills, plugin manifests, or host continuation hooks.
 
 Read the [production monitoring guide](docs/production.md), [dashboard guide](docs/app.md), [MCP contract](docs/mcp.md), [memory guide](docs/memory.md), [architecture](docs/contributing/architecture.md), and [contribution guide](CONTRIBUTING.md).
+
+## License
+
+Agentagon is licensed under the [Apache License 2.0](LICENSE). Distributions also include the Agentagon attribution in [NOTICE](NOTICE) and dependency attributions in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).

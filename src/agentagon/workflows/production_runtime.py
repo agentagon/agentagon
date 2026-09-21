@@ -26,6 +26,64 @@ def automatic_result(summary):
     }
 
 
+def _issue_evidence_material(workspace, issue):
+    """Describe issue evidence without task/snapshot-specific artifact names."""
+    semantic = {}
+    opaque = []
+    for reference in issue.get("evidence", []):
+        value = None
+        if isinstance(reference, str) and reference.startswith(".agentagon/evidence/"):
+            try:
+                value = workspace.read_artifact(reference)
+            except (AuditError, OSError, TypeError, ValueError):
+                value = None
+        if isinstance(value, dict) and isinstance(value.get("diagnosis"), dict):
+            value = value["diagnosis"]
+        elif isinstance(value, dict):
+            value = {
+                key: item
+                for key, item in value.items()
+                if key not in {"task_id", "snapshot_id", "assessment_id", "observation_id"}
+            }
+        if value is None:
+            if not (
+                isinstance(reference, str)
+                and reference.startswith(("task_", "finding_", "audit_", "snapshot_"))
+            ):
+                opaque.append(reference)
+        else:
+            semantic[digest(value)] = value
+    occurrences = [
+        {
+            key: occurrence.get(key)
+            for key in (
+                "id",
+                "trace_ids",
+                "observed_ns",
+                "finding_id",
+                "basis",
+                "environment",
+                "deployment_id",
+                "release",
+                "revision",
+            )
+            if occurrence.get(key) is not None
+        }
+        for occurrence in issue.get("occurrences", [])
+    ]
+    return {
+        "key": issue["key"],
+        "agent_id": issue.get("agent_id"),
+        "title": issue["title"],
+        "summary": issue["summary"],
+        "severity": issue["severity"],
+        "confidence": issue["confidence"],
+        "occurrences": sorted(occurrences, key=lambda item: item.get("id", "")),
+        "semantic_evidence": [semantic[key] for key in sorted(semantic)],
+        "opaque_evidence": sorted(set(opaque)),
+    }
+
+
 class ProductionRuntime:
     def __init__(self, application):
         self.app = application
@@ -176,11 +234,30 @@ class ProductionRuntime:
                 prepared["trace_agents"] = {
                     t: agents[0] for t, agents in trace_agents.items() if len(agents) == 1
                 }
-                suggestions = [
-                    agent
-                    for agent in self.app.catalog.agents(project)
-                    if agent["status"] == "suggested" and len(agent.get("code_scopes", [])) == 1
-                ]
+                review_scope = job["options"].get("agent_review_scope")
+                if review_scope:
+                    from agentagon.workflows.operations.preparation import agent_review_scope
+
+                    target = self.app.catalog.agent(project, review_scope["agent_id"])
+                    if (
+                        target["status"] != "suggested"
+                        or agent_review_scope(target) != review_scope
+                    ):
+                        raise AuditError(
+                            "Suggested identity changed; review it before retrying responsibility "
+                            "inference."
+                        )
+                    if len(target.get("code_scopes", [])) != 1:
+                        raise AuditError(
+                            "Responsibility inference requires one retained agent definition."
+                        )
+                    suggestions = [target]
+                else:
+                    suggestions = [
+                        agent
+                        for agent in self.app.catalog.agents(project)
+                        if agent["status"] == "suggested" and len(agent.get("code_scopes", [])) == 1
+                    ]
                 # Subsequent bounded assessments progress to candidates that still lack a
                 # responsibility before revisiting an already enriched suggestion.
                 suggestions.sort(
@@ -306,13 +383,20 @@ class ProductionRuntime:
         # Local scanning and acquisition remain useful without an authenticated brain.
         available = next((a for a in self.app.agents()["agents"] if a["id"] == job["agent"]), {})
         if not available.get("available") or available.get("authenticated") is not True:
-            prepared["limitations"].append(
-                "Coding backend unavailable or unauthenticated; configure it to diagnose traces."
+            limitation = (
+                "Coding backend unavailable or unauthenticated; deterministic code candidates "
+                "were retained, but responsibility inference"
+                + (" and trace diagnosis" if prepared.get("snapshot_id") else "")
+                + " did not run."
             )
+            if limitation not in prepared["limitations"]:
+                prepared["limitations"].append(limitation)
             job["preparation"] = prepared
             self._save_preparation(job, cancelled)
             return automatic_result(
-                "Partial assessment retained. Configure the coding backend for diagnosis."
+                f"Retained {len(prepared.get('candidates', []))} code candidate(s). "
+                "Configure and authenticate the coding backend to infer responsibilities"
+                + (" and diagnose the selected traces." if prepared.get("snapshot_id") else ".")
             )
         prepared["brain_requested"] = True
         if job["kind"] == "observe" and job["options"].get("scheduled"):
@@ -365,21 +449,24 @@ class ProductionRuntime:
     def complete(self, workspace, job, result):
         project, prepared = job["project_id"], job["preparation"]
         if job["kind"] == "assess":
-            if result.get("candidates"):
-                self.app.catalog.apply_coding_review(project, result["candidates"])
-            self.db.put_record(
-                project,
-                "onboarding",
-                "setup",
-                {
-                    **self.onboarding(project),
-                    "state": "complete",
-                    "task_id": job["id"],
-                    "scope": job["options"]["assessment"],
-                    "limitations": prepared["limitations"],
-                    "agent_measurements": prepared.get("agent_measurements", {}),
-                },
-            )
+            if prepared.get("brain_requested") and result.get("candidates"):
+                self.app.catalog.apply_coding_review(
+                    project, result["candidates"], task_id=job["id"]
+                )
+            if not job["options"].get("agent_review_scope"):
+                self.db.put_record(
+                    project,
+                    "onboarding",
+                    "setup",
+                    {
+                        **self.onboarding(project),
+                        "state": "complete",
+                        "task_id": job["id"],
+                        "scope": job["options"]["assessment"],
+                        "limitations": prepared["limitations"],
+                        "agent_measurements": prepared.get("agent_measurements", {}),
+                    },
+                )
             return {
                 **result,
                 "assessment_id": job["id"],
@@ -389,7 +476,14 @@ class ProductionRuntime:
         observation_id = identifier("observation", job["id"])
         existing = self.db.get_record(project, "observations", observation_id)
         if existing:
-            return {**result, "observation_id": observation_id}
+            # A crash/retry must project the already-retained observation rather
+            # than accepting a later model response as if it were authoritative.
+            return {
+                **result,
+                "observation_id": observation_id,
+                "metrics": copy.deepcopy(existing.get("metrics", [])),
+                "issue_ids": copy.deepcopy(existing.get("issue_ids", [])),
+            }
         from agentagon.domain.improvements import retain_reported_deployments
 
         retain_reported_deployments(self.app, project, policy, prepared["samples"])
@@ -549,24 +643,88 @@ class ProductionRuntime:
             tx.put_record(project, "observations", observation_id, record)
         return {**result, "observation_id": observation_id, "metrics": metrics}
 
-    def recommendations(self, project):
+    def _recommendations(self, project):
+        from agentagon.domain.issues import lifecycle_projection
+
         result = []
-        issues = list_issues(self.app.state.workspace(project))
+        workspace = self.app.state.workspace(project)
+        issues = list_issues(workspace)
         for issue in issues:
-            if issue["status"] not in {"resolved_verified", "resolved_user"}:
-                result.append(
+            lifecycle = lifecycle_projection(self.app, project, issue["issue_id"])
+            actions = lifecycle["next_actions"]
+            if not actions:
+                continue
+            action = actions[0]
+            if action == "reopen_issue":
+                continue
+            labels = {
+                "assign_agent": f"Assign an agent to {issue['title']}",
+                "inspect_task": f"Continue work on {issue['title']}",
+                "start_fix": issue["title"],
+                "investigate_recurrence": f"Investigate recurrence: {issue['title']}",
+                "review_verified_change": f"Review verified change: {issue['title']}",
+                "prepare_local_delivery": f"Prepare delivery: {issue['title']}",
+                "record_deployment": f"Record deployment: {issue['title']}",
+                "observe_production": f"Observe production: {issue['title']}",
+            }
+            prerequisites = {
+                "assign_agent": "Confirm which code-owned agent is responsible",
+                "inspect_task": "Resolve the task's pending work or requested input",
+                "start_fix": "Confirm ownership and expected behavior",
+                "investigate_recurrence": "Review the post-deployment production evidence",
+                "review_verified_change": "Choose the verified result or keep the current version",
+                "prepare_local_delivery": "Prepare the selected change for review",
+                "record_deployment": "Declare the release, environment, revision, and deployment time",
+                "observe_production": "Enable or run a matching production monitor",
+            }
+            latest_change = next(
+                iter(lifecycle["facets"]["test_verification"].get("changes", [])), None
+            )
+            target = {"type": "issue", "id": issue["issue_id"]}
+            if action == "inspect_task" and lifecycle["facets"]["work"].get("active_task_id"):
+                target["task_id"] = lifecycle["facets"]["work"]["active_task_id"]
+            if latest_change and latest_change.get("run_id"):
+                target.update(
                     {
-                        "id": issue["issue_id"],
-                        "agent_id": issue.get("agent_id"),
-                        "title": issue["title"],
-                        "workflow": "fix",
-                        "input": {"type": "issue", "id": issue["issue_id"]},
-                        "basis": "trace_evidence" if issue["occurrences"] else "reported_issue",
-                        "evidence": issue["evidence"],
-                        "confidence": issue["confidence"],
-                        "prerequisite": "Confirm ownership and expected behavior",
+                        "run_id": latest_change["run_id"],
+                        "workflow": next(
+                            (
+                                item.get("workflow")
+                                for item in self.db.list_records(project, "improvements")
+                                if item.get("run_id") == latest_change["run_id"]
+                            ),
+                            "fix",
+                        ),
                     }
                 )
+            result.append(
+                {
+                    "id": issue["issue_id"],
+                    "agent_id": issue.get("agent_id"),
+                    "title": labels.get(action, issue["title"]),
+                    "workflow": "fix",
+                    "input": {"type": "issue", "id": issue["issue_id"]},
+                    "action": action,
+                    "target": target,
+                    "basis": (
+                        "production_recurrence"
+                        if action == "investigate_recurrence"
+                        else "verified_change"
+                        if lifecycle["facets"]["test_verification"]["state"] == "verified"
+                        else "trace_evidence"
+                        if issue["occurrences"]
+                        else "reported_issue"
+                    ),
+                    "evidence": issue["evidence"],
+                    "confidence": issue["confidence"],
+                    "prerequisite": prerequisites.get(action, "Review the retained evidence"),
+                    "_evidence_material": {
+                        "issue": _issue_evidence_material(workspace, issue),
+                        "action": action,
+                        "target": target,
+                    },
+                }
+            )
         latest_metrics = {}
         for observation in reversed(self.db.list_records(project, "observations")):
             for metric in observation["metrics"]:
@@ -626,6 +784,94 @@ class ProductionRuntime:
                 )
         return result
 
+    def recommendations(self, project):
+        """Return recommendations with evidence-scoped user dispositions.
+
+        A dismissal applies only to the exact evidence revision the user saw.  If
+        an issue, measurement, or prerequisite changes, the recommendation is
+        active again and the previous disposition remains available as history.
+        """
+        result = []
+        for recommendation in self._recommendations(project):
+            revision_material = recommendation.pop("_evidence_material", None)
+            evidence_revision = digest(
+                revision_material
+                or {
+                    key: recommendation.get(key)
+                    for key in (
+                        "agent_id",
+                        "title",
+                        "workflow",
+                        "input",
+                        "basis",
+                        "evidence",
+                        "measurement",
+                        "prerequisite",
+                    )
+                }
+            )
+            saved = self.db.get_record(project, "recommendation_dispositions", recommendation["id"])
+            current = bool(saved and saved.get("evidence_revision") == evidence_revision)
+            result.append(
+                {
+                    **recommendation,
+                    "evidence_revision": evidence_revision,
+                    "active": not current,
+                    "disposition": (
+                        {
+                            key: saved.get(key)
+                            for key in ("value", "reason", "decided_at", "revision")
+                        }
+                        if current
+                        else None
+                    ),
+                }
+            )
+        return result
+
+    def disposition_recommendation(self, project, recommendation_id, payload):
+        """Record Not now / Not relevant for one exact recommendation revision."""
+        if not isinstance(payload, dict) or set(payload) - {
+            "value",
+            "reason",
+            "evidence_revision",
+            "expected_revision",
+        }:
+            raise AuditError("unsupported recommendation decision fields")
+        value = payload.get("value")
+        if value not in {"not_now", "not_relevant"}:
+            raise AuditError("choose not now or not relevant")
+        reason = payload.get("reason", "")
+        if not isinstance(reason, str) or len(reason) > 1000:
+            raise AuditError("recommendation reason must be at most 1000 characters")
+        current = next(
+            (item for item in self.recommendations(project) if item["id"] == recommendation_id),
+            None,
+        )
+        if current is None:
+            raise AuditError("recommendation is unavailable")
+        if payload.get("evidence_revision") != current["evidence_revision"]:
+            raise AuditError("recommendation evidence changed; review the updated recommendation")
+        existing = self.db.get_record(project, "recommendation_dispositions", recommendation_id)
+        expected_revision = payload.get("expected_revision")
+        if expected_revision is None:
+            expected_revision = existing.get("revision", 0) if existing else 0
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise AuditError("expected recommendation revision must be a non-negative integer")
+        return self.db.put_record(
+            project,
+            "recommendation_dispositions",
+            recommendation_id,
+            {
+                "id": recommendation_id,
+                "evidence_revision": current["evidence_revision"],
+                "value": value,
+                "reason": reason.strip(),
+                "decided_at": now(),
+            },
+            expected_revision=expected_revision,
+        )
+
     def submit(self, project, payload, binding, scheduled=False):
         from agentagon.workflows.requests import public_start
 
@@ -651,19 +897,39 @@ class ProductionRuntime:
             raise AuditError("task options must be an object")
         agent_id = payload.get("agent_id")
         if agent_id:
-            self.app.catalog.agent(project, agent_id)
+            selected_agent = self.app.catalog.agent(project, agent_id)
+        else:
+            selected_agent = None
         if payload.get("scope"):
             raise AuditError("assessment and observation use their saved evidence scope")
         with self.app.lock:
             if kind == "assess":
-                if source.get("id", project) != project or set(options) - {"assessment"}:
+                if source.get("id", project) != project or set(options) - {
+                    "assessment",
+                    "agent_review_scope",
+                }:
                     raise AuditError("invalid project assessment input")
+                review_scope = options.get("agent_review_scope")
+                if selected_agent and selected_agent["status"] == "archived":
+                    raise AuditError("restore this excluded identity before starting work")
+                if selected_agent and selected_agent["status"] == "suggested":
+                    from agentagon.workflows.operations.preparation import agent_review_scope
+
+                    if review_scope != agent_review_scope(selected_agent):
+                        raise AuditError("suggested identity changed; review it again")
+                elif review_scope:
+                    raise AuditError("read-only review scope requires a suggested identity")
                 options = {
                     "assessment": self.scope(
                         project, options.get("assessment", self.onboarding(project)["scope"])
-                    )
+                    ),
+                    **({"agent_review_scope": review_scope} if review_scope else {}),
                 }
-                objective = "Assess application agents, issues and improvement opportunities"
+                objective = (
+                    f"Infer responsibility for {selected_agent['name']}"
+                    if review_scope
+                    else "Assess application agents, issues and improvement opportunities"
+                )
             else:
                 monitor = self.app.monitoring.get(project, source.get("id"))
                 if agent_id not in (None, monitor["agent_id"]):
@@ -729,17 +995,18 @@ class ProductionRuntime:
                 request_binding=binding,
             )
             if kind == "assess":
-                self.db.put_record(
-                    project,
-                    "onboarding",
-                    "setup",
-                    {
-                        **self.onboarding(project),
-                        "state": "analyzing",
-                        "scope": options["assessment"],
-                        "task_id": task["id"],
-                    },
-                )
+                if not options.get("agent_review_scope"):
+                    self.db.put_record(
+                        project,
+                        "onboarding",
+                        "setup",
+                        {
+                            **self.onboarding(project),
+                            "state": "analyzing",
+                            "scope": options["assessment"],
+                            "task_id": task["id"],
+                        },
+                    )
             else:
                 monitor.update(task_id=task["id"], state="running")
                 self.db.put_record(project, "monitors", monitor["id"], monitor)

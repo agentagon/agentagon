@@ -65,17 +65,33 @@ def summary(record):
         if record["kind"] == "dataset"
         else 0
     )
+    trace_readiness = (
+        record.get("completeness", {}).get("diagnosis_ready")
+        if record["kind"] == "traces"
+        else None
+    )
     return {
         **{k: v for k, v in record.items() if k != "items"},
         "count": len(record["items"]),
         "missing_expectations": missing,
+        **({"diagnosis_ready": trace_readiness} if record["kind"] == "traces" else {}),
         "name": record["selection"].get("dataset_id")
         or record["provenance"].get("dataset_name")
         or record["provenance"].get("project")
         or record["kind"].title(),
-        "next_action": "Review expectations and configure an evaluator"
-        if record["kind"] == "dataset"
-        else "Select this import in an audit",
+        "next_action": (
+            (
+                "Attach this reviewed case to an evaluation"
+                if record["provenance"].get("expectation_status") == "reviewed" and not missing
+                else "Review expectations and configure an evaluator"
+            )
+            if record["kind"] == "dataset"
+            else (
+                "Select this import for diagnosis"
+                if trace_readiness is True
+                else "Inspect import limitations"
+            )
+        ),
     }
 
 
@@ -211,6 +227,53 @@ def select_traces(workspace, project_id, snapshot_id, selector, cap=None):
         "count": len(preview["items"]),
         "unusable_records": invalid,
         "requested_traces": cap,
+        "complete": bool(source["completeness"].get("complete")) and not invalid,
+    }
+    return save(workspace, project_id, preview)
+
+
+def select_trace(workspace, project_id, snapshot_id, trace_id):
+    """Freeze one explicitly chosen trace without requiring a complete root span."""
+    from agentagon.capabilities.traces.normalize import normalize, unpack
+
+    if not isinstance(trace_id, str) or not trace_id or len(trace_id) > 2048:
+        raise AuditError("choose a bounded trace identity")
+    source = load(workspace, snapshot_id)
+    if source["kind"] != "traces":
+        raise AuditError("select a trace snapshot")
+    provider = source["provenance"]["provider"]
+    project = source["selection"].get("project") or source["provenance"].get("project")
+    selected, invalid = [], 0
+    for row, locator in unpack(source["items"], provider):
+        try:
+            span = normalize(row, provider, project, locator)
+        except (AuditError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            invalid += 1
+            continue
+        if span["trace_id"] == trace_id:
+            selected.append(row)
+    if not selected:
+        raise AuditError("trace not found in this snapshot")
+    preview = {
+        key: source[key]
+        for key in ("kind", "connection_id", "selection", "provenance", "completeness")
+    }
+    preview["items"] = selected
+    preview["selection"] = {**source["selection"], "trace_id": trace_id, "cap": 1}
+    preview["provenance"] = {
+        **source["provenance"],
+        "source_snapshot_id": source["id"],
+        "source_digest": source["digest"],
+        "selected_trace_ids": [trace_id],
+        "selected_traces": 1,
+        "selection_order": "explicit_trace_identity",
+    }
+    preview["completeness"] = {
+        **source["completeness"],
+        "selected_traces": 1,
+        "count": len(selected),
+        "unusable_records": invalid,
+        "requested_traces": 1,
         "complete": bool(source["completeness"].get("complete")) and not invalid,
     }
     return save(workspace, project_id, preview)

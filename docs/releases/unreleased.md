@@ -14,6 +14,8 @@ Verified candidates become improvements linked to their engine evidence. Deploym
 
 Accepted, versioned measurement criteria govern production classifications. Incomplete windows, missing scores, mixed releases and revisions different from the tested candidate cannot establish improvement or recovery. Recurrence requires explicit reviews pinned to trace evidence; empty findings do not imply success. Material outcomes feed improvement memory, and tasks retain validated references to recalled lessons. Users still start repairs, select changes and control publication/deployment.
 
+Data & privacy settings now show a bounded project-local funnel derived from durable agent, task, question, result-choice and delivery records. Only prepared action intents and idempotent duplicate starts need a separate bounded local journal. Users can download the projection as JSON; it is never sent automatically. Anonymous workflow and Intelligence telemetry is now disabled by default and requires explicit user-wide opt-in.
+
 ## Upgrade boundary
 
 This is a breaking working-tree change, not a published release. Older metadata and project state are rejected without rewriting them. Use fresh application state and a fresh project checkout; preserve existing private data separately. No compatibility wrappers or migrations are provided. No changes have been committed, published, merged or deployed by this implementation task.

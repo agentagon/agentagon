@@ -91,7 +91,7 @@ These implementation details are handled by the coding agent and CLI.
 
     Use `agentagon _internal eval status EVALUATION_ID` or `agentagon _internal status --run RUN_ID` to inspect the owner-linked receipt index (`intelligence` on evaluation state and `intelligence_receipts` on fix status). Audit reports retain their guidance summary; fix reports and the dashboard keep guidance payloads private. Do not hand-edit receipts or canonical workflow state.
 
-    [Product telemetry](telemetry.md) is enabled by default and can be disabled. It records lookup outcomes and returned knowledge IDs without context, focus, goal or local references for all three workflows. Cached rereads do not repeat returned-entry events. The `knowledge_investigated` and `knowledge_cited` stages remain audit-only because they refer to local audit evidence and saved findings.
+    [Product telemetry](telemetry.md) is disabled by default and can be explicitly enabled. When enabled, it records lookup outcomes and returned knowledge IDs without context, focus, goal or local references for all three workflows. Cached rereads do not repeat returned-entry events. The `knowledge_investigated` and `knowledge_cited` stages remain audit-only because they refer to local audit evidence and saved findings.
 
 ## Data processing
 

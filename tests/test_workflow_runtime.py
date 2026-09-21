@@ -98,6 +98,40 @@ def test_trace_discovery_groups_occurrences_without_repairs_or_audit(system):
         accept(workspace, job, {"issues": [{**finding(), "trace_ids": ["absent"]}]})
 
 
+def test_trace_occurrence_identity_survives_provider_reconnection(system):
+    from agentagon.capabilities.traces import snapshots
+
+    app, project, agent = system
+    workspace = app.state.workspace(project)
+    workspace.initialize()
+    for suffix in ("a", "b"):
+        snapshot = snapshots.save(
+            workspace,
+            project,
+            {
+                "kind": "traces",
+                "connection_id": "connection_" + suffix * 24,
+                "selection": {"project": "provider-project"},
+                "items": trace_data(),
+                "provenance": {"provider": "otlp", "project": "provider-project"},
+                "completeness": {"complete": True, "count": 1},
+            },
+        )
+        accept(
+            workspace,
+            {
+                "id": "task_" + suffix * 24,
+                "application_agent_id": agent["id"],
+                "options": {"trace_snapshot_id": snapshot["id"]},
+            },
+            {"issues": [finding()]},
+        )
+
+    issue = list_issues(workspace)[0]
+    assert len(issue["occurrences"]) == 1
+    assert len(issue["occurrences"][0]["source_ids"]) == 2
+
+
 def test_import_idempotency_and_limits(system):
     app, project, _ = system
     operation = str(uuid.uuid4())
@@ -159,6 +193,279 @@ def test_memory_access_versions_and_pinned_execution(system, tmp_path, monkeypat
     path.write_text(json.dumps(record))
     with pytest.raises(AuditError, match="integrity"):
         FolderStore(group).entries()
+
+
+def test_lesson_projection_preserves_versions_and_citations(system, tmp_path):
+    app, project, agent = system
+    group = app.memory.create(
+        project,
+        {
+            "name": "Improvement history",
+            "purpose": "improvement",
+            "path": str(tmp_path / "improvement-history"),
+            "agent_ids": [agent["id"]],
+        },
+    )
+    source_id = "task_" + "a" * 24
+    first = app.memory.record(
+        project,
+        group["id"],
+        {
+            "key": source_id,
+            "text": "Reproduce the timeout before changing fallback behavior.",
+            "evidence": ["artifact-one"],
+            "uncertainty": "Observed on one retained case.",
+        },
+        agent["id"],
+    )
+    second = app.memory.record(
+        project,
+        group["id"],
+        {
+            "key": source_id,
+            "text": "Reproduce timeouts across retained cases before changing fallback behavior.",
+            "evidence": ["artifact-one", "artifact-two"],
+            "uncertainty": "Production recovery is still unknown.",
+        },
+        agent["id"],
+    )
+
+    def save_task(task_id, result, improvement_memory=None):
+        app.state.db.put_record(
+            project,
+            "tasks",
+            task_id,
+            {
+                "id": task_id,
+                "project_id": project,
+                "application_agent_id": agent["id"],
+                "kind": "assess",
+                "goal": "Assess timeout handling",
+                "state": "completed",
+                "result": result,
+                "improvement_memory": improvement_memory or [],
+                "created_at": "2026-09-20T00:00:00Z",
+            },
+        )
+
+    save_task(
+        source_id,
+        {
+            "summary": "The timeout needs a bounded fallback.",
+            "learning": {
+                "hypothesis": "Fallback coverage is incomplete.",
+                "action": "Reproduce before editing.",
+                "result": "The failure reproduced.",
+            },
+        },
+    )
+    save_task(
+        "task_" + "b" * 24,
+        {
+            "lessons": [
+                {
+                    "id": first["id"],
+                    "version": 1,
+                    "decision": "used",
+                    "reason": "It shaped the reproduction.",
+                }
+            ]
+        },
+        [{"group_id": group["id"], "entries": [first]}],
+    )
+    save_task(
+        "task_" + "c" * 24,
+        {
+            "lessons": [
+                {
+                    "id": second["id"],
+                    "version": 2,
+                    "decision": "rejected",
+                    "reason": "This case had a different cause.",
+                }
+            ]
+        },
+        [{"group_id": group["id"], "entries": [second]}],
+    )
+
+    listing = app.lessons(project, agent["id"])
+    assert listing["lessons"][0]["version"] == 2
+    assert listing["lessons"][0]["rejected_count"] == 1
+    assert "path" not in listing["lessons"][0]["group"]
+    detail = app.lesson(project, group["id"], first["id"], agent["id"])
+    assert [version["version"] for version in detail["versions"]] == [2, 1]
+    assert detail["versions"][1]["considerations"][0]["decision"] == "used"
+    assert detail["latest"]["source"]["learning"]["hypothesis"] == (
+        "Fallback coverage is incomplete."
+    )
+
+    assert detail["latest"]["uncertainty"] == second["uncertainty"]
+
+    # Project-wide reads expose registry metadata elsewhere, but lesson content
+    # still requires the explicit agent binding.
+    assert app.lessons(project)["lessons"] == []
+    agentless_groups = app.memory.improvement_groups(project)
+    assert agentless_groups
+    assert all(not item["agent_ids"] for item in agentless_groups)
+
+
+def test_read_only_shared_improvement_memory_does_not_block_local_outcome_store(system, tmp_path):
+    app, project, _agent = system
+    other_root = tmp_path / "other-project"
+    other_root.mkdir()
+    other = app.register(str(other_root))["id"]
+    shared = app.memory.create(
+        project,
+        {
+            "name": "Shared read-only lessons",
+            "purpose": "improvement",
+            "path": str(tmp_path / "shared-improvement-memory"),
+            "project_ids": [project, other],
+            "write_project_ids": [project],
+        },
+    )
+
+    groups = app.memory.improvement_groups(other)
+
+    assert shared["id"] in {item["id"] for item in groups}
+    writable = [item for item in groups if other in item["write_project_ids"]]
+    assert len(writable) == 1
+    assert writable[0]["owner_project_id"] == other
+
+
+def test_lesson_corrections_append_versions_and_remove_outdated_from_recall(system, tmp_path):
+    app, project, agent = system
+    group = app.memory.create(
+        project,
+        {
+            "name": "Correctable lessons",
+            "purpose": "improvement",
+            "path": str(tmp_path / "correctable-lessons"),
+            "agent_ids": [agent["id"]],
+        },
+    )
+    original = app.memory.record(
+        project,
+        group["id"],
+        {
+            "key": "task_" + "d" * 24,
+            "text": "Retry every failed call.",
+            "evidence": ["task_" + "e" * 24, "trace-timeout"],
+            "uncertainty": "Only one provider was observed.",
+        },
+        agent["id"],
+    )
+
+    noted = app.correct_lesson(
+        project,
+        group["id"],
+        original["id"],
+        {
+            "action": "add_note",
+            "agent_id": agent["id"],
+            "expected_version": 1,
+            "note": "Do not retry non-idempotent tools.",
+        },
+    )["latest"]
+    assert noted["version"] == 2
+    assert noted["statement"] == original["text"]
+    assert noted["evidence"] == original["evidence"]
+    assert noted["revision_kind"] == "note"
+    assert noted["revision_note"] == "Do not retry non-idempotent tools."
+    repeated_note = app.correct_lesson(
+        project,
+        group["id"],
+        original["id"],
+        {
+            "action": "add_note",
+            "agent_id": agent["id"],
+            "expected_version": 2,
+            "note": "Do not retry non-idempotent tools.",
+        },
+    )["latest"]
+    assert repeated_note["version"] == 3
+    with pytest.raises(AuditError, match="changed; reload"):
+        app.correct_lesson(
+            project,
+            group["id"],
+            original["id"],
+            {
+                "action": "mark_outdated",
+                "agent_id": agent["id"],
+                "expected_version": 1,
+                "reason": "A newer retry policy exists.",
+            },
+        )
+
+    outdated = app.correct_lesson(
+        project,
+        group["id"],
+        original["id"],
+        {
+            "action": "mark_outdated",
+            "agent_id": agent["id"],
+            "expected_version": 3,
+            "reason": "Unbounded retries can duplicate side effects.",
+        },
+    )["latest"]
+    assert outdated["version"] == 4 and outdated["status"] == "outdated"
+    assert outdated["evidence"] == original["evidence"]
+    assert app.memory.recall(project, group["id"], "retry", agent["id"])["entries"] == []
+    listing = app.lessons(project, agent["id"])["lessons"]
+    assert listing[0]["status"] == "outdated"
+    with pytest.raises(AuditError, match="authorized target agent"):
+        app.correct_lesson(
+            project,
+            group["id"],
+            original["id"],
+            {
+                "action": "add_note",
+                "expected_version": 4,
+                "note": "This must not bypass the group binding.",
+            },
+        )
+
+    revised = app.correct_lesson(
+        project,
+        group["id"],
+        original["id"],
+        {
+            "action": "revise",
+            "agent_id": agent["id"],
+            "expected_version": 4,
+            "statement": "Retry idempotent failed calls within a bounded policy.",
+            "uncertainty": "Tool idempotency must still be classified.",
+            "reason": "Limit the original advice to safe calls.",
+        },
+    )["latest"]
+    assert revised["version"] == 5 and revised["status"] == "active"
+    assert revised["revision_kind"] == "revised"
+    assert revised["evidence"] == original["evidence"]
+    assert (
+        app.memory.recall(project, group["id"], "retry", agent["id"])["entries"][0]["version"] == 5
+    )
+    history = app.lesson(project, group["id"], original["id"], agent["id"])
+    assert [version["version"] for version in history["versions"]] == [5, 4, 3, 2, 1]
+    assert [version["status"] for version in history["versions"]] == [
+        "active",
+        "outdated",
+        "active",
+        "active",
+        "active",
+    ]
+
+    with running(app) as (client, _server):
+        response = client.post(
+            f"/api/projects/{project}/lessons/{group['id']}/{original['id']}",
+            json={
+                "action": "add_note",
+                "agent_id": agent["id"],
+                "expected_version": 5,
+                "note": "HTTP corrections use the same immutable operation.",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["latest"]["version"] == 6
 
 
 def test_supplied_trace_reaches_verified_repair_without_goal_or_audit(
@@ -290,8 +597,30 @@ def test_supplied_trace_reaches_verified_repair_without_goal_or_audit(
         from agentagon.domain.improvements import deploy, list_improvements
 
         improvements = list_improvements(app, project)
-        assert len(improvements) == 1 and improvements[0]["selected"]
+        assert len(improvements) == 1 and improvements[0]["recommended_by_task"]
+        assert improvements[0]["selected_by_user"] is False
+        assert any(
+            item.get("run_id") == done["result"]["run_id"]
+            for item in app.monitoring.overview(project)["attention"]
+        )
         assert improvements[0]["tested_revision"] == issue["tested_revision"]
+        app.decide_result(
+            project,
+            "fix",
+            done["result"]["run_id"],
+            {
+                "operation_id": str(uuid.uuid4()),
+                "expected_revision": 0,
+                "decision": "select_candidate",
+                "candidate_id": improvements[0]["candidate_id"],
+            },
+        )
+        improvements = list_improvements(app, project)
+        assert improvements[0]["selected_by_user"] is True
+        assert not any(
+            item.get("run_id") == done["result"]["run_id"]
+            for item in app.monitoring.overview(project)["attention"]
+        )
         deployment = deploy(
             app,
             project,
@@ -415,9 +744,21 @@ def test_stdio_mcp_and_dashboard_share_task_and_idempotency(system, monkeypatch)
                     assert {
                         "start_workflow",
                         "inspect_task",
+                        "inspect_trace",
+                        "inspect_result",
+                        "decide_result",
+                        "prepare_delivery",
                         "recall_memory",
                         "record_memory",
                     } <= names
+                    inspected = await session.call_tool(
+                        "inspect_trace",
+                        {"project_id": project, "snapshot_id": trace["id"], "max_spans": 2},
+                    )
+                    assert not inspected.isError, inspected
+                    trace_view = json.loads(inspected.content[0].text)
+                    assert trace_view["readiness"]["diagnosis_ready"] is True
+                    assert trace_view["coverage"]["returned_spans"] <= 2
                     response = await session.call_tool("start_workflow", command)
                     assert not response.isError, response
                     one = json.loads(response.content[0].text)

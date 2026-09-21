@@ -35,7 +35,7 @@ DEFAULTS = {
         "public_key_env": None,
     },
     "profiles": {},
-    "telemetry": {"enabled": True},
+    "telemetry": {"enabled": False},
 }
 KEYS = {f"{section}.{key}" for section, values in DEFAULTS.items() for key in values}
 

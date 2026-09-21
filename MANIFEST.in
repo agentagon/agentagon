@@ -1,4 +1,4 @@
-include .gitignore AGENTS.md CODE_OF_CONDUCT.md CONTRIBUTING.md SECURITY.md
+include .gitignore AGENTS.md CODE_OF_CONDUCT.md CONTRIBUTING.md NOTICE SECURITY.md
 include .gitleaks.toml mkdocs.yml requirements-docs.txt THIRD_PARTY_NOTICES.txt
 include package.json package-lock.json tsconfig.json vite.config.ts
 recursive-include frontend *.html *.css *.ts *.tsx

@@ -104,11 +104,26 @@ class ServiceClient:
         self.origin = f"http://127.0.0.1:{port}"
         self.headers = {"X-Agentagon-Token": instance["token"], "Origin": self.origin}
 
-    def request(self, method, path, body=None):
+    def request(self, method, path, body=None, *, query=None):
         if not path.startswith("/api/") or ".." in path or "?" in path:
             raise AuditError("invalid local service resource")
+        if query is not None:
+            if not isinstance(query, dict) or any(
+                not isinstance(key, str)
+                or not key
+                or not isinstance(value, (str, int))
+                or isinstance(value, bool)
+                for key, value in query.items()
+            ):
+                raise AuditError("invalid local service query")
         with httpx.Client(timeout=30, trust_env=False) as client:
-            response = client.request(method, self.origin + path, headers=self.headers, json=body)
+            response = client.request(
+                method,
+                self.origin + path,
+                headers=self.headers,
+                json=body,
+                params=query,
+            )
         result = response.json()
         if response.status_code != 200:
             raise AuditError(result.get("error", "local service request failed"))
@@ -128,7 +143,8 @@ def ensure_service(workspace=None):
             raise AuditError("application instance metadata cannot be a symlink")
         instance = load_json(instance_path)
         client = ServiceClient(instance)
-        if client.request("GET", "/api/health") != {"application": "agentagon", "version": 1}:
+        health = client.request("GET", "/api/health")
+        if health.get("application") != "agentagon" or not health.get("package_version"):
             raise AuditError("unrecognized local service")
         return client
 

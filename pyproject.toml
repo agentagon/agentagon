@@ -9,7 +9,7 @@ description = "Recursive self-improvement for AI agents."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
-license-files = ["LICENSE", "THIRD_PARTY_NOTICES.txt"]
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.txt"]
 dependencies = [
     "click>=8.1,<9",
     "jsonschema>=4.21,<5",

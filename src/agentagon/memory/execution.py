@@ -76,6 +76,8 @@ def recalled_snapshot(path, project_id, group_id, query, agent_id, limit=10):
     )
     entries, size = [], 0
     for entry in ranked:
+        if entry.get("status", "active") != "active":
+            continue
         if terms and not terms & set(
             re.findall(r"\w+", (entry["key"] + " " + entry["text"]).casefold())
         ):

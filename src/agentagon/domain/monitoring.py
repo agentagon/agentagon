@@ -4,7 +4,7 @@ import copy
 import math
 import uuid
 
-from agentagon.core.records import AuditError, digest, now
+from agentagon.core.records import AuditError, digest, now, timestamp_ns
 
 DEFAULTS = {
     "interval_seconds": 3600,
@@ -14,6 +14,59 @@ DEFAULTS = {
     "diagnosis": True,
 }
 METRICS = {"latency_ms", "cost_usd", "failure_rate", "issue_recurrence", "quality"}
+
+PUBLIC_STATES = {
+    "paused": (
+        "Paused",
+        "Automatic production collection is paused.",
+        "enable_monitoring",
+    ),
+    "scheduled": (
+        "Scheduled",
+        "The next bounded production check is scheduled.",
+        "analyze_now",
+    ),
+    "collecting": (
+        "Collecting",
+        "A production evidence check is running.",
+        "inspect_check",
+    ),
+    "waiting_for_traffic": (
+        "Waiting for traffic",
+        "The latest complete window contained no matching production traffic.",
+        "review_trace_scope",
+    ),
+    "credentials_needed": (
+        "Credentials needed",
+        "The provider credentials must be repaired before collection can continue.",
+        "repair_credentials",
+    ),
+    "storage_limit_reached": (
+        "Storage limit reached",
+        "The evidence storage budget blocked production collection.",
+        "adjust_storage_budget",
+    ),
+    "interrupted_check": (
+        "Interrupted check",
+        "A prior production check requires an explicit resume or discard decision.",
+        "resolve_interrupted_check",
+    ),
+    "partial_coverage": (
+        "Partial coverage",
+        "The latest retained window contains incomplete coverage or a collection gap.",
+        "inspect_coverage",
+    ),
+    "backing_off": (
+        "Backing off",
+        "Production collection failed and its next attempt is delayed.",
+        "analyze_now",
+    ),
+    "stale": (
+        "Stale",
+        "A scheduled check is overdue, so coverage after the last checkpoint is unknown.",
+        "analyze_now",
+    ),
+}
 
 
 def measurement(value):
@@ -78,6 +131,225 @@ def measurement(value):
     if result["metric"] == "quality" and not result.get("quality_key"):
         raise AuditError("quality measurement requires an accepted trace score key")
     return result
+
+
+def _time(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        return timestamp_ns(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _latest_observation(observations, monitor, *, current_series=False):
+    selected = [item for item in observations if item.get("monitor_id") == monitor["id"]]
+    if current_series:
+        selected = [item for item in selected if item.get("series") == monitor.get("series")]
+    return max(
+        selected,
+        key=lambda item: (
+            _time((item.get("window") or {}).get("end")) or -1,
+            item.get("id", ""),
+        ),
+        default=None,
+    )
+
+
+def _task_evidence(application, project, monitor):
+    task_id = monitor.get("task_id")
+    if not task_id:
+        return None
+    try:
+        task = application.runtime.get(project, task_id)
+    except (AuditError, KeyError, OSError):
+        return {"id": task_id, "state": "unavailable", "next_action": None}
+    return {
+        "id": task_id,
+        "state": task.get("state"),
+        "next_action": task.get("next_action"),
+        "updated_at": task.get("updated_at"),
+    }
+
+
+def _coverage_summary(observation, monitor):
+    if observation is None:
+        return {
+            "state": "unknown",
+            "observation_id": None,
+            "series": monitor.get("series"),
+            "complete": None,
+            "gap": None,
+            "matching_traces": None,
+            "measurements": [],
+            "limitations": [],
+        }
+    coverage = observation.get("coverage") or {}
+    window = observation.get("window") or {}
+    metrics = observation.get("metrics") or []
+    metric_coverage = [
+        {
+            key: copy.deepcopy(metric.get(key))
+            for key in (
+                "name",
+                "count",
+                "population",
+                "coverage",
+                "time_coverage_complete",
+            )
+        }
+        for metric in metrics
+    ]
+    complete = coverage.get("complete")
+    if type(complete) is not bool:
+        complete = None
+    gap = window.get("gap") is True
+    incomplete_measurement = any(
+        metric.get("time_coverage_complete") is False for metric in metrics
+    )
+    if complete is False or gap or incomplete_measurement:
+        state = "partial"
+        complete = False
+    elif complete is True:
+        state = "complete"
+    else:
+        state = "unknown"
+    populations = [
+        metric["population"] for metric in metrics if type(metric.get("population")) in (int, float)
+    ]
+    waiting = (
+        state == "complete"
+        and bool(metrics)
+        and len(populations) == len(metrics)
+        and all(value == 0 for value in populations)
+    )
+    return {
+        "state": state,
+        "observation_id": observation.get("id"),
+        "series": observation.get("series"),
+        "complete": complete,
+        "gap": gap,
+        "matching_traces": max(populations) if populations else None,
+        "waiting_for_traffic": waiting,
+        "acquisition": copy.deepcopy(coverage),
+        "measurements": metric_coverage,
+        "limitations": copy.deepcopy(observation.get("limitations", [])),
+    }
+
+
+def _has_words(message, phrases):
+    text = message.casefold() if isinstance(message, str) else ""
+    return any(phrase in text for phrase in phrases)
+
+
+def _is_stale(monitor, at):
+    due = _time(monitor.get("next_due"))
+    current = _time(at)
+    if due is None or current is None:
+        return bool(monitor.get("enabled"))
+    # The scheduler checks every five seconds.  A short grace period keeps a
+    # newly enabled monitor from appearing stale before its first scheduler tick.
+    return bool(monitor.get("enabled")) and current > due + 60 * 1_000_000_000
+
+
+def _public_state(monitor, task, coverage, at):
+    task_state = task.get("state") if task else None
+    message = " ".join(
+        value
+        for value in (monitor.get("error"), task.get("next_action") if task else None)
+        if isinstance(value, str)
+    )
+    if monitor.get("state") == "paused":
+        code = "paused"
+    elif task_state in {"interrupted", "needs_input", "paused", "unavailable"}:
+        code = "interrupted_check"
+    elif task_state == "running":
+        code = "collecting"
+    elif task_state == "queued":
+        code = "scheduled"
+    elif _has_words(message, ("credential", "unauthenticated", "authentication", "api key")):
+        code = "credentials_needed"
+    elif _has_words(
+        message,
+        ("storage budget", "storage limit", "storage exhausted", "disk full", "no space left"),
+    ):
+        code = "storage_limit_reached"
+    elif (
+        task_state == "failed"
+        or monitor.get("failures", 0)
+        or monitor.get("state") == "needs_attention"
+    ):
+        code = "backing_off"
+    elif not monitor.get("enabled"):
+        code = "paused"
+    elif _is_stale(monitor, at):
+        code = "stale"
+    elif coverage["state"] == "partial":
+        code = "partial_coverage"
+    elif coverage.get("waiting_for_traffic"):
+        code = "waiting_for_traffic"
+    else:
+        code = "scheduled"
+    label, reason, action = PUBLIC_STATES[code]
+    return {
+        "code": code,
+        "label": label,
+        "reason": reason,
+        "resolution_action": action,
+        "task_state": task_state,
+        "next_due": monitor.get("next_due"),
+        "last_checked": monitor.get("last_checked"),
+    }
+
+
+def _project_monitor(application, project, monitor, observations, at):
+    current = _latest_observation(observations, monitor, current_series=True)
+    latest = _latest_observation(observations, monitor)
+    coverage = _coverage_summary(current, monitor)
+    latest_coverage = _coverage_summary(latest, monitor)
+    task = _task_evidence(application, project, monitor)
+    projected = copy.deepcopy(monitor)
+    # Keep this legacy boolean for existing consumers.  The richer public state
+    # uses an overdue grace period and does not equate missing evidence with health.
+    due = _time(monitor.get("next_due"))
+    projected["stale"] = not monitor.get("last_checked") or (due is None or (_time(at) or -1) > due)
+    projected.update(
+        public_state=_public_state(monitor, task, coverage, at),
+        current_check=task,
+        last_successful_window=(
+            {
+                "observation_id": latest.get("id"),
+                "series": latest.get("series"),
+                "coverage_complete": latest_coverage["complete"] is True,
+                **copy.deepcopy(latest.get("window", {})),
+            }
+            if latest
+            else None
+        ),
+        last_successful_checkpoint=copy.deepcopy(monitor.get("checkpoint")),
+        coverage_summary=coverage,
+        revision_summary={
+            "comparison_series": monitor.get("series"),
+            "operational_revision": monitor.get("operational_revision"),
+            "record_revision": monitor.get("revision"),
+        },
+    )
+    return projected
+
+
+def monitor_projection(application, project, monitor_id, *, observations=None, at=None):
+    """Return one read-only monitor projection without changing scheduler authority."""
+
+    application.state.project(project)
+    monitor = application.state.db.get_record(project, "monitors", monitor_id)
+    if monitor is None:
+        raise AuditError("monitor not found in this project")
+    records = (
+        application.state.db.list_records(project, "observations")
+        if observations is None
+        else observations
+    )
+    return _project_monitor(application, project, monitor, records, at or now())
 
 
 class Monitoring:
@@ -149,22 +421,47 @@ class Monitoring:
                     issue = get_issue(self.app.state.workspace(project), m["issue_id"])
                     if issue.get("agent_id") != agent["id"]:
                         raise AuditError("measurement issue belongs to another agent")
-            policy = {
+            comparison = {
                 "agent_id": agent["id"],
                 "selector": selector,
                 "binding_digest": agent["binding_digest"],
                 "measurements": measurements,
-                **config,
+                # This is currently both a provider acquisition bound and the
+                # maximum sampled population passed to comparison. Changing it
+                # can change the measured population, so it belongs here.
+                "trace_cap": config["trace_cap"],
             }
+            operations = {
+                "enabled": payload.get("enabled", False),
+                "interval_seconds": config["interval_seconds"],
+                "storage_budget_bytes": config["storage_budget_bytes"],
+                "catchup_days": config["catchup_days"],
+                "diagnosis": config["diagnosis"],
+            }
+            policy = {**comparison, **operations}
             policy_digest = digest(policy)
-            changed = not previous or previous["policy_digest"] != policy_digest
+            comparison_digest = digest(comparison)
+            operations_digest = digest(operations)
+            comparison_changed = (
+                not previous or previous.get("comparison_digest") != comparison_digest
+            )
+            operations_changed = (
+                not previous or previous.get("operations_digest") != operations_digest
+            )
+            changed = comparison_changed or operations_changed
             record = {
                 **(previous or {}),
                 **policy,
                 "id": monitor_id or "monitor_" + uuid.uuid4().hex[:24],
                 "policy_digest": policy_digest,
+                "comparison_digest": comparison_digest,
+                "operations_digest": operations_digest,
+                "operational_revision": (
+                    (previous.get("operational_revision", 1) if previous else 0)
+                    + int(operations_changed)
+                ),
                 "enabled": payload.get("enabled", False),
-                "series": (previous.get("series", 0) if previous else 0) + int(changed),
+                "series": (previous.get("series", 0) if previous else 0) + int(comparison_changed),
                 "next_due": now(),
                 "state": "ready" if payload.get("enabled") else "paused",
             }
@@ -184,7 +481,7 @@ class Monitoring:
                         self.app.runtime.control(
                             project, task["id"], "cancel", {"operation_id": str(uuid.uuid4())}
                         )
-            if changed:
+            if comparison_changed:
                 record.update(
                     checkpoint=None,
                     last_diagnosis_at=None,
@@ -218,11 +515,39 @@ class Monitoring:
                         )
                 monitor.update(task_id=None, pending=None, next_due=now(), state="ready")
             else:
+                enabled = action == "enable"
+                changed = monitor.get("enabled") is not enabled
                 monitor.update(
-                    enabled=action == "enable",
+                    enabled=enabled,
                     next_due=now(),
-                    state="ready" if action == "enable" else "paused",
+                    state="ready" if enabled else "paused",
                 )
+                if changed:
+                    operations = {
+                        key: monitor[key]
+                        for key in (
+                            "enabled",
+                            "interval_seconds",
+                            "storage_budget_bytes",
+                            "catchup_days",
+                            "diagnosis",
+                        )
+                    }
+                    comparison = {
+                        key: monitor[key]
+                        for key in (
+                            "agent_id",
+                            "selector",
+                            "binding_digest",
+                            "measurements",
+                            "trace_cap",
+                        )
+                    }
+                    monitor.update(
+                        operations_digest=digest(operations),
+                        policy_digest=digest({**comparison, **operations}),
+                        operational_revision=monitor.get("operational_revision", 1) + 1,
+                    )
                 if action == "pause" and monitor.get("task_id"):
                     task = self.app.runtime.get(project, monitor["task_id"])
                     if task["state"] in {"queued", "running"}:
@@ -236,11 +561,11 @@ class Monitoring:
 
         self.app.state.project(project)
         observations = self.db.list_records(project, "observations")
-        monitors = self.db.list_records(project, "monitors")
-        for monitor in monitors:
-            monitor["stale"] = (
-                not monitor.get("last_checked") or monitor.get("next_due", "") < now()
-            )
+        at = now()
+        monitors = [
+            _project_monitor(self.app, project, monitor, observations, at)
+            for monitor in self.db.list_records(project, "monitors")
+        ]
         return {
             "monitors": monitors,
             "observations": observations,

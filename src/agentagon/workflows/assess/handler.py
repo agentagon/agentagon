@@ -59,14 +59,28 @@ def accept(workspace, job, result):
             {"summary": result.get("summary", "Assessment complete"), "issue_ids": []},
             None,
         )
-    candidates = result.get("candidates", [])
     supplied = {c["id"]: c for c in prepared.get("candidates", [])}
+    candidates = result.get("candidates", [])
+    if not prepared.get("brain_requested"):
+        if candidates:
+            raise AuditError("candidate review requires the managed coding backend")
+        # Static discovery already retained these stable suggestions in the catalog. Include
+        # the exact bounded candidates in the assessment result so a partial run still hands
+        # the user something reviewable rather than appearing to have found nothing.
+        candidates = [
+            {
+                "id": candidate["id"],
+                "file": candidate["file"],
+                "name": candidate["name"],
+                "keep": True,
+                "responsibility": "",
+            }
+            for candidate in supplied.values()
+        ]
     if not isinstance(candidates, list) or (
         prepared.get("brain_requested") and len(candidates) != len(supplied)
     ):
         raise AuditError("invalid candidate review")
-    if not prepared.get("brain_requested") and candidates:
-        raise AuditError("candidate review requires the managed coding backend")
     seen = set()
     for candidate in candidates:
         if (
@@ -81,7 +95,11 @@ def accept(workspace, job, result):
             or len(candidate["name"]) > 160
             or not isinstance(candidate.get("responsibility"), str)
             or len(candidate["responsibility"]) > 1000
-            or (candidate["keep"] and not candidate["responsibility"].strip())
+            or (
+                prepared.get("brain_requested")
+                and candidate["keep"]
+                and not candidate["responsibility"].strip()
+            )
             or (not candidate["keep"] and bool(candidate["responsibility"].strip()))
         ):
             raise AuditError(

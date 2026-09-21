@@ -39,8 +39,10 @@ class FolderStore:
             fcntl.flock(lock, fcntl.LOCK_EX)
             yield
 
-    def entries(self):
-        latest = {}
+    def revisions(self, entry_id=None):
+        if entry_id is not None:
+            identifier(entry_id, "memory")
+        revisions = []
         for index, path in enumerate(sorted(self.root.glob("entry-*.json"))):
             if index >= MAX_ENTRIES:
                 raise AuditError("memory group exceeds its 2000 revision bound")
@@ -52,6 +54,14 @@ class FolderStore:
                 "digest"
             ):
                 raise AuditError("memory entry integrity check failed")
+            if entry_id is None or record["id"] == entry_id:
+                revisions.append(record)
+        revisions.sort(key=lambda record: (record["id"], record["version"]))
+        return revisions
+
+    def entries(self):
+        latest = {}
+        for record in self.revisions():
             if record["id"] not in latest or record["version"] > latest[record["id"]]["version"]:
                 latest[record["id"]] = record
         return list(latest.values())
@@ -63,6 +73,9 @@ class FolderStore:
             "evidence",
             "uncertainty",
             "expected_version",
+            "status",
+            "revision_kind",
+            "revision_note",
         }:
             raise AuditError("unsupported memory entry fields")
         key, text = payload.get("key"), payload.get("text")
@@ -82,6 +95,28 @@ class FolderStore:
             raise AuditError("memory evidence must be bounded references")
         if not isinstance(payload.get("uncertainty", ""), str):
             raise AuditError("memory uncertainty must be text")
+        status = payload.get("status", "active")
+        revision_kind = payload.get("revision_kind", "recorded")
+        revision_note = payload.get("revision_note", "")
+        if status not in {"active", "outdated"}:
+            raise AuditError("memory status must be active or outdated")
+        if revision_kind not in {"recorded", "note", "outdated", "revised"}:
+            raise AuditError("unsupported memory revision kind")
+        if (
+            not isinstance(revision_note, str)
+            or len(revision_note) > 4000
+            or (revision_kind != "recorded" and not revision_note.strip())
+        ):
+            raise AuditError("memory correction requires a bounded revision note")
+        if revision_kind == "outdated" and status != "outdated":
+            raise AuditError("an outdated revision must mark the memory entry outdated")
+        if revision_kind == "revised" and status != "active":
+            raise AuditError("a revised memory entry must be active")
+        expected_version = payload.get("expected_version")
+        if expected_version is not None and (
+            type(expected_version) is not int or expected_version < 0
+        ):
+            raise AuditError("memory expected version must be a non-negative integer")
         if len(encoded(payload).encode()) > MAX_ENTRY_BYTES:
             raise AuditError("memory entry exceeds 32 KB")
         entry_id = identifier("memory", self.group["id"], key)
@@ -94,14 +129,21 @@ class FolderStore:
                     "text": text,
                     "evidence": evidence,
                     "uncertainty": payload.get("uncertainty", ""),
+                    "status": status,
+                    "revision_kind": revision_kind,
+                    "revision_note": revision_note.strip(),
                 }
             )
-            if existing and all(existing[k] == v for k, v in clean.items()):
+            if expected_version is not None and expected_version != version:
+                raise AuditError("memory entry changed; reload before updating")
+            if (
+                existing
+                and expected_version is None
+                and all(existing.get(k) == v for k, v in clean.items())
+            ):
                 return existing
             if sum(1 for _ in self.root.glob("entry-*.json")) >= MAX_ENTRIES:
                 raise AuditError("memory group has reached its revision bound")
-            if payload.get("expected_version", version) != version:
-                raise AuditError("memory entry changed; reload before updating")
             entry = {
                 **clean,
                 "id": entry_id,
@@ -153,21 +195,29 @@ class MemoryGroups:
 
     def improvement_groups(self, project_id, agent_id=None):
         with self.registry_lock():
-            groups = self.list(project_id, agent_id, "improvement")
-            if groups:
+            # ``list`` without an agent intentionally returns registry metadata for
+            # every group shared with the project. Entry access is narrower: an
+            # agent-bound group must never be recalled by an agentless workflow.
+            groups = [
+                group
+                for group in self.list(project_id, agent_id, "improvement")
+                if not group["agent_ids"] or agent_id in group["agent_ids"]
+            ]
+            # Read-only shared groups are valid recall sources, but every project
+            # also needs a writable improvement group for outcome recording.
+            if any(project_id in group["write_project_ids"] for group in groups):
                 return groups
             workspace = self.state.workspace(project_id)
             workspace.initialize()
-            return [
-                self._create(
-                    project_id,
-                    {
-                        "name": "Improvement lessons",
-                        "purpose": "improvement",
-                        "path": str(workspace.state / "memory" / "improvement"),
-                    },
-                )
-            ]
+            created = self._create(
+                project_id,
+                {
+                    "name": "Improvement lessons",
+                    "purpose": "improvement",
+                    "path": str(workspace.state / "memory" / "improvement"),
+                },
+            )
+            return [*groups, created]
 
     def create(self, project_id, payload):
         with self.registry_lock():
@@ -247,6 +297,13 @@ class MemoryGroups:
     def record(self, project_id, group_id, payload, agent_id=None):
         return FolderStore(self.get(project_id, group_id, agent_id, write=True)).record(payload)
 
+    def history(self, project_id, group_id, entry_id, agent_id=None):
+        group = self.get(project_id, group_id, agent_id)
+        revisions = FolderStore(group).revisions(entry_id)
+        if not revisions:
+            raise AuditError("lesson not found in this memory group")
+        return {"group": group, "versions": revisions}
+
     def recall(self, project_id, group_id, query, agent_id=None, limit=10):
         group = self.get(project_id, group_id, agent_id)
         if (
@@ -257,7 +314,11 @@ class MemoryGroups:
         ):
             raise AuditError("recall requires a bounded query and limit of 1–50")
         terms = set(re.findall(r"[^\W_]+", query.casefold()))
-        entries = FolderStore(group).entries()
+        entries = [
+            entry
+            for entry in FolderStore(group).entries()
+            if entry.get("status", "active") == "active"
+        ]
         entries.sort(
             key=lambda e: (
                 -len(terms & set(re.findall(r"[^\W_]+", (e["key"] + " " + e["text"]).casefold()))),
@@ -281,7 +342,16 @@ class MemoryGroups:
         for group in self.list(project_id, agent_id, purpose):
             if purpose == "agent" and agent_id not in group["agent_ids"]:
                 continue
-            groups.append({"group_id": group["id"], "entries": FolderStore(group).entries()})
+            groups.append(
+                {
+                    "group_id": group["id"],
+                    "entries": [
+                        entry
+                        for entry in FolderStore(group).entries()
+                        if entry.get("status", "active") == "active"
+                    ],
+                }
+            )
         value = {
             "version": 1,
             "project_id": project_id,

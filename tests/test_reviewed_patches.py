@@ -12,6 +12,7 @@ from support.experiments import git
 from agentagon.capabilities.experiments import delivery, patches, runners, store
 from agentagon.cli.internal import main
 from agentagon.core.records import AuditError
+from agentagon.workflows.service import Application
 
 
 def start(workspace, *, checks=None, **updates):
@@ -87,6 +88,29 @@ def test_checked_patch_delivers_locally_without_remote_and_preserves_origin(work
     assert summary["status"] == "reviewed_unmeasured" and summary["comparison"] is None
     assert "private-reason" not in Path(shipped["artifacts"]["pr_body"]).read_text()
     assert "+    return city" in Path(shipped["artifacts"]["diff"]).read_text()
+
+
+def test_application_exposes_only_reviewed_patch_summary_and_delivery(workspace, tmp_path):
+    result = reviewed(workspace)
+    app = Application(tmp_path / "application-state", execute=lambda *_: {})
+    try:
+        project = app.register(str(workspace.root))
+        shown = app.result(project["id"], "patch", result["patch_id"])
+        assert shown["state"] == "reviewed_unmeasured"
+        assert shown["allowed_actions"] == ["prepare_local_delivery"]
+        assert "env" not in str(shown) and "argv" not in str(shown)
+        prepared = app.deliver(
+            project["id"],
+            {"kind": "patch", "source_id": result["patch_id"], "publish": False},
+        )
+        assert prepared["state"] == "prepared"
+        reloaded = app.result(project["id"], "patch", result["patch_id"])
+        retained = reloaded["deliveries"][0]
+        assert retained["delivery_id"] == prepared["delivery_id"]
+        assert set(retained["artifact_urls"]) == {"summary", "pr_body", "diff", "diffstat"}
+        assert app.delivery_artifact(project["id"], prepared["delivery_id"], "diff")
+    finally:
+        app.close()
 
 
 def test_patch_requires_clean_origin_and_declared_scope(workspace):

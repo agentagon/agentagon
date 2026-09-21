@@ -45,7 +45,7 @@ Related findings can be retained as issues across audits. Use the dashboard to i
 | `dismissed` | Reviewed and rejected with a reason. |
 | `reopened` | The issue recurred or was explicitly reopened. |
 
-Ask your coding agent to update an issue with the reason and appropriate evidence. Selecting a branch or creating a PR does not resolve it. Verified resolution must refer to a verified run and candidate that support this issue, and the current checkout must match the tested application state.
+Open the issue to assign a confirmed owner, save reviewed expected behavior, mark it **Not actionable** with a reason, or reopen it. Dashboard and MCP apply each decision against the issue's current revision and preserve earlier evidence and decision history. Selecting a branch or creating a PR does not resolve an issue. Verified resolution must refer to a verified run and candidate that support this issue, and the current checkout must match the tested application state.
 
 The complete [issue-history reference](../src/agentagon/workflows/audit/references/history.md) documents CLI status updates. Use supported commands; do not rewrite saved history files.
 

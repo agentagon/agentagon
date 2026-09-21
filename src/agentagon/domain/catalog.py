@@ -150,6 +150,19 @@ class Catalog:
             key=lambda a: (a["status"] != "confirmed", a["name"].lower()),
         )
 
+    def excluded_agents(self, project_id):
+        """Return discovery identities deliberately kept out of the active inventory."""
+
+        self.state.project(project_id)
+        return sorted(
+            (
+                agent
+                for agent in self.state.db.list_records(project_id, "application_agents")
+                if agent.get("status") == "archived" and agent.get("discovery_key")
+            ),
+            key=lambda agent: (agent.get("name", "").casefold(), agent["id"]),
+        )
+
     def discovery_preferences(self, project_id):
         self.state.project(project_id)
         saved = self.state.db.get_record(
@@ -193,7 +206,7 @@ class Catalog:
             expected_revision=current.get("revision", 0),
         )
 
-    def apply_coding_review(self, project_id, reviews):
+    def apply_coding_review(self, project_id, reviews, *, task_id=None):
         if not isinstance(reviews, list) or len(reviews) > 100:
             raise AuditError("coding-agent discovery review is invalid")
         suggestions = {
@@ -232,21 +245,76 @@ class Catalog:
             )
             if not review["keep"] and responsibility:
                 raise AuditError("excluded coding-agent candidates must not have a responsibility")
+            manually_edited = (record.get("responsibility_inference") or {}).get(
+                "state"
+            ) == "edited" and bool(record.get("description", "").strip())
             evidence = [
                 item
                 for item in record.get("evidence", [])
                 if not isinstance(item, dict) or item.get("kind") != "coding_agent_review"
             ]
             evidence.append(
-                {"kind": "coding_agent_review", "decision": "keep" if review["keep"] else "exclude"}
+                {
+                    "kind": "coding_agent_review",
+                    "decision": "preserve_manual_edit"
+                    if manually_edited
+                    else "keep"
+                    if review["keep"]
+                    else "exclude",
+                    "task_id": task_id,
+                }
             )
             updates.append(
                 {
                     **record,
-                    "name": name,
-                    "description": responsibility if review["keep"] else record["description"],
-                    "status": "suggested" if review["keep"] else "archived",
+                    "name": record["name"] if manually_edited else name,
+                    "description": (
+                        record["description"]
+                        if manually_edited or not review["keep"]
+                        else responsibility
+                    ),
+                    "status": "suggested" if manually_edited or review["keep"] else "archived",
                     "evidence": evidence,
+                    "responsibility_inference": (
+                        record["responsibility_inference"]
+                        if manually_edited
+                        else {
+                            "state": "inferred" if review["keep"] else "excluded",
+                            **(
+                                {}
+                                if review["keep"]
+                                else {
+                                    "reason": (
+                                        "Managed review classified this code candidate as outside "
+                                        "the application-agent inventory."
+                                    )
+                                }
+                            ),
+                            "task_id": task_id,
+                            "at": now(),
+                            "source_discovery_key": record.get("discovery_key"),
+                        }
+                    ),
+                    "identity_review": (
+                        record.get("identity_review", {})
+                        if manually_edited
+                        else {
+                            "state": "suggested" if review["keep"] else "excluded",
+                            **(
+                                {}
+                                if review["keep"]
+                                else {
+                                    "reason": (
+                                        "Managed review classified this code candidate as outside "
+                                        "the application-agent inventory."
+                                    )
+                                }
+                            ),
+                            "at": now(),
+                            "source": "coding_agent_review",
+                            "discovery_key": record.get("discovery_key"),
+                        }
+                    ),
                 }
             )
         if updates:
@@ -344,6 +412,16 @@ class Catalog:
         record["description"] = _text(
             payload.get("description", previous.get("description", "")), "description", empty=True
         )
+        if (
+            previous
+            and "description" in payload
+            and record["description"] != previous.get("description", "")
+        ):
+            record["responsibility_inference"] = {
+                "state": "edited",
+                "at": now(),
+                "source_discovery_key": previous.get("discovery_key"),
+            }
         record["code_scopes"] = _paths(
             payload.get("code_scopes", previous.get("code_scopes", [])), root
         )
@@ -382,6 +460,106 @@ class Catalog:
             )
         return saved
 
+    def confirm_suggestion(self, project_id, agent_id, expected_revision):
+        """Confirm the exact retained suggestion shown to the user."""
+
+        agent = self.agent(project_id, agent_id)
+        if agent["status"] != "suggested":
+            raise AuditError("only a suggested identity can be confirmed")
+        if type(expected_revision) is not int or expected_revision != agent["revision"]:
+            raise AuditError("application record changed; reload before updating")
+        if not agent.get("description", "").strip():
+            raise AuditError("resolve the agent responsibility before confirming this identity")
+        evidence = [*agent.get("evidence", [])]
+        evidence.append({"kind": "identity_review", "decision": "confirm", "at": now()})
+        return self.save_agent(
+            project_id,
+            {"status": "confirmed", "expected_revision": expected_revision},
+            agent_id,
+            suggestion={
+                "evidence": evidence,
+                "identity_review": {
+                    "state": "confirmed",
+                    "at": now(),
+                    "source": "user",
+                    "discovery_key": agent.get("discovery_key"),
+                },
+            },
+        )
+
+    def exclude_suggestion(self, project_id, agent_id, reason, expected_revision):
+        """Exclude one suggestion while retaining its stable discovery identity."""
+
+        agent = self.agent(project_id, agent_id)
+        if agent["status"] != "suggested" or not agent.get("discovery_key"):
+            raise AuditError("only a discovered suggested identity can be excluded")
+        reason = _text(reason, "exclusion reason", 500)
+        if type(expected_revision) is not int or expected_revision != agent["revision"]:
+            raise AuditError("application record changed; reload before updating")
+        reviewed_at = now()
+        evidence = [*agent.get("evidence", [])]
+        evidence.append(
+            {"kind": "identity_review", "decision": "exclude", "reason": reason, "at": reviewed_at}
+        )
+        record = {
+            **agent,
+            "status": "archived",
+            "evidence": evidence,
+            "identity_review": {
+                "state": "excluded",
+                "reason": reason,
+                "at": reviewed_at,
+                "source": "user",
+                "discovery_key": agent["discovery_key"],
+            },
+        }
+        return self.state.db.put_record(
+            project_id,
+            "application_agents",
+            agent_id,
+            record,
+            expected_revision=expected_revision,
+        )
+
+    def restore_suggestion(self, project_id, agent_id, expected_revision):
+        """Return one excluded discovery identity to the review queue."""
+
+        agent = self.agent(project_id, agent_id)
+        if agent["status"] != "archived" or not agent.get("discovery_key"):
+            raise AuditError("only an excluded discovered identity can be restored")
+        if type(expected_revision) is not int or expected_revision != agent["revision"]:
+            raise AuditError("application record changed; reload before updating")
+        root = self.state.workspace(project_id).root
+        if (
+            agent.get("code_scopes")
+            and not any(discovery.eligible_suggestion(root, path) for path in agent["code_scopes"])
+            and not agent.get("trace_selector")
+        ):
+            raise AuditError(
+                "the discovered source is no longer available; analyze the project again"
+            )
+        reviewed_at = now()
+        evidence = [*agent.get("evidence", [])]
+        evidence.append({"kind": "identity_review", "decision": "restore", "at": reviewed_at})
+        record = {
+            **agent,
+            "status": "suggested",
+            "evidence": evidence,
+            "identity_review": {
+                "state": "suggested",
+                "at": reviewed_at,
+                "source": "user",
+                "discovery_key": agent["discovery_key"],
+            },
+        }
+        return self.state.db.put_record(
+            project_id,
+            "application_agents",
+            agent_id,
+            record,
+            expected_revision=expected_revision,
+        )
+
     def discover(self, project_id, snapshot_ids=None):
         workspace = self.state.workspace(project_id)
         existing = {
@@ -412,6 +590,10 @@ class Catalog:
                 ):
                     found[matches[0]["id"]] = matches[0]
                     continue
+                code_evidence = {"kind": "code", **entry, "captured_at": now()}
+                context = discovery.source_context(workspace.root, entry["path"], entry["line"])
+                if context:
+                    code_evidence["context"] = context
                 existing[key] = self.save_agent(
                     project_id,
                     {
@@ -423,7 +605,12 @@ class Catalog:
                     suggestion={
                         "discovery_key": key,
                         "confidence": "suggested",
-                        "evidence": [{"kind": "code", **entry}],
+                        "evidence": [code_evidence],
+                        "responsibility_inference": {
+                            "state": "pending",
+                            "reason": "Awaiting bounded coding-backend review.",
+                            "source_discovery_key": key,
+                        },
                     },
                 )
             if existing[key]["status"] != "archived":

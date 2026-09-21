@@ -36,6 +36,20 @@ class Provider:
 
     def preview(self, kind, selection):
         self.calls.append((kind, selection))
+        if kind == "traces":
+            return {
+                "items": [
+                    {
+                        "span_id": "span-one",
+                        "root_span_id": "trace-one",
+                        "span_parents": [],
+                        "span_attributes": {"type": "agent"},
+                        "metrics": {"start": 1, "end": 2},
+                    }
+                ],
+                "provenance": {"provider": "braintrust", "version": "pinned-version"},
+                "completeness": {"complete": True, "count": 1},
+            }
         return {
             "items": [
                 {
@@ -237,6 +251,11 @@ def running(app):
 def test_register_and_read_never_initializes_or_executes(app, tmp_path):
     saved = project(app, tmp_path)
     assert app.register(saved["path"])["id"] == saved["id"]
+    assert app.projects()["projects"][0]["source"] == {
+        "kind": "folder",
+        "revision": None,
+        "dirty": None,
+    }
     assert not (tmp_path / "project" / ".agentagon").exists()
     assert app.overview(saved["id"])["audits"] == []
     assert app.overview(saved["id"])["tasks"] == []
@@ -295,11 +314,131 @@ def test_snapshot_import_replay_and_project_isolation(app, tmp_path):
     saved = app.import_preview(first["id"], payload)
     assert saved["state"] == "draft" and saved["missing_expectations"] == 1
     assert app.import_preview(first["id"], payload)["id"] == saved["id"]
+    repeated_preview = app.preview(
+        first["id"],
+        {
+            "connection_id": source["id"],
+            "kind": "dataset",
+            "selection": {"dataset_id": "one", "cap": 10},
+        },
+    )
+    assert repeated_preview["preview_id"] != preview["preview_id"]
+    assert (
+        app.import_preview(
+            first["id"],
+            {**payload, "preview_id": repeated_preview["preview_id"]},
+        )["id"]
+        == saved["id"]
+    )
     assert app.overview(first["id"])["datasets"][0]["id"] == saved["id"]
     with pytest.raises(AuditError, match="not found"):
         app.result(second["id"], "dataset", saved["id"])
     app.disconnect(first["id"], source["id"])
     assert app.overview(first["id"])["datasets"][0]["id"] == saved["id"]
+
+
+def test_preview_confirmation_consumes_preview_and_shares_import_operation_namespace(app, tmp_path):
+    saved_project = project(app, tmp_path)
+    source = connection(app, saved_project["id"])
+    preview = app.preview(
+        saved_project["id"],
+        {
+            "connection_id": source["id"],
+            "kind": "dataset",
+            "selection": {"dataset_id": "one"},
+        },
+    )
+    operation = str(uuid.uuid4())
+    app.import_preview(
+        saved_project["id"],
+        {"preview_id": preview["preview_id"], "operation_id": operation},
+    )
+    assert preview["preview_id"] not in app.previews
+
+    trace = {
+        "span_id": "root",
+        "root_span_id": "trace-one",
+        "span_parents": [],
+        "span_attributes": {"type": "task"},
+        "metrics": {"start": 1, "end": 2},
+        "metadata": {},
+    }
+    with pytest.raises(AuditError, match="operation_id already belongs"):
+        app.import_trace(
+            saved_project["id"],
+            {
+                "operation_id": operation,
+                "provider": "braintrust",
+                "data": [trace],
+            },
+        )
+
+    direct_operation = str(uuid.uuid4())
+    app.import_trace(
+        saved_project["id"],
+        {
+            "operation_id": direct_operation,
+            "provider": "braintrust",
+            "data": [trace],
+        },
+    )
+    another = app.preview(
+        saved_project["id"],
+        {
+            "connection_id": source["id"],
+            "kind": "dataset",
+            "selection": {"dataset_id": "one"},
+        },
+    )
+    with pytest.raises(AuditError, match="operation_id already belongs"):
+        app.import_preview(
+            saved_project["id"],
+            {"preview_id": another["preview_id"], "operation_id": direct_operation},
+        )
+
+
+def test_trace_preview_confirmation_is_idempotent_and_operation_bound(app, tmp_path):
+    saved_project = project(app, tmp_path)
+    trace = [
+        {
+            "traceId": "a" * 32,
+            "spanId": "1" * 16,
+            "name": "weather",
+            "startTimeUnixNano": "1000000000",
+            "endTimeUnixNano": "2000000000",
+        }
+    ]
+    preview = app.preview_trace_import(saved_project["id"], {"provider": "auto", "data": trace})
+    workspace = app.state.workspace(saved_project["id"])
+    assert snapshots.list_snapshots(workspace) == []
+
+    operation = str(uuid.uuid4())
+    payload = {"preview_id": preview["preview_id"], "operation_id": operation}
+    saved = app.import_preview(saved_project["id"], payload)
+    repeated_preview = app.preview_trace_import(
+        saved_project["id"], {"provider": "auto", "data": trace}
+    )
+    assert (
+        app.import_preview(
+            saved_project["id"],
+            {"preview_id": repeated_preview["preview_id"], "operation_id": operation},
+        )["id"]
+        == saved["id"]
+    )
+
+    changed = app.preview_trace_import(
+        saved_project["id"],
+        {"provider": "auto", "data": [{**trace[0], "spanId": "2" * 16}]},
+    )
+    with pytest.raises(AuditError, match="operation_id already belongs to another import"):
+        app.import_preview(
+            saved_project["id"],
+            {"preview_id": changed["preview_id"], "operation_id": operation},
+        )
+
+    app.previews.clear()
+    assert app.import_preview(saved_project["id"], payload)["id"] == saved["id"]
+    assert len(snapshots.list_snapshots(workspace)) == 1
 
 
 def test_import_uses_provider_cleaned_selection_without_echoing_credentials(app, tmp_path):

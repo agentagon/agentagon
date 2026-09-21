@@ -76,6 +76,56 @@ def test_fix_report_defaults_and_nonfinite_metrics(workspace):
     assert "No branch has been selected" in render_fix_markdown(report)
 
 
+def test_non_scoring_comparisons_retain_each_verified_pareto_alternative(workspace):
+    candidates = {
+        "baseline": {
+            "candidate_id": "baseline",
+            "state": "verified",
+            "feasible": True,
+            "metrics": {"quality": 0.8, "latency": 100},
+        },
+        "faster": {
+            "candidate_id": "faster",
+            "parent_id": "baseline",
+            "state": "verified",
+            "feasible": True,
+            "metrics": {"quality": 0.8, "latency": 80},
+        },
+        "better": {
+            "candidate_id": "better",
+            "parent_id": "baseline",
+            "state": "verified",
+            "feasible": True,
+            "metrics": {"quality": 0.9, "latency": 100},
+        },
+        "dominated": {
+            "candidate_id": "dominated",
+            "parent_id": "baseline",
+            "state": "verified",
+            "feasible": True,
+            "metrics": {"quality": 0.7, "latency": 120},
+        },
+    }
+    report = build_fix_report(
+        workspace,
+        {
+            "run_id": "run_pareto",
+            "baseline_id": "baseline",
+            "spec": {
+                "metrics": {
+                    "quality": {"direction": "max", "unit": "fraction"},
+                    "latency": {"direction": "min", "unit": "ms"},
+                }
+            },
+            "candidates": candidates,
+        },
+    )
+    assert {item["id"] for item in report["comparisons"]["alternatives"]} == {
+        "faster",
+        "better",
+    }
+
+
 def test_fix_markdown_includes_all_dimensions_and_baseline_deltas(workspace, fix_run):
     fix_run["candidates"]["candidate_tradeoff"]["metrics"]["memory_mb"] = 300
     text = render_fix_markdown(build_fix_report(workspace, fix_run))

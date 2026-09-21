@@ -64,8 +64,15 @@ def connector_types():
 
 
 def agent_projection(agent):
+    inference = copy.deepcopy(agent.get("responsibility_inference"))
+    if not inference:
+        inference = {
+            "state": "unavailable",
+            "reason": "No retained responsibility inference is available for this saved identity.",
+        }
     return {key: copy.deepcopy(value) for key, value in agent.items() if key != "description"} | {
-        "responsibility": agent.get("description", "")
+        "responsibility": agent.get("description", ""),
+        "responsibility_inference": inference,
     }
 
 
@@ -106,7 +113,8 @@ def task_summary(job, agents=None, goals=None):
         "title": job.get("goal") or workflows.REGISTRY.get(job.get("kind"), {}).get("name"),
         "state": state,
         "needs_attention": state in {"needs_input", "interrupted", "failed"}
-        or bool(job.get("question")),
+        or bool(job.get("question"))
+        or (bool(job.get("memory_note")) and int(job.get("memory_retry_count", 0)) >= 3),
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at"),
     }
@@ -127,9 +135,30 @@ def task_detail(job, agents=None, goals=None):
         question=copy.deepcopy(public.get("question")),
         progress=copy.deepcopy(public.get("progress")),
         result=copy.deepcopy(public.get("result")),
+        workflow_ids={
+            key: value
+            for key, value in public.get("workflow_ids", {}).items()
+            if key in {"audit_id", "evaluation_id", "baseline_id", "run_id", "patch_id"}
+            and isinstance(value, str)
+        },
         next_action=public.get("next_action"),
         can_resume=public.get("state") in {"paused", "interrupted", "failed"},
         can_cancel=public.get("state") in ACTIVE | {"interrupted"},
         revision=public.get("revision"),
+        memory_recording=(
+            {
+                "state": (
+                    "needs_attention"
+                    if int(public.get("memory_retry_count", 0)) >= 3
+                    else "retrying"
+                ),
+                "message": public["memory_note"],
+                "automatic_retry": int(public.get("memory_retry_count", 0)) < 3,
+                "attempts": int(public.get("memory_retry_count", 0)),
+                "last_attempt_at": public.get("memory_retry_at"),
+            }
+            if public.get("memory_note")
+            else None
+        ),
     )
     return result

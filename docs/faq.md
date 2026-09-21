@@ -34,7 +34,7 @@ No. Start with a goal based on requirements, code or existing tests, then agree 
 
 ## Is it fully local or offline?
 
-The bundled synthetic example needs no network after installation. Evidence is stored locally, but agent-led reasoning uses your coding host’s model service. Benchmarks and optional providers may use the network. Product telemetry is enabled by default and can be disabled. See [Privacy and data](privacy.md).
+The bundled synthetic example needs no network after installation. Evidence is stored locally, but agent-led reasoning uses your coding host’s model service. Benchmarks and optional providers may use the network. Product telemetry is disabled by default and requires explicit opt-in. See [Privacy and data](privacy.md).
 
 ## Does it keep running when I close the coding agent?
 
@@ -62,4 +62,4 @@ You choose among verified alternatives. Agentagon can prepare the selected chang
 
 ## Where should I start?
 
-[Install Agentagon](getting-started/install.md), then [open the web app](app.md), select an application agent and define a goal. Review its measurement plan before preparing an evaluation and baseline. [Audit](audit.md) remains available through the CLI and optional skills for separate investigations. To inspect the local evidence format first, use the [synthetic example](getting-started/local-example.md).
+[Install Agentagon](getting-started/install.md), then [open any local agent folder](app.md) and choose **Analyze project**. Review the suggested identities and confirm the exact agent scope. Bring one failure through **All issues**, or create an evaluation when you want to improve a broader behavior. A goal is optional for a trace-driven Fix. [Audit](audit.md) remains available for a separate fixed-rubric investigation. To inspect the local evidence format first, use the [synthetic example](getting-started/local-example.md).

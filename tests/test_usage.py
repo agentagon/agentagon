@@ -30,6 +30,14 @@ RESPONSE = {
 }
 
 
+@pytest.fixture(autouse=True)
+def explicit_telemetry_opt_in(request):
+    """Delivery tests opt in; the default-behavior test exercises a fresh config."""
+
+    if request.node.name != "test_defaults_and_inspection_have_no_side_effects":
+        Config().update("user", values={"telemetry.enabled": True})
+
+
 @pytest.fixture
 def posthog(monkeypatch):
     state = {"requests": [], "response": httpx.Response(200, json={"status": 1})}
@@ -93,12 +101,13 @@ def receipt_for(workspace, audit_id, monkeypatch):
 
 def test_defaults_and_inspection_have_no_side_effects(posthog):
     assert Config().summary()["telemetry"] == {
-        "enabled": True,
+        "enabled": False,
         "configured": True,
         "pending": 0,
         "dropped": 0,
         "delivery": "idle",
     }
+    assert track("workflow_started", workflow="audit") == {"status": "disabled"}
     runner = CliRunner()
     assert runner.invoke(main, ["setup", "--scope", "user"]).exit_code == 0
     assert runner.invoke(main, ["--help"]).exit_code == 0

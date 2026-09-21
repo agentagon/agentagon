@@ -420,24 +420,101 @@ def _scoring_definition_projection(value: dict) -> dict:
     return result
 
 
+def _non_scoring_frontier(data: dict) -> list[str]:
+    """Return a Pareto frontier without assuming a complete persisted run.
+
+    Normal engine records satisfy ``evaluation.frontier``'s strict contract, but
+    report readers also handle interrupted and older partial records.  Missing
+    candidate state or measurements make that candidate ineligible rather than
+    making the whole report unreadable.
+    """
+    from agentagon.capabilities.experiments import evaluation
+
+    raw = data.get("candidates")
+    if not isinstance(raw, dict):
+        return []
+    normalized = {
+        candidate_id: {**candidate, "candidate_id": candidate.get("candidate_id", candidate_id)}
+        for candidate_id, candidate in raw.items()
+        if isinstance(candidate_id, str) and isinstance(candidate, dict)
+    }
+    source_spec = data.get("spec") if isinstance(data.get("spec"), dict) else {}
+    definitions = source_spec.get("metrics") if isinstance(source_spec.get("metrics"), dict) else {}
+    spec = {**source_spec, "metrics": definitions}
+    eligible = []
+    candidate_data = {**data, "candidates": normalized, "spec": spec}
+    for candidate in normalized.values():
+        metrics = candidate.get("metrics")
+        if (
+            candidate.get("state") != "verified"
+            or not candidate.get("feasible")
+            or not isinstance(metrics, dict)
+            or any(not _fix_number(metrics.get(name)) for name in definitions)
+        ):
+            continue
+        try:
+            invalidated = evaluation.invalidated(candidate_data, candidate)
+        except (KeyError, TypeError, ValueError):
+            invalidated = True
+        if not invalidated:
+            eligible.append(candidate)
+    return sorted(
+        candidate["candidate_id"]
+        for candidate in eligible
+        if not any(
+            other["candidate_id"] != candidate["candidate_id"]
+            and evaluation.dominates(spec, other["metrics"], candidate["metrics"])
+            for other in eligible
+        )
+    )
+
+
 def _top_comparisons(data: dict, candidates: list[dict], *, eligible_ids=None) -> dict:
     from agentagon.capabilities.experiments import scoring
 
     baseline_id = data.get("baseline_id")
     baseline = next((candidate for candidate in candidates if candidate["id"] == baseline_id), {})
-    ranked = scoring.qualifying(data) if data.get("spec", {}).get("scoring") else []
-    originals = ranked
-    raw = data.get("candidates", {})
+    ranked = (
+        scoring.qualifying(data)
+        if data.get("spec", {}).get("scoring")
+        else [
+            {"candidate_id": candidate_id}
+            for candidate_id in _non_scoring_frontier(data)
+            if candidate_id != baseline_id
+        ]
+    )
+    originals = list(ranked)
+    raw = data.get("candidates") if isinstance(data.get("candidates"), dict) else {}
     if data.get("optimizer_configured"):
-        ranked = [entry for entry in ranked if raw[entry["candidate_id"]].get("verification_of")]
+        ranked = [
+            entry
+            for entry in ranked
+            if isinstance(entry, dict)
+            and isinstance(raw.get(entry.get("candidate_id")), dict)
+            and raw[entry["candidate_id"]].get("verification_of")
+        ]
     if eligible_ids is not None:
-        ranked = [entry for entry in ranked if entry["candidate_id"] in eligible_ids]
+        ranked = [
+            entry
+            for entry in ranked
+            if isinstance(entry, dict) and entry.get("candidate_id") in eligible_ids
+        ]
     selected_id = (data.get("selected") or {}).get("candidate_id")
-    ranked = sorted(ranked, key=lambda entry: entry["candidate_id"] != selected_id)
+    ranked = sorted(
+        [
+            entry
+            for entry in ranked
+            if isinstance(entry, dict) and isinstance(entry.get("candidate_id"), str)
+        ],
+        key=lambda entry: entry["candidate_id"] != selected_id,
+    )
     displayed = {candidate["id"]: candidate for candidate in candidates}
     alternatives, seen = [], set()
     for entry in ranked:
-        candidate = raw[entry["candidate_id"]]
+        candidate = raw.get(entry["candidate_id"])
+        projected = displayed.get(entry["candidate_id"])
+        if not isinstance(candidate, dict) or projected is None:
+            continue
         source = (
             candidate.get("source_digest")
             or candidate.get("source_revision")
@@ -446,7 +523,7 @@ def _top_comparisons(data: dict, candidates: list[dict], *, eligible_ids=None) -
         if source in seen:
             continue
         seen.add(source)
-        alternatives.append(displayed[entry["candidate_id"]])
+        alternatives.append(projected)
         if not data.get("optimizer_configured") and len(alternatives) == 3:
             break
     result = "verified_improvement" if alternatives else "baseline_retained"
@@ -655,6 +732,7 @@ def _fix_deliveries(value: object) -> list[dict]:
             for key in (
                 "delivery_id",
                 "candidate_id",
+                "source_revision",
                 "branch",
                 "base",
                 "state",

@@ -4,7 +4,7 @@ Agentagon connects two loops: improve application agents using evidence, then re
 
 ## Start with an assessment
 
-Add a local repository or clone a GitHub repository. Configure the managed Codex or Claude backend, optionally connect Braintrust, LangSmith or Langfuse, or import a supported trace. Save setup and select **Analyze project**. The default selection covers seven days and at most 100 completed traces within provider bounds.
+Open any local folder, or clone a repository only when you need a new checkout. A GitHub remote is optional. Configure the managed Codex or Claude backend, optionally connect Braintrust, LangSmith or Langfuse, or import a supported trace. Save setup and select **Analyze project**. The default selection covers seven days and at most 100 completed traces within provider bounds.
 
 Assessment runs as a task. It scans application code, discovers trace identities, proposes bindings, groups supported issues and recommends next actions. Code-only and trace-only results remain useful. Missing authentication preserves partial results. Suggestions require confirmation; a trace name alone does not authorize source changes. A confirmed trace-only agent needs code ownership before Fix.
 

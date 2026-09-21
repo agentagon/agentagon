@@ -22,6 +22,7 @@ from agentagon.storage.changes import (
 )
 
 SAFE_ID = re.compile(r"^[a-z]+_[0-9a-f]{24}$")
+STATE_VERSION = 2
 
 
 def git(root: Path, *args: str) -> str:
@@ -67,7 +68,11 @@ class Workspace:
         if not config.exists():
             self.write(
                 config,
-                {"contract_version": CONTRACT_VERSION, "state_version": 2, "created_at": now()},
+                {
+                    "contract_version": CONTRACT_VERSION,
+                    "state_version": STATE_VERSION,
+                    "created_at": now(),
+                },
             )
         self.require_initialized()
         return {
@@ -119,13 +124,13 @@ class Workspace:
             )
         metadata = load_json(self.checked(config))
         if (
-            metadata.get("state_version") != 2
+            metadata.get("state_version") != STATE_VERSION
             or metadata.get("contract_version") != CONTRACT_VERSION
         ):
             raise self._unsupported_state(
                 f"saved state_version={metadata.get('state_version', 'missing')!r}, "
                 f"contract_version={metadata.get('contract_version', 'missing')!r}; "
-                f"expected state_version=2, contract_version={CONTRACT_VERSION!r}"
+                f"expected state_version={STATE_VERSION}, contract_version={CONTRACT_VERSION!r}"
             )
 
     def _unsupported_state(self, reason: str) -> AuditError:

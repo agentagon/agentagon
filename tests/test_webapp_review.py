@@ -1,5 +1,7 @@
 """Regression checks from independent review of the local application boundary."""
 
+import uuid
+
 import pytest
 from support.evaluation import draft
 from support.experiments import propose, verify
@@ -18,6 +20,17 @@ def test_publication_rejects_a_changed_selection_after_package_review(
         workspace = selected["workspace"]
         project = app.register(str(workspace.root))
         payload = {"kind": "optimize", "source_id": selected["run_id"]}
+        app.decide_result(
+            project["id"],
+            "optimize",
+            selected["run_id"],
+            {
+                "operation_id": str(uuid.uuid4()),
+                "expected_revision": 0,
+                "decision": "select_candidate",
+                "candidate_id": selected["candidate_id"],
+            },
+        )
         prepared = app.deliver(project["id"], {**payload, "publish": False})
         other, _ = propose(
             workspace, selected["run_id"], latency=85, quality=0.9, variant="different-selection"
@@ -30,7 +43,7 @@ def test_publication_rejects_a_changed_selection_after_package_review(
             published.append(record["candidate_id"])
 
         monkeypatch.setattr(delivery, "_publish", capture_publish)
-        with pytest.raises(AuditError, match="prepared delivery changed"):
+        with pytest.raises(AuditError, match="chosen candidate or evidence changed"):
             app.deliver(
                 project["id"],
                 {

@@ -92,7 +92,6 @@ def accept(workspace, job, result):
                     "id": identifier(
                         "occurrence",
                         snapshot["provenance"]["provider"],
-                        snapshot["connection_id"],
                         snapshot["provenance"].get("project"),
                         tid,
                     ),

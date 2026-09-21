@@ -29,6 +29,7 @@ from agentagon.dashboard.evidence import (
 from agentagon.domain.catalog import Catalog
 from agentagon.domain.issues import list_issues
 from agentagon.storage.changes import git_bytes
+from agentagon.storage.changes import revision as git_revision
 from agentagon.storage.config import Config, credential
 from agentagon.storage.state import AppState, identifier, private_directory
 from agentagon.workflows.evaluate.designs import Designs
@@ -36,10 +37,118 @@ from agentagon.workflows.runtime import ACTIVE, TaskRuntime, operation_id, publi
 
 DISCOVERY_TTL_SECONDS = 600
 MAX_CONNECTION_DISCOVERIES = 12
+RESULT_TASK_KEYS = {
+    "audit": "audit_id",
+    "eval": "evaluation_id",
+    "fix": "run_id",
+    "optimize": "run_id",
+    "baseline": "baseline_id",
+    "patch": "patch_id",
+}
+
+
+def _result_task_context(application, project_id, kind, result_id):
+    """Return the bounded task facts that explain a result projection."""
+    key = RESULT_TASK_KEYS.get(kind)
+    if key is None:
+        return None
+    matches = [
+        job
+        for job in application.runtime.list(project_id)
+        if job.get("kind") == kind
+        and result_id
+        in {
+            job.get("workflow_ids", {}).get(key),
+            (job.get("result") or {}).get(key),
+        }
+    ]
+    if not matches:
+        return None
+    job = max(matches, key=lambda item: (item.get("updated_at", ""), item.get("id", "")))
+    options = job.get("options") or {}
+    return {
+        "id": job["id"],
+        "workflow": job["kind"],
+        "title": job.get("title") or job.get("goal") or f"{kind.title()} result",
+        "state": job["state"],
+        "result": copy.deepcopy(job.get("result")),
+        "limits": {
+            key: options[key]
+            for key in ("max_trials", "max_elapsed_seconds", "trial_timeout_seconds")
+            if type(options.get(key)) is int
+        },
+        "next_action": job.get("next_action"),
+        "updated_at": job.get("updated_at"),
+    }
+
+
+def _static_delivery_projections(workspace, project_id, kind, source_id, deliveries):
+    """Project durable app delivery receipts without exposing stored paths."""
+    if not isinstance(deliveries, dict):
+        return []
+    projected = []
+    for delivery_id, source_record in deliveries.items():
+        if not isinstance(delivery_id, str) or not isinstance(source_record, dict):
+            continue
+        try:
+            identifier(delivery_id, "delivery")
+        except AuditError:
+            continue
+        receipt_path = private_directory(workspace, "deliveries") / f"{delivery_id}.json"
+        if not receipt_path.exists():
+            continue
+        try:
+            receipt = load_json(workspace.checked(receipt_path))
+        except (AuditError, OSError, TypeError, ValueError):
+            continue
+        if (
+            receipt.get("delivery_id") != delivery_id
+            or receipt.get("app_kind") != kind
+            or receipt.get("app_source_id") != source_id
+        ):
+            continue
+        artifacts = {}
+        for name, path in (receipt.get("artifacts") or {}).items():
+            if not isinstance(name, str) or not re.fullmatch(r"[a-z_]+", name):
+                continue
+            if not isinstance(path, str):
+                continue
+            try:
+                artifact = workspace.checked(Path(path))
+            except (AuditError, OSError, ValueError):
+                continue
+            if (
+                artifact.is_symlink()
+                or not artifact.is_file()
+                or artifact.stat().st_size > 20_000_000
+            ):
+                continue
+            artifacts[name] = f"/api/projects/{project_id}/deliveries/{delivery_id}/{name}"
+        item = {
+            key: receipt[key]
+            for key in (
+                "delivery_id",
+                "state",
+                "branch",
+                "base",
+                "source_revision",
+                "created_at",
+                "updated_at",
+            )
+            if isinstance(receipt.get(key), str)
+        }
+        item["artifact_urls"] = artifacts
+        projected.append(item)
+    return sorted(
+        projected,
+        key=lambda item: (item.get("created_at", ""), item.get("delivery_id", "")),
+        reverse=True,
+    )
 
 
 class Application:
     def __init__(self, directory=None, *, execute=None, credentials=None, provider_factory=None):
+        self.started_at = now()
         self.state = AppState(directory)
         self.credentials = credentials or CredentialStore()
         self.provider_factory = provider_factory or ProviderClient
@@ -67,12 +176,69 @@ class Application:
         self.runtime.prepare_task = self.production.prepare
         self.scheduler = Scheduler(self)
 
+    def diagnostics(self):
+        """Return bounded identities for the code and state loaded by this process."""
+        import hashlib
+        import platform
+        from importlib.resources import files
+
+        from agentagon import __version__
+        from agentagon.core.records import CONTRACT_VERSION
+        from agentagon.storage.workspace import STATE_VERSION
+
+        asset_hash = hashlib.sha256()
+        assets = files("agentagon").joinpath("dashboard/assets")
+        for name in ("webapp.html", "webapp.js", "webapp.css"):
+            asset_hash.update(name.encode())
+            asset_hash.update(assets.joinpath(name).read_bytes())
+        configured_build = os.environ.get("AGENTAGON_BUILD_ID", "")
+        build_id = (
+            configured_build
+            if configured_build.isascii() and 1 <= len(configured_build) <= 120
+            else "Unknown build"
+        )
+        return {
+            "application": "agentagon",
+            "package_version": __version__,
+            "build_id": build_id,
+            "frontend_asset_version": asset_hash.hexdigest()[:16],
+            "service_started_at": self.started_at,
+            "python_version": platform.python_version(),
+            "state_contracts": {
+                "evidence": CONTRACT_VERSION,
+                "workspace": STATE_VERSION,
+                "metadata": self.state.read()["version"],
+            },
+        }
+
     def project_info(self, project):
-        result = {**project, "active_tasks": 0, "branch": None, "available": True}
+        result = {
+            **project,
+            "active_tasks": 0,
+            "branch": None,
+            "available": True,
+            "source": {"kind": "folder", "revision": None, "dirty": None},
+        }
         try:
             workspace = self.state.workspace(project["id"])
             branch = git_bytes(workspace.root, "branch", "--show-current", optional=True)
             result["branch"] = branch.decode().strip() if branch else None
+            inside = git_bytes(workspace.root, "rev-parse", "--is-inside-work-tree", optional=True)
+            if inside and inside.strip() == b"true":
+                status = git_bytes(
+                    workspace.root,
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=normal",
+                    optional=True,
+                )
+                source_revision = git_revision(workspace.root)
+                result["source"] = {
+                    "kind": "git",
+                    "revision": source_revision,
+                    "dirty": bool(status),
+                    "measured_work_ready": bool(source_revision and not status),
+                }
             result["active_tasks"] = sum(
                 j["state"] in ACTIVE for j in self.runtime.list(project["id"])
             )
@@ -120,16 +286,59 @@ class Application:
         from agentagon.domain.projections import agent_projection
 
         agents = [agent_projection(item) for item in self.catalog.agents(project_id)]
+        excluded = [agent_projection(item) for item in self.catalog.excluded_agents(project_id)]
         return {
             "agents": agents,
             "confirmed": [item for item in agents if item["status"] == "confirmed"],
             "suggestions": [item for item in agents if item["status"] != "confirmed"],
+            "excluded": excluded,
         }
 
     def project_agent(self, project_id, agent_id):
         from agentagon.domain.projections import agent_projection
 
         return agent_projection(self.catalog.agent(project_id, agent_id))
+
+    def issues(self, project_id):
+        return {"issues": list_issues(self.state.workspace(project_id))}
+
+    def issue(self, project_id, issue_id):
+        from agentagon.domain.issues import issue_detail, lifecycle_projection
+
+        detail = issue_detail(self.state.workspace(project_id), issue_id)
+        lifecycle = lifecycle_projection(self, project_id, issue_id)
+        return {
+            **detail,
+            "facets": lifecycle["facets"],
+            "next_actions": lifecycle["next_actions"],
+        }
+
+    def update_issue(self, project_id, issue_id, payload):
+        from agentagon.domain.issues import triage_issue
+
+        if not isinstance(payload, dict):
+            raise AuditError("issue update must be an object")
+        if payload.get("action") == "assign":
+            agent = self.catalog.agent(project_id, payload.get("agent_id"))
+            if agent["status"] != "confirmed":
+                raise AuditError("confirm the application agent before assigning this issue")
+        return triage_issue(self.state.workspace(project_id), issue_id, payload)
+
+    def trace_detail(self, project_id, snapshot_id, trace_id=None, max_spans=100):
+        from agentagon.capabilities.traces.detail import trace_detail
+
+        return trace_detail(
+            self.state.workspace(project_id),
+            snapshot_id,
+            trace_id=trace_id,
+            max_spans=max_spans,
+        )
+
+    def select_trace(self, project_id, snapshot_id, trace_id):
+        selected = snapshots.select_trace(
+            self.state.workspace(project_id), project_id, snapshot_id, trace_id
+        )
+        return snapshots.summary(selected)
 
     def goals(self, project_id, agent_id):
         from agentagon.domain.projections import goal_projection
@@ -203,68 +412,33 @@ class Application:
         }
         return task_detail(self.runtime.get(project_id, task_id), agents, goals)
 
-    def workflow_readiness(self, project_id, workflow, agent_id=None, goal_id=None):
-        from agentagon.workflows.procedures import REGISTRY
+    def lessons(self, project_id, agent_id=None):
+        from agentagon.domain.lessons import list_lessons
 
-        definition = REGISTRY.get(workflow)
-        if definition is None:
-            raise AuditError("workflow not found")
-        blockers = []
-        agent = None
-        if not agent_id and workflow not in {"discover", "assess"}:
-            blockers.append({"code": "agent", "message": "Select an agent.", "action": "agent"})
-        elif agent_id:
-            agent = self.catalog.agent(project_id, agent_id)
-            if agent["status"] != "confirmed":
-                blockers.append(
-                    {"code": "agent", "message": "Confirm this agent.", "action": "agent"}
-                )
-        goal_record = None
-        if definition["requires_goal"]:
-            if not goal_id:
-                blockers.append({"code": "goal", "message": "Select a goal.", "action": "goal"})
-            elif agent:
-                goal_record = self.catalog.goal_record(project_id, agent_id, goal_id)
-        if agent and workflow == "audit" and not agent["code_scopes"]:
-            blockers.append(
-                {
-                    "code": "evidence",
-                    "message": "Bind code or import matching traces.",
-                    "action": "evidence",
-                }
-            )
-        if agent and goal_record and workflow in {"eval", "baseline", "optimize"}:
-            status = self.catalog.measurement_status(project_id, agent_id, goal_record)
-            requirement = (
-                "evaluation"
-                if workflow == "baseline"
-                else "baseline"
-                if workflow == "optimize"
-                else None
-            )
-            if workflow == "eval" and not self.designs.accepted(project_id, agent_id, goal_id):
-                blockers.append(
-                    {
-                        "code": "plan",
-                        "message": "Accept the measurement plan.",
-                        "action": "define",
-                    }
-                )
-            elif requirement and not status[requirement]["ready"]:
-                blockers.append(
-                    {
-                        "code": requirement,
-                        "message": status[requirement]["reason"],
-                        "action": "measure",
-                    }
-                )
-        return {
-            "workflow": workflow,
-            "workflow_version": definition["version"],
-            "ready": not blockers,
-            "blockers": blockers,
-            "next_action": blockers[0]["action"] if blockers else "start",
-        }
+        return list_lessons(self, project_id, agent_id)
+
+    def local_funnel(self, project_id):
+        """Return bounded project-local journey metrics for inspection or export."""
+
+        from agentagon.domain.funnel import projection
+
+        return projection(self.state, project_id)
+
+    def lesson(self, project_id, group_id, entry_id, agent_id=None):
+        from agentagon.domain.lessons import lesson_detail
+
+        return lesson_detail(self, project_id, group_id, entry_id, agent_id)
+
+    def correct_lesson(self, project_id, group_id, entry_id, payload):
+        from agentagon.domain.lessons import correct_lesson
+
+        return correct_lesson(self, project_id, group_id, entry_id, payload)
+
+    def prepare_workflow_start(self, project_id, payload):
+        """Prepare the complete public start intent without executing work."""
+        from agentagon.workflows.operations import prepare_workflow_start
+
+        return prepare_workflow_start(self, project_id, payload)
 
     def submit_task(self, project_id, payload, *, scheduled=False):
         from agentagon.workflows.requests import submit
@@ -339,6 +513,27 @@ class Application:
             },
         )
 
+    def infer_application_agent_responsibility(self, project_id, agent_id, payload):
+        """Review one retained suggestion with its exact bounded source context."""
+
+        if not isinstance(payload, dict) or set(payload) != {"operation_id"}:
+            raise AuditError("use an operation_id for responsibility inference")
+        agent = self.catalog.agent(project_id, agent_id)
+        if agent["status"] != "suggested":
+            raise AuditError("responsibility inference is available for suggested identities")
+        if len(agent.get("code_scopes", [])) != 1:
+            raise AuditError("responsibility inference requires one retained agent definition")
+        return self.submit_task(
+            project_id,
+            {
+                "workflow": "assess",
+                "operation_id": payload["operation_id"],
+                "agent_id": agent_id,
+                "input": {"type": "project", "id": project_id},
+                "options": {"assessment": {}},
+            },
+        )
+
     def save_application_agent(self, project_id, payload, agent_id=None):
         selector = payload.get("trace_selector", {})
         if not isinstance(selector, dict):
@@ -348,6 +543,33 @@ class Application:
             self._selected_connection_project(connection, selector)
         with self.lock:
             return self.catalog.save_agent(project_id, payload, agent_id)
+
+    def confirm_application_agent(self, project_id, agent_id, payload):
+        if not isinstance(payload, dict) or set(payload) != {"expected_revision"}:
+            raise AuditError("confirm the displayed identity revision")
+        with self.lock:
+            return self.catalog.confirm_suggestion(
+                project_id, agent_id, payload["expected_revision"]
+            )
+
+    def exclude_application_agent(self, project_id, agent_id, payload):
+        if not isinstance(payload, dict) or set(payload) != {"reason", "expected_revision"}:
+            raise AuditError("exclude the displayed identity with a reason")
+        with self.lock:
+            return self.catalog.exclude_suggestion(
+                project_id,
+                agent_id,
+                payload["reason"],
+                payload["expected_revision"],
+            )
+
+    def restore_application_agent(self, project_id, agent_id, payload):
+        if not isinstance(payload, dict) or set(payload) != {"expected_revision"}:
+            raise AuditError("restore the displayed identity revision")
+        with self.lock:
+            return self.catalog.restore_suggestion(
+                project_id, agent_id, payload["expected_revision"]
+            )
 
     def measurement_design(self, project_id, agent_id, goal_id):
         from agentagon.capabilities.evaluation import native as evaluators
@@ -415,7 +637,9 @@ class Application:
         )
         return result
 
-    def submit_job(self, project_id, payload, *, request_binding=None):
+    def submit_job(
+        self, project_id, payload, *, request_binding=None, suggested_read_only_scope=None
+    ):
         request_binding = request_binding or digest(payload)
         existing = self.runtime.existing_submission(
             project_id, payload.get("operation_id"), request_binding
@@ -428,8 +652,18 @@ class Application:
             raise AuditError("select an application agent before starting this workflow")
         with self.lock:
             agent = self.catalog.agent(project_id, agent_id)
-            if agent["status"] != "confirmed":
+            if agent["status"] == "archived":
+                raise AuditError("restore this excluded identity before starting work")
+            if agent["status"] == "suggested":
+                from agentagon.workflows.operations.preparation import agent_review_scope
+
+                expected_scope = agent_review_scope(agent)
+                if payload.get("kind") != "audit" or suggested_read_only_scope != expected_scope:
+                    raise AuditError("confirm this application agent before starting work")
+            elif agent["status"] != "confirmed":
                 raise AuditError("confirm this application agent before starting work")
+            elif suggested_read_only_scope:
+                raise AuditError("read-only review scope requires a suggested identity")
             if goal_id:
                 goal_record = self.catalog.goal_record(project_id, agent_id, goal_id)
             elif payload.get("kind") == "audit":
@@ -439,6 +673,11 @@ class Application:
             options = payload.setdefault("options", {})
             if not isinstance(options, dict):
                 raise AuditError("workflow options must be an object")
+            prepared_review_scope = options.pop("agent_review_scope", None)
+            if prepared_review_scope is not None and (
+                prepared_review_scope != suggested_read_only_scope
+            ):
+                raise AuditError("workflow evidence bindings are prepared by the application")
             if set(options) & {
                 "investigation_plan",
                 "suite_manifest",
@@ -448,6 +687,8 @@ class Application:
                 "design_context",
             }:
                 raise AuditError("workflow evidence bindings are prepared by the application")
+            if suggested_read_only_scope:
+                options["agent_review_scope"] = copy.deepcopy(suggested_read_only_scope)
             payload["goal"] = payload.get("goal") or (
                 goal_record["objective"] if goal_record else f"Audit {agent['name']}"
             )
@@ -751,13 +992,31 @@ class Application:
         from agentagon.capabilities.experiments import baselines, inspection, preparation
 
         workspace = self.state.workspace(project_id)
+        task = _result_task_context(self, project_id, kind, result_id)
         if kind == "audit":
-            return _detail(workspace, result_id)
+            return {**_detail(workspace, result_id), "result_kind": "audit", "task": task}
         if kind == "eval":
-            return inspection.evaluation_summary(preparation.load(workspace, result_id))
+            evaluation = preparation.load(workspace, result_id)
+            result = inspection.evaluation_summary(evaluation)
+            return {
+                **result,
+                "result_kind": "eval",
+                "task": task,
+                "deliveries": _static_delivery_projections(
+                    workspace,
+                    project_id,
+                    kind,
+                    result_id,
+                    evaluation.get("deliveries"),
+                ),
+                "allowed_actions": ["prepare_local_delivery"]
+                if result["state"] == "frozen"
+                else [],
+            }
         if kind in {"fix", "optimize"}:
-            from agentagon.capabilities.experiments import suites
+            from agentagon.capabilities.experiments import engine, suites
             from agentagon.capabilities.experiments.store import load_run
+            from agentagon.domain.improvements import selection_projection
 
             result = _run_detail(workspace, result_id)
             data = load_run(workspace, result_id)
@@ -805,9 +1064,100 @@ class Application:
                     comparison["alternatives"] = [
                         c for c in comparison.get("alternatives", []) if c["id"] in passed
                     ]
-            return result
+            comparison = result.setdefault("comparisons", {})
+            verified_alternatives = []
+            rejected_alternatives = []
+            for candidate in comparison.get("alternatives", []):
+                try:
+                    engine._verified_evidence(workspace, data, data["candidates"][candidate["id"]])
+                except (AuditError, KeyError, OSError):
+                    rejected_alternatives.append(candidate["id"])
+                else:
+                    verified_alternatives.append(candidate)
+            comparison["alternatives"] = verified_alternatives
+            if rejected_alternatives:
+                comparison["result"] = "verification_incomplete"
+                result["limitations"] = [
+                    *result.get("limitations", []),
+                    "Candidate identity or verification evidence changed; review or rerun verification before selecting it.",
+                ]
+            for delivery in result.get("deliveries", []):
+                delivery_id = delivery.get("delivery_id")
+                if not isinstance(delivery_id, str):
+                    continue
+                identifier(delivery_id, "delivery")
+                receipt_path = private_directory(workspace, "deliveries") / f"{delivery_id}.json"
+                if not receipt_path.exists():
+                    continue
+                receipt = load_json(workspace.checked(receipt_path))
+                if receipt.get("app_kind") != kind or receipt.get("app_source_id") != result_id:
+                    continue
+                delivery["artifact_urls"] = {
+                    name: f"/api/projects/{project_id}/deliveries/{delivery_id}/{name}"
+                    for name in receipt.get("artifacts", {})
+                    if re.fullmatch(r"[a-z_]+", name)
+                }
+                for field in ("user_decision_id", "user_decision_revision"):
+                    if field in receipt:
+                        delivery[field] = receipt[field]
+            return {
+                **result,
+                "result_kind": kind,
+                "task": task,
+                "selection": selection_projection(
+                    self,
+                    project_id,
+                    kind,
+                    result_id,
+                    data,
+                    {
+                        candidate["id"]
+                        for candidate in result.get("comparisons", {}).get("alternatives", [])
+                    },
+                ),
+            }
         if kind == "baseline":
-            return baselines.public_projection(baselines.status(workspace, result_id))
+            return {
+                **baselines.public_projection(baselines.status(workspace, result_id)),
+                "result_kind": "baseline",
+                "task": task,
+            }
+        if kind == "patch":
+            from agentagon.capabilities.experiments import patches
+
+            patch = patches.load(workspace, result_id)
+            reviewed = patch["state"] == "reviewed_unmeasured"
+            if reviewed:
+                patches.verified(workspace, patch)
+            return {
+                "result_kind": "patch",
+                "task": task,
+                "patch_id": patch["patch_id"],
+                "goal": patch["goal"],
+                "state": patch["state"],
+                "created_at": patch["created_at"],
+                "updated_at": patch.get("updated_at"),
+                "source_revision": patch.get("source_revision"),
+                "source_digest": patch.get("source_digest"),
+                "editable_paths": list(patch["plan"]["editable_paths"]),
+                "checks": [
+                    {"id": item["check_id"], "state": item["state"]} for item in patch["checks"]
+                ],
+                "independent_review": "pass" if reviewed else None,
+                "measurement": "unavailable",
+                "limitations": [
+                    patch["reason_no_comparison"],
+                    "Baseline comparison is unavailable; this is not a measured improvement.",
+                ],
+                "deliveries": _static_delivery_projections(
+                    workspace,
+                    project_id,
+                    kind,
+                    result_id,
+                    patch.get("deliveries"),
+                ),
+                "allowed_actions": ["prepare_local_delivery"] if reviewed else [],
+            }
         if kind in {"dataset", "traces"}:
             record = snapshots.load(workspace, result_id)
             split = next(
@@ -829,6 +1179,12 @@ class Application:
             return record
         raise AuditError("unknown result kind")
 
+    def decide_result(self, project_id, kind, result_id, payload):
+        from agentagon.domain.improvements import decide
+
+        self.state.project(project_id)
+        return decide(self, project_id, kind, result_id, payload)
+
     def derive_dataset(self, project_id, payload):
         from agentagon.capabilities.evaluation import datasets
 
@@ -840,6 +1196,14 @@ class Application:
             workspace, project_id, payload.get("trace_snapshot_id"), agent["trace_selector"]
         )
         return datasets.derive(workspace, project_id, source["id"], payload.get("selection", {}))
+
+    def propose_evaluation_case(self, project_id, snapshot_id, payload):
+        from agentagon.capabilities.evaluation import datasets
+
+        self.state.project(project_id)
+        return datasets.propose_case(
+            self.state.workspace(project_id), project_id, snapshot_id, payload
+        )
 
     def export_dataset(self, project_id, snapshot_id, payload):
         from agentagon.capabilities.evaluation.native import export_bundle
@@ -987,8 +1351,8 @@ class Application:
         }:
             raise AuditError("unsupported delivery fields")
         kind, source_id = payload.get("kind"), payload.get("source_id")
-        if kind not in {"optimize", "eval"} or not isinstance(source_id, str):
-            raise AuditError("select a verified fix or frozen evaluation")
+        if kind not in {"fix", "optimize", "eval", "patch"} or not isinstance(source_id, str):
+            raise AuditError("select a measured result, frozen evaluation, or reviewed patch")
         publish = payload.get("publish", False)
         if type(publish) is not bool:
             raise AuditError("publication must be explicitly true or false")
@@ -997,8 +1361,10 @@ class Application:
                 "review the prepared package and specify remote and base before publishing"
             )
         workspace = self.state.workspace(project_id)
+        decision = None
         if kind in {"fix", "optimize"}:
             from agentagon.capabilities.experiments import suites
+            from agentagon.domain.improvements import require_user_selection
 
             for job in self._suite_jobs(project_id, source_id):
                 if job["state"] not in {"completed", "completed_with_limits"}:
@@ -1006,6 +1372,7 @@ class Application:
                         "finish this task's required verification before preparing delivery"
                     )
                 suites.verify_completed(workspace, source_id, job["options"]["suite_manifest"])
+            decision = require_user_selection(self, project_id, kind, source_id)
         if publish:
             delivery_id = payload.get("delivery_id")
             if not delivery_id:
@@ -1017,16 +1384,35 @@ class Application:
             prepared = load_json(workspace.checked(receipt))
             if prepared.get("app_kind") != kind or prepared.get("app_source_id") != source_id:
                 raise AuditError("prepared delivery does not belong to this source")
+        source_argument = {
+            "fix": "run_id",
+            "optimize": "run_id",
+            "eval": "evaluation_id",
+            "patch": "patch_id",
+        }[kind]
         result = deliver(
             workspace,
-            **{"run_id" if kind == "optimize" else "evaluation_id": source_id},
+            **{source_argument: source_id},
             publish=publish,
             remote=payload.get("remote") or "origin",
             base=payload.get("base"),
             eval_parent_id=payload.get("eval_parent_id"),
             prepared_delivery_id=payload.get("delivery_id") if publish else None,
         )
-        record = {**result, "app_kind": kind, "app_source_id": source_id}
+        record = {
+            **result,
+            "app_kind": kind,
+            "app_source_id": source_id,
+            **(
+                {
+                    "user_decision_id": decision["id"],
+                    "user_decision_revision": decision["revision"],
+                    "user_decision_operation_id": decision["operation_id"],
+                }
+                if decision
+                else {}
+            ),
+        }
         for name, path in record["artifacts"].items():
             workspace.checked(Path(path))
             if not re.fullmatch(r"[a-z_]+", name):
@@ -1036,6 +1422,14 @@ class Application:
         workspace.write(private_directory(workspace, "deliveries") / f"{delivery_id}.json", record)
         return {
             **result,
+            **(
+                {
+                    "user_decision_id": decision["id"],
+                    "user_decision_revision": decision["revision"],
+                }
+                if decision
+                else {}
+            ),
             "artifact_urls": {
                 name: f"/api/projects/{project_id}/deliveries/{delivery_id}/{name}"
                 for name in record["artifacts"]
@@ -1126,6 +1520,7 @@ class Application:
 
     def connection_projection(self, connection):
         value = {k: copy.deepcopy(v) for k, v in connection.items() if k != "credentials"}
+        value.setdefault("status", "not_tested")
         value["credential_fields"] = list(connection.get("credentials", {}))
         modes = {reference.split(":", 1)[0] for reference in connection["credentials"].values()}
         value["credential_mode"] = "session" if "session" in modes else next(iter(modes), "session")
@@ -1429,23 +1824,75 @@ class Application:
 
         return import_trace(self, project_id, payload)
 
+    def preview_trace_import(self, project_id, payload):
+        from agentagon.capabilities.traces.imports import preview_trace
+
+        return preview_trace(self, project_id, payload)
+
     def import_preview(self, project_id, payload):
+        if not isinstance(payload, dict) or set(payload) != {"preview_id", "operation_id"}:
+            raise AuditError("confirm one preview with an operation ID")
         op = operation_id(payload.get("operation_id"))
         workspace = self.state.workspace(project_id)
         with self.lock:
-            binding = {"project_id": project_id, "operation_id": op}
+            existing = None
             for record in snapshots.list_snapshots(workspace):
-                if record["provenance"].get("import_operation") == binding:
-                    if record["provenance"].get("preview_id") != payload["preview_id"]:
-                        raise AuditError("operation_id already belongs to another import")
+                provenance = record["provenance"]
+                saved_binding = provenance.get("import_operation") or {}
+                saved_operation = provenance.get("operation_id") or saved_binding.get(
+                    "operation_id"
+                )
+                if saved_operation != op:
+                    continue
+                if provenance.get("operation_id") == op:
+                    raise AuditError("operation_id already belongs to another import")
+                if saved_binding.get("project_id") != project_id:
+                    raise AuditError("operation_id already belongs to another import")
+                existing = record
+                if provenance.get("preview_id") == payload["preview_id"]:
                     return record
+                break
             preview = self.previews.get(payload.get("preview_id"))
             if not preview or preview["project_id"] != project_id:
                 raise AuditError("preview expired or belongs to another project; preview again")
+            content_digest = digest(
+                {
+                    key: preview.get(key)
+                    for key in (
+                        "kind",
+                        "connection_id",
+                        "selection",
+                        "items",
+                        "provenance",
+                        "completeness",
+                    )
+                }
+            )
+            if existing:
+                if (
+                    existing["provenance"].get("import_operation", {}).get("content_digest")
+                    == content_digest
+                ):
+                    self.previews.pop(payload["preview_id"], None)
+                    return existing
+                raise AuditError("operation_id already belongs to another import")
+            if preview["kind"] == "traces":
+                from agentagon.capabilities.traces.detail import trace_usability
+
+                usability = trace_usability(preview)
+                if not usability["diagnosis_ready"]:
+                    raise AuditError("trace preview has no diagnosis-ready spans; preview again")
             workspace.initialize()
             preview = copy.deepcopy(preview)
+            binding = {
+                "project_id": project_id,
+                "operation_id": op,
+                "content_digest": content_digest,
+            }
             preview["provenance"].update(import_operation=binding, preview_id=payload["preview_id"])
-            return snapshots.summary(snapshots.save(workspace, project_id, preview))
+            saved = snapshots.summary(snapshots.save(workspace, project_id, preview))
+            self.previews.pop(payload["preview_id"], None)
+            return saved
 
     def agents(self):
         settings = self.state.read()["agents"]

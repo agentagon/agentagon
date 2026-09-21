@@ -112,6 +112,10 @@ def monitor(app, **kwargs):
 
 def test_assessment_is_idempotent_async_and_retains_partial_progress(app):
     instance, project, _ = app
+    root = instance.state.workspace(project).root
+    (root / "research.py").write_text(
+        'from agents import Agent\nresearch = Agent(name="Research")\n'
+    )
     payload = {
         "operation_id": str(uuid.uuid4()),
         "workflow": "assess",
@@ -122,9 +126,227 @@ def test_assessment_is_idempotent_async_and_retains_partial_progress(app):
     assert saved["state"] == "completed_with_limits", saved
     assert instance.production.onboarding(project)["state"] == "complete"
     assert saved["result"]["limitations"]
+    assert [candidate["name"] for candidate in saved["result"]["candidates"]] == ["Research"]
+    suggestion = instance.project_agents(project)["suggestions"][0]
+    assert suggestion["name"] == "Research"
+    assert suggestion["responsibility_inference"]["state"] == "pending"
+    assert "retained" in saved["result"]["summary"].lower()
     assert instance.submit_task(project, payload)["task_id"] == task["task_id"]
     assert all(t["kind"] == "assess" for t in instance.runtime.list(project))
     assert any(r["basis"] == "not_measured" for r in instance.production.recommendations(project))
+
+
+def test_assessment_blocks_an_unavailable_selected_trace_connection_but_allows_code_only(app):
+    instance, project, _ = app
+    connection_id = "connection_" + "c" * 24
+    with instance.state.locked() as state:
+        state["connections"][connection_id]["status"] = "unavailable"
+
+    blocked = instance.prepare_workflow_start(
+        project,
+        {
+            "workflow": "assess",
+            "input": {"type": "project", "id": project},
+            "options": {"assessment": {"connection_id": connection_id}},
+        },
+    )
+    assert blocked["state"] == "needs_input"
+    prerequisite = next(
+        item for item in blocked["prerequisites"] if item["code"] == "trace_connection"
+    )
+    assert prerequisite["blocking"] is True
+    assert prerequisite["resolution"]["context"]["status"] == "unavailable"
+
+    code_only = instance.prepare_workflow_start(
+        project,
+        {
+            "workflow": "assess",
+            "input": {"type": "project", "id": project},
+            "options": {"assessment": {}},
+        },
+    )
+    assert code_only["state"] == "ready_with_limits"
+    assert all(item["code"] != "trace_connection" for item in code_only["prerequisites"])
+
+
+def test_recommendation_disposition_applies_only_to_the_reviewed_evidence(app):
+    instance, project, agent = app
+    recommendation = next(
+        item
+        for item in instance.production.recommendations(project)
+        if item.get("agent_id") == agent["id"] and item.get("category") == "latency"
+    )
+
+    saved = instance.production.disposition_recommendation(
+        project,
+        recommendation["id"],
+        {
+            "value": "not_now",
+            "reason": "Wait for representative traffic",
+            "evidence_revision": recommendation["evidence_revision"],
+            "expected_revision": 0,
+        },
+    )
+    dismissed = next(
+        item
+        for item in instance.production.recommendations(project)
+        if item["id"] == recommendation["id"]
+    )
+    assert dismissed["active"] is False
+    assert dismissed["disposition"] == {
+        "value": "not_now",
+        "reason": "Wait for representative traffic",
+        "decided_at": saved["decided_at"],
+        "revision": 1,
+    }
+
+    instance.production.save_onboarding(
+        project,
+        {
+            "state": "ready",
+            "scope": {},
+        },
+    )
+    setup = instance.production.onboarding(project)
+    instance.state.db.put_record(
+        project,
+        "onboarding",
+        "setup",
+        {
+            **setup,
+            "agent_measurements": {
+                agent["id"]: [
+                    {
+                        "metric": "latency_ms",
+                        "value": 250,
+                        "count": 12,
+                        "coverage": 0.8,
+                        "source": "assessment:new-evidence",
+                    }
+                ]
+            },
+        },
+        expected_revision=setup["revision"],
+    )
+    refreshed = next(
+        item
+        for item in instance.production.recommendations(project)
+        if item["id"] == recommendation["id"]
+    )
+    assert refreshed["evidence_revision"] != recommendation["evidence_revision"]
+    assert refreshed["active"] is True
+    assert refreshed["disposition"] is None
+
+
+def test_repeated_discovery_does_not_revive_a_dismissed_unchanged_issue(app):
+    from agentagon.domain.issues import record_issue
+
+    instance, project, agent = app
+    workspace = instance.state.workspace(project)
+    diagnosis = {
+        "key": "wrong-weather",
+        "title": "Wrong weather",
+        "summary": "The answer describes a different location.",
+        "severity": "medium",
+        "confidence": 0.8,
+        "trace_ids": ["stable-trace"],
+        "evidence": ["Requested and returned locations differ."],
+    }
+    first_evidence = workspace.artifact(
+        {"snapshot_id": "snapshot_first", "task_id": "task_first", "diagnosis": diagnosis}
+    )
+    issue = record_issue(
+        workspace,
+        key=diagnosis["key"],
+        title=diagnosis["title"],
+        summary=diagnosis["summary"],
+        severity=diagnosis["severity"],
+        confidence=diagnosis["confidence"],
+        agent_id=agent["id"],
+        evidence=[first_evidence],
+        occurrences=[
+            {
+                "id": "occurrence_stable",
+                "source_id": "snapshot_first",
+                "trace_ids": ["stable-trace"],
+                "observed_ns": 1,
+                "basis": "trace",
+                "evidence": first_evidence,
+            }
+        ],
+    )
+    recommendation = next(
+        item
+        for item in instance.production.recommendations(project)
+        if item["id"] == issue["issue_id"]
+    )
+    instance.production.disposition_recommendation(
+        project,
+        issue["issue_id"],
+        {
+            "value": "not_now",
+            "reason": "Wait for ownership review",
+            "evidence_revision": recommendation["evidence_revision"],
+            "expected_revision": 0,
+        },
+    )
+
+    repeated_evidence = workspace.artifact(
+        {"snapshot_id": "snapshot_second", "task_id": "task_second", "diagnosis": diagnosis}
+    )
+    record_issue(
+        workspace,
+        key=diagnosis["key"],
+        title=diagnosis["title"],
+        summary=diagnosis["summary"],
+        severity=diagnosis["severity"],
+        confidence=diagnosis["confidence"],
+        agent_id=agent["id"],
+        evidence=[repeated_evidence],
+        occurrences=[
+            {
+                "id": "occurrence_stable",
+                "source_id": "snapshot_second",
+                "trace_ids": ["stable-trace"],
+                "observed_ns": 1,
+                "basis": "trace",
+                "evidence": repeated_evidence,
+            }
+        ],
+    )
+    unchanged = next(
+        item
+        for item in instance.production.recommendations(project)
+        if item["id"] == issue["issue_id"]
+    )
+    assert unchanged["evidence_revision"] == recommendation["evidence_revision"]
+    assert unchanged["active"] is False
+
+    record_issue(
+        workspace,
+        key=diagnosis["key"],
+        title=diagnosis["title"],
+        summary=diagnosis["summary"],
+        severity=diagnosis["severity"],
+        confidence=diagnosis["confidence"],
+        agent_id=agent["id"],
+        occurrences=[
+            {
+                "id": "occurrence_new",
+                "source_id": "snapshot_third",
+                "trace_ids": ["new-trace"],
+                "observed_ns": 2,
+                "basis": "trace",
+            }
+        ],
+    )
+    changed = next(
+        item
+        for item in instance.production.recommendations(project)
+        if item["id"] == issue["issue_id"]
+    )
+    assert changed["evidence_revision"] != recommendation["evidence_revision"]
+    assert changed["active"] is True
 
 
 def test_monitor_observes_without_goal_brain_or_repair(app):
@@ -266,6 +488,55 @@ def test_measurement_change_starts_new_series_and_access_is_scoped(app, tmp_path
         instance.monitoring.get(other_project, policy["id"])
 
 
+def test_operational_monitor_change_preserves_comparison_series_and_evidence(app):
+    instance, project, agent = app
+    policy = monitor(app)
+    retained = {
+        **policy,
+        "checkpoint": {"ended_at": "2026-01-01T00:00:00+00:00"},
+        "last_observation_id": "observation_existing",
+        "references": {"snapshot_existing": {"bytes": 100}},
+    }
+    retained = instance.state.db.put_record(project, "monitors", policy["id"], retained)
+
+    updated = instance.monitoring.save(
+        project,
+        {
+            "agent_id": agent["id"],
+            "environment": "production",
+            "enabled": True,
+            "expected_revision": retained["revision"],
+            "storage_budget_bytes": 2 * 1024**3,
+            "diagnosis": False,
+            "measurements": [{"metric": "latency_ms", "accepted": True, "minimum_samples": 2}],
+        },
+        policy["id"],
+    )
+
+    assert updated["series"] == policy["series"]
+    assert updated["operational_revision"] == policy["operational_revision"] + 1
+    assert updated["checkpoint"] == retained["checkpoint"]
+    assert updated["last_observation_id"] == "observation_existing"
+    assert updated["references"] == retained["references"]
+
+
+def test_pause_and_enable_advance_the_operational_revision(app):
+    instance, project, _agent = app
+    policy = monitor(app)
+
+    paused = instance.monitoring.control(project, policy["id"], "pause")
+    assert paused["enabled"] is False
+    assert paused["series"] == policy["series"]
+    assert paused["operational_revision"] == policy["operational_revision"] + 1
+    assert paused["operations_digest"] != policy["operations_digest"]
+
+    enabled = instance.monitoring.control(project, policy["id"], "enable")
+    assert enabled["enabled"] is True
+    assert enabled["series"] == policy["series"]
+    assert enabled["operational_revision"] == paused["operational_revision"] + 1
+    assert enabled["operations_digest"] == policy["operations_digest"]
+
+
 def test_memory_references_are_validated_against_frozen_versions():
     job = {"improvement_memory": [{"entries": [{"id": "lesson", "version": 1}]}]}
     decision = {
@@ -312,20 +583,22 @@ def test_real_browser_onboarding_and_monitor_controls(app):
         page.on("pageerror", lambda error: errors.append(str(error)))
         origin = f"http://127.0.0.1:{server.server_port}"
         page.goto(f"{origin}/projects/{project}/onboarding")
-        page.get_by_role("heading", name="Set up your improvement loop", exact=True).wait_for()
+        page.get_by_role("heading", name="Start with repo", exact=True).wait_for()
         page.get_by_role("button", name="Analyze project", exact=True).click()
         page.wait_for_url("**/tasks/task_*")
-        page.get_by_text("Partial assessment retained.", exact=False).first.wait_for()
+        page.get_by_text(
+            "Configure and authenticate the coding backend", exact=False
+        ).first.wait_for()
         page.goto(f"{origin}/projects/{project}/agents/{agent['id']}/production")
         page.get_by_role("button", name="Enable monitoring", exact=True).click()
         page.get_by_label("Diagnose new evidence at most daily", exact=False).uncheck()
-        page.get_by_role("button", name="Save and enable monitor").click()
+        page.get_by_role("button", name="Enable monitoring", exact=True).last.click()
         page.get_by_role("button", name="Analyze now", exact=True).wait_for()
         page.get_by_role("button", name="Analyze now", exact=True).click()
         page.wait_for_url("**/tasks/task_*")
         page.get_by_text("Production observations retained;", exact=False).first.wait_for()
         page.goto(f"{origin}/projects/{project}/agents/{agent['id']}/production")
-        page.get_by_role("heading", name="Observations", exact=True).wait_for()
+        page.get_by_role("heading", name="Production evidence", exact=True).wait_for()
         page.get_by_text("insufficient evidence", exact=False).first.wait_for()
         page.get_by_role("button", name="Pause", exact=True).click()
         page.get_by_role("button", name="Enable", exact=True).wait_for()
@@ -402,8 +675,22 @@ def test_observation_memory_failure_retries_without_losing_evidence(app, monkeyp
     task = wait_for(instance.runtime, project, task_id)
     assert task["state"] == "completed" and task["memory_note"]
     assert instance.monitoring.overview(project)["observations"]
-    monkeypatch.setattr(instance.memory, "record", original)
+    projected = instance.task(project, task_id)
+    assert projected["memory_recording"]["automatic_retry"] is True
+    assert projected["needs_attention"] is False
     instance.scheduler.retry_memory()
+    instance.scheduler.retry_memory()
+    projected = instance.task(project, task_id)
+    assert projected["memory_recording"]["automatic_retry"] is False
+    assert projected["memory_recording"]["attempts"] == 3
+    assert projected["needs_attention"] is True
+    monkeypatch.setattr(instance.memory, "record", original)
+    instance.runtime.control(
+        project,
+        task_id,
+        "retry-memory",
+        {"operation_id": str(uuid.uuid4())},
+    )
     assert not instance.runtime.get(project, task_id).get("memory_note")
     groups = instance.memory.list(project, purpose="improvement")
     entries = instance.memory.recall(project, groups[0]["id"], "")["entries"]

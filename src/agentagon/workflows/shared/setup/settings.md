@@ -12,7 +12,7 @@ Supported settings:
 | `intelligence.endpoint` | Issued HTTPS service origin, without a path or credentials |
 | `intelligence.api_key_env` | Credential environment-variable name; default `AGENTAGON_API_KEY` |
 | `intelligence.access_presented` | `true` or `false`, user scope only |
-| `telemetry.enabled` | Anonymous usage events; `true` by default, user scope only. `false` stops sending and clears pending events |
+| `telemetry.enabled` | Anonymous usage events; `false` by default, user scope only. Set `true` only after explicit opt-in; `false` stops sending and clears pending events |
 | `traces.state` | `enabled`, `disabled`, or `unset`, project scope only |
 | `traces.source` | `braintrust`, `langfuse`, `langsmith`, `phoenix`, or `otlp` |
 | `traces.project` | Provider project identifier |

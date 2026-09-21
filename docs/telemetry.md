@@ -1,15 +1,15 @@
 # Anonymous product telemetry
 
-Agentagon records anonymous workflow events and Intelligence guidance usage. Telemetry is enabled by default and requires no Agentagon account or Intelligence API key. It never changes a workflow result or prevents local work.
+Agentagon can record anonymous workflow events and Intelligence guidance usage after explicit opt-in. Telemetry is disabled by default and requires no Agentagon account or Intelligence API key when enabled. It never changes a workflow result or prevents local work.
 
-## Disable or inspect
+## Enable or inspect
 
 ```sh
-agentagon _internal setup --scope user --set telemetry.enabled false
+agentagon _internal setup --scope user --set telemetry.enabled true
 agentagon _internal setup --scope user
 ```
 
-Disabling clears pending events. `AGENTAGON_TELEMETRY_DISABLED=1` overrides the saved setting in the current process; an attempted tracking call clears pending events and skips collection while it is set. Re-enable with the same setup command using `true`. Events from disabled periods are not collected or backfilled.
+Opting in applies to later events only; disabled-period events are not collected or backfilled. Disable with the same setup command using `false`. Disabling clears pending events. `AGENTAGON_TELEMETRY_DISABLED=1` overrides an enabled setting in the current process; an attempted tracking call clears pending events and skips collection while it is set.
 
 The setting is user-wide; projects cannot override it. `setup` and `status` show effective enablement, whether a public project token is configured, pending count, dropped count and the last delivery result. These reads never create storage, send events or drain the queue. An already-started network request may finish after disablement.
 
@@ -22,6 +22,8 @@ result = track("workflow_started", workflow="audit", host="codex")
 ```
 
 The internal Python API records bounded event metadata. It is not a public CLI or host hook. Workflow event delivery is optional instrumentation; starting a task does not depend on analytics.
+
+The project-local funnel shown in Data & privacy settings is separate. Agentagon derives it from local application records plus a bounded local journal for prepared actions and duplicate submissions. Those funnel records are never added to telemetry payloads or sent automatically. Its JSON export is initiated and downloaded by the user.
 
 | Event | Recorded behavior | Event-specific public fields |
 |---|---|---|

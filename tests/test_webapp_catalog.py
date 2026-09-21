@@ -67,13 +67,17 @@ def test_workspace_resource_contracts_and_unified_task_submission(app, tmp_path)
         "langsmith",
         "langfuse",
     }
-    assert app.workflow_readiness(saved["id"], "design", confirmed["id"], goal["id"]) == {
-        "workflow": "design",
-        "workflow_version": 1,
-        "ready": True,
-        "blockers": [],
-        "next_action": "start",
-    }
+    prepared = app.prepare_workflow_start(
+        saved["id"],
+        {
+            "workflow": "design",
+            "agent_id": confirmed["id"],
+            "input": {"type": "goal", "id": goal["id"]},
+            "options": {},
+        },
+    )
+    assert prepared["state"] == "ready"
+    assert prepared["normalized_intent"]["workflow"] == "design"
 
     app.runtime.stopping = True
     command = {
@@ -132,6 +136,68 @@ def test_discovery_is_explicit_bounded_and_preserves_confirmed_identity(app, tmp
         assert app2.catalog.agent(saved["id"], confirmed["id"])["name"] == "Customer support"
     finally:
         app2.close()
+
+
+def test_identity_review_retains_source_and_exclusion_across_rescans(app, tmp_path):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    root.joinpath("app.py").write_text(
+        'from agents import Agent\nsupport = Agent(name="Support")\n', encoding="utf-8"
+    )
+
+    discovered = app.catalog.discover(saved["id"])["agents"][0]
+    evidence = next(item for item in discovered["evidence"] if item["kind"] == "code")
+    assert evidence["path"] == "app.py"
+    assert evidence["context"]["start_line"] == 1
+    assert 'Agent(name="Support")' in evidence["context"]["source"]
+
+    excluded = app.exclude_application_agent(
+        saved["id"],
+        discovered["id"],
+        {"reason": "This is a test harness, not a deployed agent.", "expected_revision": 1},
+    )
+    assert excluded["status"] == "archived"
+    assert app.catalog.discover(saved["id"])["agents"] == []
+    inventory = app.project_agents(saved["id"])
+    assert inventory["suggestions"] == []
+    assert inventory["excluded"][0]["identity_review"]["reason"] == (
+        "This is a test harness, not a deployed agent."
+    )
+
+    restored = app.restore_application_agent(
+        saved["id"], discovered["id"], {"expected_revision": excluded["revision"]}
+    )
+    assert restored["status"] == "suggested"
+    assert app.catalog.discover(saved["id"])["agents"][0]["id"] == discovered["id"]
+
+
+def test_suggestion_confirmation_uses_the_exact_displayed_revision(app, tmp_path):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    root.joinpath("app.py").write_text(
+        'from agents import Agent\nsupport = Agent(name="Support")\n', encoding="utf-8"
+    )
+    suggestion = app.catalog.discover(saved["id"])["agents"][0]
+    enriched = app.catalog.save_agent(
+        saved["id"],
+        {
+            "description": "Answers support questions using approved tools.",
+            "expected_revision": suggestion["revision"],
+        },
+        suggestion["id"],
+    )
+
+    with pytest.raises(AuditError, match="changed; reload"):
+        app.confirm_application_agent(
+            saved["id"], suggestion["id"], {"expected_revision": suggestion["revision"]}
+        )
+
+    confirmed = app.confirm_application_agent(
+        saved["id"], suggestion["id"], {"expected_revision": enriched["revision"]}
+    )
+    assert confirmed["status"] == "confirmed"
+    assert confirmed["code_scopes"] == enriched["code_scopes"]
+    assert confirmed["binding_digest"] == enriched["binding_digest"]
 
 
 def test_discovery_excludes_non_application_sources_and_retires_old_suggestions(app, tmp_path):
@@ -237,6 +303,11 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
         "Answers customer questions using the configured support tools.",
         "Researches customer questions and prepares evidence.",
     ]
+    assert all(
+        agent["responsibility_inference"]["state"] == "inferred"
+        and agent["responsibility_inference"]["task_id"] == task["task_id"]
+        for agent in app.project_agents(saved["id"])["suggestions"]
+    )
     from test_webapp_jobs import manifest
 
     prepared = manifest(calls[0])["preparation"]["candidates"]
@@ -248,6 +319,107 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
         app.discover_application_agents(saved["id"], {"operation_id": operation})["task_id"]
         == task["task_id"]
     )
+
+
+def test_responsibility_retry_reviews_only_the_selected_suggestion(app, tmp_path, monkeypatch):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    (root / "app.py").write_text(
+        'from agents import Agent\nsupport = Agent(name="Support")\n'
+        'research = Agent(name="Research")\n'
+    )
+    app.catalog.discover(saved["id"], snapshot_ids=[])
+    suggestions = app.project_agents(saved["id"])["suggestions"]
+    target = next(item for item in suggestions if item["name"] == "Support")
+    calls = []
+
+    def execute(request, *_args):
+        from test_webapp_jobs import manifest
+
+        calls.append(request)
+        candidates = manifest(request)["preparation"]["candidates"]
+        assert [candidate["id"] for candidate in candidates] == [target["id"]]
+        assert len(candidates[0]["context"]["source"].splitlines()) <= 50
+        return {
+            "state": "completed",
+            "text": json.dumps(
+                {
+                    "summary": "Reviewed one retained definition",
+                    "candidates": [
+                        {
+                            "id": candidates[0]["id"],
+                            "file": candidates[0]["file"],
+                            "name": candidates[0]["name"],
+                            "keep": True,
+                            "responsibility": "Answers customer support questions.",
+                        }
+                    ],
+                }
+            ),
+        }
+
+    app.runtime.execute = execute
+    monkeypatch.setattr(
+        app,
+        "agents",
+        lambda: {
+            "agents": [{"id": "codex", "available": True, "authenticated": True}],
+            "settings": {},
+        },
+    )
+    from test_webapp_jobs import wait_for
+
+    task = app.infer_application_agent_responsibility(
+        saved["id"], target["id"], {"operation_id": str(uuid.uuid4())}
+    )
+    completed = wait_for(app.runtime, saved["id"], task["task_id"])
+    assert completed["state"] == "completed", completed
+    assert len(calls) == 1
+    refreshed = app.project_agents(saved["id"])["suggestions"]
+    inferred = next(item for item in refreshed if item["id"] == target["id"])
+    untouched = next(item for item in refreshed if item["id"] != target["id"])
+    assert inferred["responsibility"] == "Answers customer support questions."
+    assert inferred["responsibility_inference"]["task_id"] == task["task_id"]
+    assert untouched["responsibility"] == ""
+    assert untouched["responsibility_inference"]["state"] == "pending"
+    assert app.production.onboarding(saved["id"])["state"] == "configure"
+
+
+def test_coding_review_does_not_replace_a_manual_responsibility(app, tmp_path):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    (root / "app.py").write_text('from agents import Agent\nsupport = Agent(name="Support")\n')
+    app.catalog.discover(saved["id"], snapshot_ids=[])
+    suggestion = app.catalog.agents(saved["id"])[0]
+    edited = app.save_application_agent(
+        saved["id"],
+        {
+            "description": "Routes customer requests to the right support workflow.",
+            "expected_revision": suggestion["revision"],
+        },
+        suggestion["id"],
+    )
+
+    app.catalog.apply_coding_review(
+        saved["id"],
+        [
+            {
+                "id": edited["id"],
+                "file": edited["code_scopes"][0],
+                "name": "Wrong model name",
+                "keep": False,
+                "responsibility": "",
+            }
+        ],
+        task_id="task_" + "a" * 24,
+    )
+
+    retained = app.catalog.agent(saved["id"], edited["id"])
+    assert retained["status"] == "suggested"
+    assert retained["name"] == "Support"
+    assert retained["description"] == "Routes customer requests to the right support workflow."
+    assert retained["responsibility_inference"]["state"] == "edited"
+    assert retained["evidence"][-1]["decision"] == "preserve_manual_edit"
 
 
 def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path):

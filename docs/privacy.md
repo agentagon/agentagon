@@ -13,7 +13,8 @@ Agentagon saves evidence locally, but the location of storage and the location o
 | Remote execution inputs | Declared frozen inputs are transferred to the configured destination. Choose the permitted code and data before authorizing a remote run. |
 | Provider trace retrieval | The local web app retrieves explicit selections through a project connection. Coding-agent workflows can also retrieve selected exports through available provider access. |
 | Optional Intelligence | Receives separately prepared, redacted workflow fields when configured and used: context/focus for audits, context/goal for evaluations, and context/focus for fixes. Raw code, traces, saved goals and protected evaluation material are not automatically uploaded. |
-| Anonymous product telemetry | Enabled by default; sends allowed skill/Intelligence usage fields to the analytics service. It can be disabled. |
+| Local product funnel | Derived from project-local records, with a bounded journal for prepared actions and duplicate starts. It is visible and manually exportable in Data & privacy settings. It is never sent automatically. |
+| Anonymous product telemetry | Disabled by default. If you explicitly enable it, Agentagon sends only the bounded skill/Intelligence usage fields described below. Local funnel records are never included. |
 | GitHub publication | Pushes the selected branch and creates a draft PR only when publication is authorized. |
 
 ## Local evidence and credentials
@@ -24,9 +25,15 @@ CLI settings use your user configuration file, with project overrides and enviro
 
 Retained trace and task data use recognized-secret redaction. Pattern redaction is additional protection, not a guarantee that personal, proprietary, or sensitive content has been removed. Decide what your host and services may inspect before supplying it.
 
-## Disable product telemetry
+## Optional product telemetry
 
-For your user:
+Agentagon does not send product telemetry until you explicitly opt in. Enable it for your user with:
+
+```sh
+agentagon _internal setup --scope user --set telemetry.enabled true
+```
+
+Disable it again for your user with:
 
 ```sh
 agentagon _internal setup --scope user --set telemetry.enabled false
@@ -42,7 +49,7 @@ Disabling clears pending events. Disabled-period events are not backfilled. A re
 
 Allowed telemetry includes skill name, host enum, lookup outcome/timing, and validated knowledge-entry IDs. It excludes code, traces, prompts, goals, credentials, local paths, owner IDs, customer identifiers and finding text. Events use per-event random IDs, not stable installation or user IDs.
 
-The analytics service sees connection metadata during processing. Provider privacy settings govern stored IP/enrichment behavior. See [Product telemetry](telemetry.md) for the complete payload, queue, and delivery contract.
+The analytics service sees connection metadata during processing. Provider privacy settings govern stored IP/enrichment behavior. See [Product telemetry](telemetry.md) for the complete payload, queue, and delivery contract. The local funnel export contains no project path, source, trace content, prompt, goal, or credential, and downloading it is a local browser action.
 
 ## Optional Intelligence processing
 
