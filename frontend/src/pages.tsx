@@ -21,6 +21,7 @@ import {
   useAgentOverview,
   useAgents,
   useAssistants,
+  useCodexModels,
   useConnectors,
   useConnectorTypes,
   useGoal,
@@ -396,6 +397,8 @@ function AssistantSettings() {
   const [concurrency, setConcurrency] = useState(Number(defaults.concurrency || 1));
   const [key, setKey] = useState("");
   const [initialized, setInitialized] = useState(false);
+  const codexModels = useCodexModels(selected === "codex");
+  const availableCodexModels = codexModels.data?.models;
   useEffect(() => {
     if (!assistants.data || initialized) return;
     const agent = String(assistants.data.defaults.default_agent || "codex");
@@ -405,12 +408,21 @@ function AssistantSettings() {
     setConcurrency(Number(assistants.data.defaults.concurrency || 1));
     setInitialized(true);
   }, [assistants.data, initialized]);
+  useEffect(() => {
+    if (selected !== "codex" || !availableCodexModels?.length) return;
+    if (!availableCodexModels.some((entry) => entry.id === model)) {
+      setModel(codexModels.data?.default_model || availableCodexModels[0].id);
+    }
+  }, [availableCodexModels, codexModels.data?.default_model, model, selected]);
   const mutation = useMutation({ mutationFn: () => post("/api/assistants", { default_agent: selected, model, concurrency, ...(selected === "claude" && key ? { claude_api_key: key, credential_mode: "keyring" } : {}) }), onSuccess: () => { setKey(""); queryClient.invalidateQueries({ queryKey: ["assistants"] }); } });
   const selectAssistant = (agent: string) => {
     setSelected(agent);
     setModel(String((assistants.data?.defaults.models as Record<string, string> | undefined)?.[agent] || ""));
   };
-  return <div className="settings-stack"><section className="settings-section"><div className="section-heading"><div><h2>Available coding backends</h2><p className="quiet-copy">The selected backend diagnoses evidence and authors changes inside Agentagon-managed tasks.</p></div></div><div className="assistant-grid">{assistants.data?.assistants.map((assistant) => <article className={`assistant-card ${selected === assistant.id ? "is-selected" : ""}`} key={assistant.id}><div><h3>{assistant.name}</h3><Status value={assistant.available ? assistant.authenticated === false ? "sign in needed" : assistant.authenticated === true ? "ready" : "authentication unknown" : "not installed"} /></div>{assistant.version && <p>Version {assistant.version}</p>}{assistant.message && <small>{assistant.message}</small>}</article>)}</div></section><form className="settings-card form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><div><h2>Default for new tasks</h2><p className="quiet-copy">Workflow preparation shows this backend and model before any task starts.</p></div><label>Coding backend<select value={selected} onChange={(event) => selectAssistant(event.target.value)}><option value="codex">Codex</option><option value="claude">Claude</option></select></label><label>Model<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Use the backend default" /></label><label>Maximum concurrent tasks<input type="number" min={1} max={8} value={concurrency} onChange={(event) => setConcurrency(Number(event.target.value))} /></label>{selected === "claude" && <label>Claude API key<input type="password" value={key} onChange={(event) => setKey(event.target.value)} autoComplete="off" /><small>Stored as a credential reference; the saved value is never shown here.</small></label>}{mutation.error && <p className="error-banner">{mutation.error.message}</p>}<footer className="form-actions"><Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving…" : "Save coding backend"}</Button></footer></form></div>;
+  const modelField = selected === "codex" && availableCodexModels?.length
+    ? <select value={model} onChange={(event) => setModel(event.target.value)}>{availableCodexModels.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
+    : <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Use the backend default" />;
+  return <div className="settings-stack"><section className="settings-section"><div className="section-heading"><div><h2>Available coding backends</h2><p className="quiet-copy">The selected backend diagnoses evidence and authors changes inside Agentagon-managed tasks.</p></div></div><div className="assistant-grid">{assistants.data?.assistants.map((assistant) => <article className={`assistant-card ${selected === assistant.id ? "is-selected" : ""}`} key={assistant.id}><div><h3>{assistant.name}</h3><Status value={assistant.available ? assistant.authenticated === false ? "sign in needed" : assistant.authenticated === true ? "ready" : "authentication unknown" : "not installed"} /></div>{assistant.version && <p>Version {assistant.version}</p>}{assistant.message && <small>{assistant.message}</small>}</article>)}</div></section><form className="settings-card form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><div><h2>Default for new tasks</h2><p className="quiet-copy">Workflow preparation shows this backend and model before any task starts.</p></div><label>Coding backend<select value={selected} onChange={(event) => selectAssistant(event.target.value)}><option value="codex">Codex</option><option value="claude">Claude</option></select></label><label>Model{modelField}</label>{codexModels.isError && selected === "codex" && <p className="error-banner">Could not load models from Codex. Enter a model name instead.</p>}<label>Maximum concurrent tasks<input type="number" min={1} max={8} value={concurrency} onChange={(event) => setConcurrency(Number(event.target.value))} /></label>{selected === "claude" && <label>Claude API key<input type="password" value={key} onChange={(event) => setKey(event.target.value)} autoComplete="off" /><small>Stored as a credential reference; the saved value is never shown here.</small></label>}{mutation.error && <p className="error-banner">{mutation.error.message}</p>}<footer className="form-actions"><Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving…" : "Save coding backend"}</Button></footer></form></div>;
 }
 
 function ProjectSettings({ projectId, mode }: { projectId: string; mode: string }) {

@@ -14,6 +14,7 @@ from test_webapp_jobs import wait_for
 
 from agentagon.brain.adapters import run_agent
 from agentagon.capabilities.production import compare
+from agentagon.capabilities.traces import snapshots
 from agentagon.core.records import AuditError
 from agentagon.domain.monitoring import measurement
 from agentagon.memory.lessons import validate
@@ -371,6 +372,33 @@ def test_monitor_observes_without_goal_brain_or_repair(app):
     ):
         time.sleep(0.01)
     assert instance.memory.recall(project, groups[0]["id"], "")["entries"]
+
+
+def test_observation_diagnosis_uses_only_root_matched_traces(app):
+    instance, project, _ = app
+
+    class MixedProvider(Provider):
+        def preview(self, kind, selection):
+            accepted = trace("a" * 32)
+            rejected = trace("b" * 32)
+            rejected["attributes"][0]["value"]["stringValue"] = "staging"
+            rejected["metadata"]["environment"] = "staging"
+            child = trace("b" * 32)
+            child.update(spanId="2" * 16, parentSpanId="1" * 16, name="production-child")
+            return {
+                "items": [accepted, rejected, child],
+                "provenance": {"provider": "otlp", "project": "weather"},
+                "completeness": {"complete": True, "count": 3},
+            }
+
+    instance.provider_factory = MixedProvider
+    policy = monitor(app, diagnosis=True)
+    instance.scheduler.tick()
+    policy = instance.monitoring.get(project, policy["id"])
+    task = wait_for(instance.runtime, project, policy["task_id"])
+    selected = snapshots.load(instance.state.workspace(project), task["preparation"]["snapshot_id"])
+
+    assert selected["provenance"]["selected_trace_ids"] == ["a" * 32]
 
 
 def test_pending_restart_blocks_execution_until_explicit_control(app):

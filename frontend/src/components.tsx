@@ -174,7 +174,7 @@ export function TaskPanel({ projectId, taskId, onClose }: { projectId: string; t
   const activity = task.data ? <div className="conversation" aria-live="polite">
     {task.data.conversation.map((message, index) => <article className={`message message-${message.role || "assistant"}`} key={index}><span>{message.role === "user" ? "You" : "Coding assistant"}</span><p>{message.text || message.content}</p></article>)}
     {task.data.events.map((event, index) => <article className="task-event" key={index}><span>{event.type || "Progress"}</span><p>{event.text}</p></article>)}
-    {!task.data.conversation.length && !task.data.events.length && <p className="quiet-copy">Waiting for the first update.</p>}
+    {!task.data.conversation.length && !task.data.events.length && <p className="quiet-copy">{task.data.state === "queued" ? "Waiting for coding assistant capacity. This task continues in the background." : task.data.state === "running" ? "Running in the background." : "Waiting for the first update."}</p>}
   </div> : null;
   return <aside className={`task-panel ${hasAssessmentOutcome ? "task-panel-result" : ""}`} aria-label="Task details">
     <header className="task-panel-header"><div><p className="eyebrow">Task</p><h2>{task.data?.title || "Loading task…"}</h2></div><Button tone="quiet" aria-label="Close task" onClick={onClose}><Icon name="close" /></Button></header>

@@ -90,6 +90,18 @@ def request(tmp_path, **kwargs):
     return {"agent": "codex", "cwd": str(tmp_path), "prompt": "Inspect this project", **kwargs}
 
 
+def test_waiting_for_user_input_does_not_consume_host_timeout():
+    run = agents._Run(
+        {"timeout_seconds": 0.02},
+        lambda event: None,
+        lambda question: (time.sleep(0.05), {"decision": "accept"})[1],
+        threading.Event(),
+    )
+
+    assert run.ask({"kind": "approval"}) == {"decision": "accept"}
+    run.check()
+
+
 def test_codex_streams_approval_question_and_redacted_result(tmp_path, monkeypatch):
     monkeypatch.setenv("EXAMPLE_API_KEY", "super-secret-value")
     executable, log = fake_codex(tmp_path)
@@ -309,17 +321,26 @@ def test_codex_cancellation_while_approval_is_waiting(tmp_path):
     assert time.monotonic() - before < 3
 
 
-def test_codex_timeout_stops_owned_process(tmp_path):
+def test_codex_timeout_stops_owned_process(tmp_path, monkeypatch):
     executable, _ = fake_codex(tmp_path, "hold")
+    sent = []
+    original_send = agents._Codex.send
+
+    def record_send(self, value):
+        sent.append(value)
+        return original_send(self, value)
+
+    monkeypatch.setattr(agents._Codex, "send", record_send)
     before = time.monotonic()
     with pytest.raises(AuditError, match="time limit"):
         agents.run_agent(
-            request(tmp_path, executable=str(executable), timeout_seconds=0.2),
+            request(tmp_path, executable=str(executable), timeout_seconds=1),
             lambda event: None,
             lambda event: {},
             threading.Event(),
         )
     assert time.monotonic() - before < 3
+    assert any(message.get("method") == "turn/interrupt" for message in sent)
 
 
 @pytest.mark.parametrize(

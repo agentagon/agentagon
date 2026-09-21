@@ -37,6 +37,32 @@ from agentagon.workflows.runtime import ACTIVE, TaskRuntime, operation_id, publi
 
 DISCOVERY_TTL_SECONDS = 600
 MAX_CONNECTION_DISCOVERIES = 12
+
+
+def service_identity():
+    """Identify the loaded package and dashboard assets for safe local reuse."""
+    import hashlib
+    from importlib.resources import files
+
+    from agentagon import __version__
+
+    asset_hash = hashlib.sha256()
+    assets = files("agentagon").joinpath("dashboard/assets")
+    for name in ("webapp.html", "webapp.js", "webapp.css"):
+        asset_hash.update(name.encode())
+        asset_hash.update(assets.joinpath(name).read_bytes())
+    configured_build = os.environ.get("AGENTAGON_BUILD_ID", "")
+    return {
+        "package_version": __version__,
+        "build_id": (
+            configured_build
+            if configured_build.isascii() and 1 <= len(configured_build) <= 120
+            else "Unknown build"
+        ),
+        "frontend_asset_version": asset_hash.hexdigest()[:16],
+    }
+
+
 RESULT_TASK_KEYS = {
     "audit": "audit_id",
     "eval": "evaluation_id",
@@ -152,6 +178,7 @@ class Application:
         self.state = AppState(directory)
         self.credentials = credentials or CredentialStore()
         self.provider_factory = provider_factory or ProviderClient
+        self._managed_executor = execute is not None
         self.runtime = TaskRuntime(self.state, self.credentials, execute)
         self.catalog = Catalog(self.state)
         from agentagon.memory.store import MemoryGroups
@@ -178,30 +205,14 @@ class Application:
 
     def diagnostics(self):
         """Return bounded identities for the code and state loaded by this process."""
-        import hashlib
         import platform
-        from importlib.resources import files
 
-        from agentagon import __version__
         from agentagon.core.records import CONTRACT_VERSION
         from agentagon.storage.workspace import STATE_VERSION
 
-        asset_hash = hashlib.sha256()
-        assets = files("agentagon").joinpath("dashboard/assets")
-        for name in ("webapp.html", "webapp.js", "webapp.css"):
-            asset_hash.update(name.encode())
-            asset_hash.update(assets.joinpath(name).read_bytes())
-        configured_build = os.environ.get("AGENTAGON_BUILD_ID", "")
-        build_id = (
-            configured_build
-            if configured_build.isascii() and 1 <= len(configured_build) <= 120
-            else "Unknown build"
-        )
         return {
             "application": "agentagon",
-            "package_version": __version__,
-            "build_id": build_id,
-            "frontend_asset_version": asset_hash.hexdigest()[:16],
+            **service_identity(),
             "service_started_at": self.started_at,
             "python_version": platform.python_version(),
             "state_contracts": {
@@ -1905,17 +1916,20 @@ class Application:
                 key_available = bool(self.credentials.resolve(reference))
             except AuditError:
                 pass
+        agents = []
+        for agent in detect_backends():
+            item = {
+                **agent,
+                **({"authenticated": key_available} if agent["agent"] == "claude" else {}),
+                "id": agent["agent"],
+                "name": "Codex" if agent["agent"] == "codex" else "Claude",
+                "message": agent.get("unavailable_reason"),
+            }
+            if self._managed_executor and agent["agent"] == settings.get("default_agent"):
+                item.update(available=True, authenticated=True, message=None)
+            agents.append(item)
         return {
-            "agents": [
-                {
-                    **agent,
-                    **({"authenticated": key_available} if agent["agent"] == "claude" else {}),
-                    "id": agent["agent"],
-                    "name": "Codex" if agent["agent"] == "codex" else "Claude",
-                    "message": agent.get("unavailable_reason"),
-                }
-                for agent in detect_backends()
-            ],
+            "agents": agents,
             "settings": {k: v for k, v in settings.items() if not k.endswith("_ref")},
             "claude_key_configured": key_available,
         }

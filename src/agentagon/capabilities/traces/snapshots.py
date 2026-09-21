@@ -277,3 +277,58 @@ def select_trace(workspace, project_id, snapshot_id, trace_id):
         "complete": bool(source["completeness"].get("complete")) and not invalid,
     }
     return save(workspace, project_id, preview)
+
+
+def select_trace_ids(workspace, project_id, snapshot_id, trace_ids):
+    """Freeze the exact traces accepted by an earlier bounded selection."""
+    from agentagon.capabilities.traces.normalize import normalize, unpack
+
+    if (
+        not isinstance(trace_ids, list)
+        or not trace_ids
+        or len(trace_ids) > 10000
+        or any(not isinstance(value, str) or not value or len(value) > 2048 for value in trace_ids)
+        or len(set(trace_ids)) != len(trace_ids)
+    ):
+        raise AuditError("choose a bounded list of distinct trace identities")
+    source = load(workspace, snapshot_id)
+    if source["kind"] != "traces":
+        raise AuditError("select a trace snapshot")
+    provider = source["provenance"]["provider"]
+    project = source["selection"].get("project") or source["provenance"].get("project")
+    requested = set(trace_ids)
+    groups = {trace_id: [] for trace_id in trace_ids}
+    invalid = 0
+    for row, locator in unpack(source["items"], provider):
+        try:
+            span = normalize(row, provider, project, locator)
+        except (AuditError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            invalid += 1
+            continue
+        if span["trace_id"] in requested:
+            groups[span["trace_id"]].append(row)
+    if any(not groups[trace_id] for trace_id in trace_ids):
+        raise AuditError("selected trace is no longer present in this snapshot")
+    preview = {
+        key: source[key]
+        for key in ("kind", "connection_id", "selection", "provenance", "completeness")
+    }
+    preview["items"] = [item for trace_id in trace_ids for item in groups[trace_id]]
+    preview["selection"] = {**source["selection"], "cap": len(trace_ids)}
+    preview["provenance"] = {
+        **source["provenance"],
+        "source_snapshot_id": source["id"],
+        "source_digest": source["digest"],
+        "selected_trace_ids": trace_ids,
+        "selected_traces": len(trace_ids),
+        "selection_order": "accepted_trace_identities",
+    }
+    preview["completeness"] = {
+        **source["completeness"],
+        "selected_traces": len(trace_ids),
+        "count": len(preview["items"]),
+        "unusable_records": invalid,
+        "requested_traces": len(trace_ids),
+        "complete": bool(source["completeness"].get("complete")) and not invalid,
+    }
+    return save(workspace, project_id, preview)

@@ -346,8 +346,11 @@ class ProductionRuntime:
                 samples, coverage = production.rows(workspace, snapshot["id"], policy["selector"])
                 prepared.update(samples=samples, coverage=coverage)
                 if samples:
-                    selected = snapshots.select_traces(
-                        workspace, project, snapshot["id"], policy["selector"], policy["trace_cap"]
+                    selected = snapshots.select_trace_ids(
+                        workspace,
+                        project,
+                        snapshot["id"],
+                        [sample["trace_id"] for sample in samples],
                     )
                     prepared["snapshot_id"] = selected["id"]
             if cancelled.is_set():

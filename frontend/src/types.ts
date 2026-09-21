@@ -55,6 +55,13 @@ export type Agent = {
   confidence?: string;
 };
 
+export type AssistantModel = {
+  id: string;
+  name: string;
+  description?: string;
+  default?: boolean;
+};
+
 export type Goal = {
   id: string;
   project_id: string;
@@ -99,7 +106,7 @@ export type MeasurementPlan = {
   state?: string;
   revision?: number;
   accepted_at?: string;
-  background?: string;
+  background?: string[];
   behaviors?: MeasurementBehavior[];
   metrics?: Record<string, MeasurementMetric>;
   scoring?: {

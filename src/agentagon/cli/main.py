@@ -23,12 +23,13 @@ def main(ctx, workspace):
 
 @main.command()
 @click.option("--port", type=click.IntRange(0, 65535), default=0)
+@click.option("--without-project", is_flag=True, hidden=True)
 @click.pass_obj
-def serve(workspace, port):
+def serve(workspace, port, without_project):
     """Run the shared local service in the foreground."""
     from agentagon.workflows.service_host import launch
 
-    launch(workspace, port=port, open_browser=False)
+    launch(None if without_project else workspace, port=port, open_browser=False)
 
 
 @main.command()

@@ -12,7 +12,20 @@ import httpx
 from agentagon.core.records import AuditError, load_json
 from agentagon.dashboard.server import create_server
 from agentagon.storage.state import AppState, atomic_write
-from agentagon.workflows.service import Application
+from agentagon.workflows.service import Application, service_identity
+
+
+def _verify_service(health):
+    expected = service_identity()
+    if health.get("application") != "agentagon":
+        raise AuditError("unrecognized local service")
+    mismatched = [key for key, value in expected.items() if health.get(key) != value]
+    if mismatched:
+        fields = ", ".join(key.replace("_", " ") for key in mismatched)
+        raise AuditError(
+            f"The running Agentagon service uses a different {fields}. "
+            "Stop that service and retry with this installation."
+        )
 
 
 def _reuse(state, workspace, open_browser):
@@ -29,17 +42,20 @@ def _reuse(state, workspace, open_browser):
             headers = {"X-Agentagon-Token": instance["token"], "Origin": origin}
             with httpx.Client(timeout=2, trust_env=False) as client:
                 health = client.get(origin + "/api/health", headers=headers)
-                if health.status_code != 200 or health.json().get("application") != "agentagon":
+                if health.status_code != 200:
                     raise AuditError("the existing application session could not be verified")
-                response = client.post(
-                    origin + "/api/projects",
-                    headers=headers,
-                    json={"path": str(Path(workspace).resolve())},
-                )
-                if response.status_code != 200:
-                    raise AuditError("unable to select this project in the running application")
-                project = response.json()
-            url = origin + "/?project=" + project["id"]
+                _verify_service(health.json())
+                project = None
+                if workspace is not None:
+                    response = client.post(
+                        origin + "/api/projects",
+                        headers=headers,
+                        json={"path": str(Path(workspace).resolve())},
+                    )
+                    if response.status_code != 200:
+                        raise AuditError("unable to select this project in the running application")
+                    project = response.json()
+            url = origin + ("/?project=" + project["id"] if project else "/")
             click.echo(url)
             if open_browser:
                 webbrowser.open(url)
@@ -66,7 +82,11 @@ def launch(workspace, *, port=0, open_browser=True):
         server = None
         instance = state.directory / "instance.json"
         try:
-            project = application.register(str(Path(workspace).resolve()))
+            project = (
+                application.register(str(Path(workspace).resolve()))
+                if workspace is not None
+                else None
+            )
             server = create_server(application, port)
             atomic_write(
                 instance,
@@ -77,7 +97,9 @@ def launch(workspace, *, port=0, open_browser=True):
                     "pid": os.getpid(),
                 },
             )
-            url = f"http://127.0.0.1:{server.server_port}/?project={project['id']}"
+            url = f"http://127.0.0.1:{server.server_port}/"
+            if project:
+                url += "?project=" + project["id"]
             click.echo(url)
             click.echo(
                 "Agentagon is running locally. Keep this terminal open; Ctrl+C stops the service."
@@ -130,7 +152,7 @@ class ServiceClient:
         return result
 
 
-def ensure_service(workspace=None):
+def ensure_service():
     """Reuse or start the service without opening a browser or using client stdout."""
     import subprocess
     import sys
@@ -144,8 +166,7 @@ def ensure_service(workspace=None):
         instance = load_json(instance_path)
         client = ServiceClient(instance)
         health = client.request("GET", "/api/health")
-        if health.get("application") != "agentagon" or not health.get("package_version"):
-            raise AuditError("unrecognized local service")
+        _verify_service(health)
         return client
 
     try:
@@ -157,14 +178,7 @@ def ensure_service(workspace=None):
     descriptor = os.open(log, os.O_CREAT | os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW, 0o600)
     with os.fdopen(descriptor, "ab") as stream:
         subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "agentagon",
-                "--workspace",
-                str(Path(workspace or Path.cwd()).resolve()),
-                "serve",
-            ],
+            [sys.executable, "-m", "agentagon", "serve", "--without-project"],
             stdin=subprocess.DEVNULL,
             stdout=stream,
             stderr=stream,
@@ -179,7 +193,7 @@ def ensure_service(workspace=None):
 
 
 def open_dashboard(workspace):
-    client = ensure_service(workspace)
+    client = ensure_service()
     project = client.request("POST", "/api/projects", {"path": str(Path(workspace).resolve())})
     url = client.origin + "/projects/" + project["id"] + "/home"
     click.echo(url)

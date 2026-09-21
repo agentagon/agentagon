@@ -12,7 +12,7 @@ from test_webapp_catalog import agent, goal_record
 from test_webapp_jobs import wait_for
 
 from agentagon.core.records import AuditError
-from agentagon.workflows.evaluate.designs import score_definition
+from agentagon.workflows.evaluate.designs import Designs, score_definition, validate
 from agentagon.workflows.service import Application
 
 
@@ -32,10 +32,42 @@ def proposal(**values):
         "scoring": {"mode": "weighted"},
         "evaluation": {"mode": "create", "framework": "custom"},
         "evidence": ["app.py:1"],
-        "background": "Preserve answer quality while reducing unnecessary calls.",
+        "background": ["Preserve answer quality while reducing unnecessary calls."],
         "limitations": ["Production traces are not connected."],
         **values,
     }
+
+
+def test_background_is_observation_list_with_legacy_text_compatibility():
+    canonical = proposal()
+    canonical.pop("expected_revision")
+    assert validate(canonical)["background"] == canonical["background"]
+
+    legacy = copy.deepcopy(canonical)
+    legacy["background"] = "Preserve the existing behavior."
+    assert validate(legacy)["background"] == ["Preserve the existing behavior."]
+
+    optimization = json.loads(
+        Designs.background(
+            {
+                **canonical,
+                "digest": "design-digest",
+                "background": ["First observation.", "Second observation."],
+            },
+            "Improve efficiency.",
+        )
+    )
+    assert optimization["context"] == "First observation.\n\nSecond observation."
+
+    invalid = copy.deepcopy(canonical)
+    invalid["background"] = {"observation": "not a list"}
+    with pytest.raises(AuditError, match="background must be a bounded list"):
+        validate(invalid)
+
+    oversized = copy.deepcopy(canonical)
+    oversized["background"] = ["x" * 4000 for _ in range(17)]
+    with pytest.raises(AuditError, match="background must be within 64 KB"):
+        validate(oversized)
 
 
 def setup(app, tmp_path):

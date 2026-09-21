@@ -24,6 +24,17 @@ def _strings(value, label):
     return value
 
 
+def _background(value):
+    """Normalize legacy text while storing new measurement context as observations."""
+    if isinstance(value, str):
+        observations = [value] if value.strip() else []
+    else:
+        observations = _strings(value, "background")
+    if len(json.dumps(observations, ensure_ascii=False).encode()) > 64_000:
+        raise AuditError("background must be within 64 KB")
+    return observations
+
+
 def score_definition(design):
     """Compare semantic scoring independently from where the evaluator implements it."""
     return {
@@ -47,9 +58,7 @@ def validate(payload):
     value = copy.deepcopy(payload)
     for key in ("evidence", "limitations"):
         value[key] = _strings(value.get(key, []), key)
-    background = value.setdefault("background", "")
-    if not isinstance(background, str) or len(background.encode()) > 64_000:
-        raise AuditError("optimization context must be text within 64 KB")
+    value["background"] = _background(value.get("background", []))
     metrics = value.get("metrics")
     behaviors = value.get("behaviors")
     if not isinstance(metrics, dict) or not 1 <= len(metrics) <= 30:
@@ -322,7 +331,7 @@ class Designs:
                 "scoring": score_definition(accepted),
                 "evidence": accepted["evidence"],
                 "limitations": accepted["limitations"],
-                "context": accepted["background"],
+                "context": "\n\n".join(accepted["background"]),
             },
             ensure_ascii=False,
             sort_keys=True,

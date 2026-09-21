@@ -4,6 +4,7 @@ import { api, projectPath } from "./api";
 import type {
   Agent,
   Assistant,
+  AssistantModel,
   ConnectorType,
   Goal,
   LessonDetail,
@@ -78,6 +79,7 @@ export function useTask(projectId?: string, taskId?: string | null) {
     queryKey: ["projects", projectId, "tasks", taskId],
     queryFn: ({ signal }) => api<TaskDetail>(projectPath(projectId!, `/tasks/${encodeURIComponent(taskId!)}`), { signal }),
     enabled: Boolean(projectId && taskId),
+    refetchOnMount: "always",
   });
 }
 
@@ -133,5 +135,14 @@ export function useAssistants() {
   return useQuery({
     queryKey: ["assistants"],
     queryFn: ({ signal }) => api<{ assistants: Assistant[]; defaults: Record<string, unknown> }>("/api/assistants", { signal }),
+  });
+}
+
+export function useCodexModels(enabled = true) {
+  return useQuery({
+    queryKey: ["assistants", "codex", "models"],
+    queryFn: ({ signal }) => api<{ models: AssistantModel[]; default_model?: string | null }>("/api/agents/codex/models", { signal }),
+    enabled,
+    staleTime: 60_000,
   });
 }
