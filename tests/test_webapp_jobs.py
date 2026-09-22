@@ -12,13 +12,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from agentagon import operations
+from agentagon.capabilities.experiments import optimize_run
 from agentagon.core.records import AuditError, digest, load_json, now
-from agentagon.experiments import optimize_run
+from agentagon.domain.projections import task_detail
 from agentagon.storage.config import Config
-from agentagon.webapp import workflows
-from agentagon.webapp.jobs import JobManager
-from agentagon.webapp.state import AppState
+from agentagon.storage.state import AppState
+from agentagon.workflows import procedures as workflows
+from agentagon.workflows.audit import operations
+from agentagon.workflows.runtime import TaskRuntime
 
 
 def payload(kind="audit", **kwargs):
@@ -40,7 +41,7 @@ def manager_factory(tmp_path):
         root.mkdir(exist_ok=True)
         state = AppState(tmp_path / f"app-state-{index}")
         project = state.register(str(root))
-        manager = JobManager(
+        manager = TaskRuntime(
             state, SimpleNamespace(resolve=lambda ref: "test-key"), execute=execute
         )
         managers.append(manager)
@@ -62,9 +63,47 @@ def wait_for(manager, project, job_id, predicate=None, timeout=8):
 
 
 def manifest(request):
-    records = list((Path(request["cwd"]) / ".agentagon/webapp/job-inputs").glob("*-context.json"))
+    records = list((Path(request["cwd"]) / ".agentagon/runtime/task-inputs").glob("*-context.json"))
     # Only one host owns a project; its current context is the last projection refreshed.
     return load_json(max(records, key=lambda path: path.stat().st_mtime_ns))
+
+
+def test_task_projection_hides_host_activity_and_preserves_workflow_progress():
+    detail = task_detail(
+        {
+            "id": "task_" + "a" * 24,
+            "project_id": "project_" + "b" * 24,
+            "kind": "assess",
+            "state": "running",
+            "workflow_ids": {
+                "audit_id": "audit_" + "c" * 24,
+                "private_receipt_id": "receipt_" + "d" * 24,
+            },
+            "events": [
+                {"type": "session", "session_id": "session-one"},
+                {"type": "message", "text": "I'll inspect the repository."},
+                {"type": "progress", "text": "Running commandExecution"},
+                {"type": "progress", "text": "Completed commandExecution"},
+                {
+                    "type": "tool_activity",
+                    "tool": "commandExecution",
+                    "state": "running",
+                    "visibility": "diagnostic",
+                },
+                {
+                    "type": "progress",
+                    "text": "Diagnosing retained evidence with the managed coding backend.",
+                },
+            ],
+        }
+    )
+    assert detail["events"] == [
+        {
+            "type": "progress",
+            "text": "Diagnosing retained evidence with the managed coding backend.",
+        }
+    ]
+    assert detail["workflow_ids"] == {"audit_id": "audit_" + "c" * 24}
 
 
 def audit_host(request, emit, ask, cancelled):
@@ -98,15 +137,15 @@ def test_audit_idempotent_job_uses_actual_model_and_saved_evidence(manager_facto
     with pytest.raises(AuditError, match="different task settings"):
         manager.submit(project, {**command, "goal": "Changed goal"})
     assert "frozen_settings" not in result
-    assert not (state.workspace(project).state / "webapp/jobs").exists()
-    assert state.db.get_record(project, "jobs", result["id"])["result"] == result["result"]
+    assert not (state.workspace(project).state / "runtime/tasks").exists()
+    assert state.db.get_record(project, "tasks", result["id"])["result"] == result["result"]
 
 
 def test_two_managers_share_atomic_job_idempotency_and_reject_stale_writes(manager_factory):
     manager, state, project = manager_factory(lambda *args: pytest.fail("no host should run"))
     manager.stopping = True
     state.workspace(project).initialize()
-    other = JobManager(AppState(state.directory), manager.credentials, execute=manager.execute)
+    other = TaskRuntime(AppState(state.directory), manager.credentials, execute=manager.execute)
     other.stopping = True
     command = payload()
     try:
@@ -152,19 +191,23 @@ def test_failed_answer_commit_never_releases_host_and_success_is_durable(
 
     monkeypatch.setattr(MetadataTransaction, "put_record", fail_write)
     with pytest.raises(AuditError, match="failed commit"):
-        manager.control(project, job["id"], "reply", command)
+        manager.control(project, job["id"], "answer", command)
     assert key not in manager.answers
     assert not manager.active[key].is_set()
     assert manager._read(project, job["id"])["answers"] == {}
     monkeypatch.setattr(MetadataTransaction, "put_record", original)
-    accepted = manager.control(project, job["id"], "reply", command)
-    saved = AppState(state.directory).db.get_record(project, "jobs", job["id"])
+    accepted = manager.control(project, job["id"], "answer", command)
+    saved = AppState(state.directory).db.get_record(project, "tasks", job["id"])
     assert saved["answers"]["question-one"]["answer"] == {"decision": "accept"}
     assert command["operation_id"] in saved["receipts"]
     assert "answers" not in accepted
-    assert manager.control(project, job["id"], "reply", command)["revision"] == accepted["revision"]
+    assert (
+        manager.control(project, job["id"], "answer", command)["revision"] == accepted["revision"]
+    )
     with pytest.raises(AuditError, match="already has an accepted"):
-        manager.control(project, job["id"], "reply", {**command, "operation_id": str(uuid.uuid4())})
+        manager.control(
+            project, job["id"], "answer", {**command, "operation_id": str(uuid.uuid4())}
+        )
 
 
 def test_context_and_completion_verification_are_preserved(manager_factory):
@@ -172,13 +215,13 @@ def test_context_and_completion_verification_are_preserved(manager_factory):
     observed = []
 
     def verify(workspace, job, result):
-        observed.append((job["application_agent_id"], job["focus_id"], job["options"]))
+        observed.append((job["application_agent_id"], job["goal_id"], job["options"]))
         raise AuditError("Full suite still needs verification")
 
     manager.verify_result = verify
     command = payload(
         application_agent_id="agent_" + "a" * 24,
-        focus_id="focus_" + "b" * 24,
+        goal_id="goal_" + "b" * 24,
         options={
             "investigation_plan": {"hypothesis": "Grounded quality issue"},
             "suite_manifest": {"version": 1},
@@ -188,7 +231,7 @@ def test_context_and_completion_verification_are_preserved(manager_factory):
     result = wait_for(manager, project, job["id"])
     assert result["state"] == "failed"
     assert result["next_action"] == "Full suite still needs verification"
-    assert observed[0][:2] == (command["application_agent_id"], command["focus_id"])
+    assert observed[0][:2] == (command["application_agent_id"], command["goal_id"])
     assert observed[0][2]["suite_manifest"] == {"version": 1}
 
 
@@ -235,13 +278,13 @@ def test_raw_request_replay_preserves_original_frozen_context(manager_factory):
     manager.stopping = True
     original = payload()
     binding = digest(original)
-    prepared = {**original, "options": {"investigation_plan": {"focus_version": 1}}}
+    prepared = {**original, "options": {"investigation_plan": {"goal_version": 1}}}
     first = manager.submit(project, prepared, request_binding=binding)
-    changed_context = {**original, "options": {"investigation_plan": {"focus_version": 2}}}
+    changed_context = {**original, "options": {"investigation_plan": {"goal_version": 2}}}
     replay = manager.submit(project, changed_context, request_binding=binding)
     assert replay == first
     assert manager.existing_submission(project, original["operation_id"], binding) == first
-    assert replay["options"]["investigation_plan"]["focus_version"] == 1
+    assert replay["options"]["investigation_plan"]["goal_version"] == 1
     with pytest.raises(AuditError, match="different task settings"):
         manager.existing_submission(
             project, original["operation_id"], digest({**original, "goal": "Changed"})
@@ -250,7 +293,7 @@ def test_raw_request_replay_preserves_original_frozen_context(manager_factory):
 
 
 def test_reflection_uses_same_capacity_then_resumes_saved_author(manager_factory, monkeypatch):
-    from agentagon.webapp import agents
+    from agentagon.brain import adapters as agents
 
     author_requests = []
     reflection_requests = []
@@ -307,7 +350,7 @@ def test_missing_host_never_creates_an_audit(manager_factory):
 
 
 def test_claude_environment_credentials_work_without_storing_secret(manager_factory, monkeypatch):
-    from agentagon.webapp.providers import CredentialStore
+    from agentagon.capabilities.traces.providers import CredentialStore
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "never-persist-this-api-key")
 
@@ -331,7 +374,7 @@ def test_claude_environment_credentials_work_without_storing_secret(manager_fact
 def test_resume_uses_repaired_claude_credentials_without_changing_session_settings(
     manager_factory, monkeypatch
 ):
-    from agentagon.webapp.providers import CredentialStore
+    from agentagon.capabilities.traces.providers import CredentialStore
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     calls = []
@@ -380,147 +423,35 @@ def test_audit_request_recovers_crash_after_creation(workspace):
         operations.start(workspace, **{**options, "goal": "Other work"})
 
 
-def test_author_questions_use_best_judgment_without_blocking_the_browser(manager_factory):
-    answers = []
-
+def test_questions_show_actual_text_and_expire_without_late_resurrection(manager_factory):
     def waiting(request, emit, ask, cancelled):
         emit({"type": "session", "session_id": "waiting", "model": "actual-model"})
-        answers.append(
-            ask(
-                {
-                    "kind": "question",
-                    "questions": [{"id": "rule", "question": "Which answer is correct?"}],
-                }
-            )
+        ask(
+            {
+                "kind": "question",
+                "questions": [{"id": "rule", "question": "Which answer is correct?"}],
+            }
         )
-        return {
-            "state": "completed",
-            "session_id": "waiting",
-            "text": json.dumps(manifest(request)["workflow_ids"]),
-        }
+        return {"state": "completed", "session_id": "waiting", "text": "{}"}
 
     manager, _, project = manager_factory(waiting)
-    job = manager.submit(project, payload())
+    job = manager.submit(project, payload(options={"max_elapsed_seconds": 1}))
+    blocked = wait_for(manager, project, job["id"], lambda record: record["state"] == "needs_input")
+    assert blocked["question"]["text"] == "Which answer is correct?"
     result = wait_for(manager, project, job["id"])
-    assert result["state"] == "completed_with_limits"
-    assert result["question"] is None
-    assert answers == [
-        {
-            "text": (
-                "Use your best judgment, continue without asking the user, and state any "
-                "material assumptions in the result."
-            )
-        }
-    ]
-
-
-def test_user_guidance_interrupts_and_automatically_resumes_the_same_session(manager_factory):
-    started = threading.Event()
-    calls = []
-    contexts = []
-
-    def host(request, emit, ask, cancelled):
-        calls.append(copy.deepcopy(request))
-        emit({"type": "session", "session_id": "steered-session", "model": "actual-model"})
-        if len(calls) == 1:
-            started.set()
-            assert cancelled.wait(3)
-            return {"state": "cancelled", "session_id": "steered-session", "text": ""}
-        contexts.append(manifest(request))
-        return {
-            "state": "completed",
-            "session_id": "steered-session",
-            "text": json.dumps(contexts[-1]["workflow_ids"]),
-        }
-
-    manager, _, project = manager_factory(host)
-    submitted = manager.submit(project, payload())
-    assert started.wait(3)
-    manager.control(
-        project,
-        submitted["id"],
-        "message",
-        {"operation_id": str(uuid.uuid4()), "message": "Prioritize the safer path."},
-    )
-    result = wait_for(manager, project, submitted["id"])
-    assert result["state"] == "completed_with_limits", result.get("next_action")
-    assert len(calls) == 2
-    assert calls[1]["session_id"] == "steered-session"
-    assert contexts[0]["messages"][-1]["role"] == "user"
-    assert contexts[0]["messages"][-1]["text"] == "Prioritize the safer path."
-
-
-def test_task_projection_keeps_messages_and_results_without_progress(manager_factory):
-    from agentagon.webapp.resources import task_detail
-
-    manager, _, project = manager_factory(lambda *args: pytest.fail("host should not run"))
-    manager.stopping = True
-    submitted = manager.submit(project, payload())
-    job = manager._read(project, submitted["id"])
-    job["messages"] = [
-        "Internal continuation note",
-        {"role": "user", "text": "Keep the change small.", "at": "2026-09-17T10:00:00Z"},
-    ]
-    job["events"] = [
-        {
-            "type": "progress",
-            "text": "Running commandExecution",
-            "at": "2026-09-17T10:00:01Z",
-        },
-        {
-            "type": "message",
-            "text": "I found the relevant path.",
-            "at": "2026-09-17T10:00:02Z",
-        },
-        {
-            "type": "result",
-            "text": "The proposal is ready.",
-            "at": "2026-09-17T10:00:03Z",
-        },
-    ]
-
-    projected = task_detail(job)
-
-    assert [(item["role"], item["text"]) for item in projected["conversation"]] == [
-        ("user", "Keep the change small."),
-        ("assistant", "I found the relevant path."),
-        ("assistant", "The proposal is ready."),
-    ]
-    assert projected["can_message"] is True
-
-
-def test_progress_retention_does_not_evict_conversation(manager_factory):
-    from agentagon.webapp.resources import task_detail
-
-    manager, _, project = manager_factory(lambda *args: pytest.fail("host should not run"))
-    manager.stopping = True
-    submitted = manager.submit(project, payload())
-    job = manager._read(project, submitted["id"])
-    job["events"] = [
-        {"type": "message", "text": "I found the agent entrypoint.", "at": now()},
-        *[
-            {"type": "progress", "text": f"Completed tool {index}", "at": now()}
-            for index in range(299)
-        ],
-    ]
-    manager._write(job)
-
-    manager._emit(
-        project,
-        submitted["id"],
-        {"type": "progress", "text": "Completed one more tool"},
-    )
-
-    saved = manager._read(project, submitted["id"])
-    projected = task_detail(saved)
-    assert len(saved["events"]) == 300
-    assert projected["conversation"] == [
-        {
-            "role": "assistant",
-            "text": "I found the agent entrypoint.",
-            "created_at": saved["events"][0]["at"],
-        }
-    ]
+    assert result["state"] == "failed"
+    with pytest.raises(AuditError, match="no live unanswered"):
+        manager.control(
+            project,
+            job["id"],
+            "answer",
+            {
+                "operation_id": str(uuid.uuid4()),
+                "question_id": blocked["question"]["id"],
+                "answer": {"text": "A"},
+            },
+        )
+    assert manager.get(project, job["id"])["state"] == "failed"
 
 
 def test_pause_resume_preserves_session_and_audit(manager_factory):
@@ -600,7 +531,7 @@ def test_restart_charges_elapsed_and_requires_explicit_resume(manager_factory):
         attempt_started_at=(datetime.now(UTC) - timedelta(seconds=3)).isoformat(),
     )
     manager._write(saved)
-    restarted = JobManager(state, manager.credentials, execute=lambda *args: calls.append(args))
+    restarted = TaskRuntime(state, manager.credentials, execute=lambda *args: calls.append(args))
     try:
         recovered = restarted.get(project, job["id"])
         assert recovered["state"] == "interrupted"
@@ -609,193 +540,6 @@ def test_restart_charges_elapsed_and_requires_explicit_resume(manager_factory):
         assert not calls
     finally:
         restarted.close()
-
-
-def test_restart_preserves_agentagon_input_and_expires_native_request(manager_factory):
-    manager, state, project = manager_factory(lambda *args: pytest.fail("host should not run"))
-    manager.stopping = True
-
-    durable = manager.submit(project, payload())
-    saved = manager._read(project, durable["id"])
-    manager._set_durable_question(
-        saved,
-        {"kind": "blocker", "text": "Choose an existing evaluator."},
-    )
-    durable_question = saved["question"]["id"]
-    manager._write(saved)
-
-    native = manager.submit(project, payload())
-    saved = manager._read(project, native["id"])
-    saved.update(
-        state="needs_input",
-        session_id="native-session",
-        attempt_started_at=(datetime.now(UTC) - timedelta(seconds=5)).isoformat(),
-        attempt_wait_seconds=0,
-        question={
-            "id": "input_native",
-            "kind": "approval",
-            "source": "coding_agent",
-            "asked_at": (datetime.now(UTC) - timedelta(seconds=4)).isoformat(),
-            "text": "Run command?",
-        },
-    )
-    manager._write(saved)
-
-    restarted = JobManager(state, manager.credentials, execute=manager.execute)
-    restarted.stopping = True
-    try:
-        kept = restarted.get(project, durable["id"])
-        assert kept["state"] == "needs_input"
-        assert kept["question"]["id"] == durable_question
-
-        expired = restarted.get(project, native["id"])
-        assert expired["state"] == "interrupted"
-        assert expired["question"] is None
-        assert expired["elapsed_seconds"] < 2
-        private = restarted._read(project, native["id"])
-        assert private["input_history"][-1]["status"] == "expired"
-    finally:
-        restarted.close()
-
-
-def test_durable_blocker_reply_resumes_without_a_live_worker(manager_factory):
-    manager, _, project = manager_factory(lambda *args: pytest.fail("host should not run"))
-    manager.stopping = True
-    submitted = manager.submit(project, payload())
-    saved = manager._read(project, submitted["id"])
-    manager._set_durable_question(
-        saved,
-        {"kind": "blocker", "text": "Provide the missing evaluator path."},
-    )
-    manager._write(saved)
-
-    resumed = manager.control(
-        project,
-        submitted["id"],
-        "reply",
-        {
-            "operation_id": str(uuid.uuid4()),
-            "question_id": saved["question"]["id"],
-            "answer": {"text": "Use evals/document_quality.py"},
-        },
-    )
-
-    assert resumed["state"] == "queued"
-    assert resumed["question"] is None
-    private = manager._read(project, submitted["id"])
-    assert private["input_history"][-1]["status"] == "answered"
-    assert private["messages"][-1]["role"] == "system"
-    assert "evals/document_quality.py" in private["messages"][-1]["text"]
-
-
-def test_intelligence_request_uses_saved_redacted_preview_and_exact_approval(manager_factory):
-    state_holder = {}
-
-    def host(request, emit, ask, cancelled):
-        from agentagon.lookup import owners
-
-        emit({"type": "session", "session_id": "intel-session", "model": "actual-model"})
-        context = manifest(request)
-        audit_id = context["workflow_ids"]["audit_id"]
-        workspace = state_holder["state"].workspace(state_holder["project"])
-        preview = {
-            "purpose": "Consult Agentagon Intelligence for audit guidance",
-            "workflow": "audit",
-            "phase": "initial",
-            "endpoint": "https://intelligence.example.test/audit",
-            "request": {"limit": 5, "focus": "redacted focus"},
-            "mode": "ask",
-        }
-        workspace.write(
-            owners.approval_path(workspace, "audit", audit_id),
-            {
-                "approval_id": "intel_" + "a" * 32,
-                "binding": "bound",
-                "status": "pending",
-                "preview": preview,
-            },
-        )
-        return {
-            "state": "completed",
-            "session_id": "intel-session",
-            "text": json.dumps(
-                {
-                    "summary": "Approval required",
-                    "audit_id": audit_id,
-                    "needs_input": {
-                        "kind": "intelligence",
-                        "approval_id": "intel_" + "a" * 32,
-                        "workflow": "audit",
-                        "owner_id": audit_id,
-                    },
-                }
-            ),
-        }
-
-    manager, state, project = manager_factory(host)
-    state_holder.update(state=state, project=project)
-    submitted = manager.submit(project, payload())
-    blocked = wait_for(manager, project, submitted["id"])
-    assert blocked["state"] == "needs_input"
-    assert blocked["question"]["kind"] == "intelligence"
-    assert blocked["question"]["endpoint"] == "https://intelligence.example.test/audit"
-    assert blocked["question"]["request"] == {"limit": 5, "focus": "redacted focus"}
-
-    manager.stopping = True
-    resumed = manager.control(
-        project,
-        submitted["id"],
-        "reply",
-        {
-            "operation_id": str(uuid.uuid4()),
-            "question_id": blocked["question"]["id"],
-            "answer": {"decision": "accept"},
-        },
-    )
-    assert resumed["state"] == "queued"
-    message = manager._read(project, submitted["id"])["messages"][-1]["text"]
-    assert "--approve intel_" in message
-
-
-def test_trace_use_asks_once_before_dispatch_when_project_setting_is_unset(manager_factory):
-    from agentagon.webapp import snapshots
-
-    manager, state, project = manager_factory(lambda *args: pytest.fail("host should not run"))
-    manager.stopping = True
-    workspace = state.workspace(project)
-    workspace.initialize()
-    trace = snapshots.save(
-        workspace,
-        project,
-        {
-            "kind": "traces",
-            "connection_id": "connection_test",
-            "selection": {"project": "payments", "cap": 100},
-            "items": [{"trace_id": "trace-one"}],
-            "provenance": {"provider": "braintrust", "project": "payments"},
-            "completeness": "complete",
-        },
-    )
-
-    submitted = manager.submit(
-        project,
-        payload(options={"trace_snapshot_id": trace["id"], "mode": "combined"}),
-    )
-    assert submitted["state"] == "needs_input"
-    assert submitted["question"]["kind"] == "trace_access"
-    assert submitted["question"]["request"]["limit"] == 100
-
-    accepted = manager.control(
-        project,
-        submitted["id"],
-        "reply",
-        {
-            "operation_id": str(uuid.uuid4()),
-            "question_id": submitted["question"]["id"],
-            "answer": {"decision": "accept"},
-        },
-    )
-    assert accepted["state"] == "queued"
 
 
 @pytest.mark.parametrize(
@@ -832,16 +576,13 @@ def test_private_config_freezes_selected_profile_and_bounds_native_cli(
     )
     saved = manager._read(project, submitted["id"])
     workflows.freeze_settings(application, saved)
-    path = application.state / "webapp/job-inputs" / f"{saved['id']}-config.json"
+    path = application.state / "runtime/task-inputs" / f"{saved['id']}-config.json"
     monkeypatch.setenv("AGENTAGON_CONFIG", str(path))
     limits = Config().profile(application.root, "local")["limits"]
     assert limits["max_trials"] == 4
     assert limits["max_elapsed_seconds"] == 20
     assert limits["trial_timeout_seconds"] == 2
-    prompt = workflows.prompt(application, saved)
-    assert str(path) in prompt
-    assert "will not answer clarifying" in prompt
-    assert "Do not use AskUserQuestion" in prompt
+    assert str(path) in workflows.prompt(application, saved)
     with pytest.raises(AuditError, match="profile not found"):
         Config().profile(application.root, "some-other-profile")
 
@@ -875,8 +616,8 @@ def test_baseline_runs_distinct_managed_reviewer_and_resumes_author(
     from support.experiments import executions, passing_review
     from test_baselines import frozen
 
-    from agentagon.experiments import baselines
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments import baselines
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     evaluation = frozen(application, specification)
     calls = []
@@ -892,14 +633,8 @@ def test_baseline_runs_distinct_managed_reviewer_and_resumes_author(
         if reviewing:
             review_calls += 1
             if pause_review and review_calls == 1:
-                assert ask(
-                    {"kind": "question", "text": "Inspect the preserved review context?"}
-                ) == {
-                    "text": (
-                        "Use the available evidence and your best judgment. "
-                        "If required evidence is missing, return needs_input as a blocker."
-                    )
-                }
+                ask({"kind": "question", "text": "Inspect the preserved review context?"})
+                return {"state": "cancelled", "session_id": session, "text": ""}
             task = job["review_tasks"][job["active_review_id"]]
             review = passing_review({"review_template": task["template"]})
             return {
@@ -921,6 +656,15 @@ def test_baseline_runs_distinct_managed_reviewer_and_resumes_author(
     job = manager.submit(
         project, payload("baseline", options={"evaluation_id": evaluation["evaluation_id"]})
     )
+    if pause_review:
+        pending = wait_for(
+            manager, project, job["id"], lambda record: record["state"] == "needs_input"
+        )
+        review_id = pending["active_review_id"]
+        assert pending["review_tasks"][review_id]["session_id"] == "reviewer-native"
+        manager.control(project, job["id"], "pause", {"operation_id": str(uuid.uuid4())})
+        wait_for(manager, project, job["id"])
+        manager.control(project, job["id"], "resume", {"operation_id": str(uuid.uuid4())})
     result = wait_for(manager, project, job["id"], timeout=20)
     assert result["state"] == "completed", result.get("next_action")
     assert result["session_id"] == "author-native"
@@ -929,15 +673,17 @@ def test_baseline_runs_distinct_managed_reviewer_and_resumes_author(
     assert review["session_id"] == "reviewer-native"
     assert review["state"] == "completed"
     assert calls[-1]["session_id"] == "author-native"
+    if pause_review:
+        assert calls[-2]["session_id"] == "reviewer-native"
     assert len(executions()) - before == 3
 
 
 def test_completed_optimizer_preserves_exact_verified_choice(application, specification):
     from test_optimize_run import _host, _start
 
-    from agentagon.experiments.store import load_run
+    from agentagon.capabilities.experiments.store import load_run
 
-    job = validation_job("fix", engine="omni")
+    job = validation_job("optimize", engine="omni")
     run_id = _start(application, specification, optimizer="omni", target=0.62)
     finished = optimize_run.advance(application, run_id, host_handler=_host)
     assert finished["state"] == "completed"
@@ -971,8 +717,8 @@ def test_fix_runs_managed_reviewers_for_baseline_candidate_and_final_choice(
     from test_optimize_run import _host
     from test_scoring import definition
 
-    from agentagon.experiments import engine
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments import engine
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     calls = []
 
@@ -1030,7 +776,9 @@ def test_fix_runs_managed_reviewers_for_baseline_candidate_and_final_choice(
 
     manager, _, project = manager_factory(host, application.root)
     before = len(executions())
-    submitted = manager.submit(project, payload("fix", options={"permitted_paths": ["app.json"]}))
+    submitted = manager.submit(
+        project, payload("optimize", options={"permitted_paths": ["app.json"]})
+    )
     job = wait_for(manager, project, submitted["id"], timeout=30)
     assert job["state"] == "completed", job.get("next_action")
     assert len(executions()) - before == 3
@@ -1055,8 +803,8 @@ def test_suite_children_preserve_primary_job_identity_across_restart(
     from support.experiments import executions, passing_review
     from test_suites import _host, _suite
 
-    from agentagon.experiments import engine, preparation, suites
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments import engine, preparation, suites
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     # Existing reviewed measurements predate the job; its primary Fix is created by its author.
     _, suite_manifest = _suite(application, specification)
@@ -1134,7 +882,7 @@ def test_suite_children_preserve_primary_job_identity_across_restart(
     submitted = manager.submit(
         project,
         payload(
-            "fix",
+            "optimize",
             options={
                 "engine": "gepa",
                 "finalist_count": 1,
@@ -1149,17 +897,17 @@ def test_suite_children_preserve_primary_job_identity_across_restart(
         manager,
         project,
         submitted["id"],
-        lambda job: job["state"] in {"interrupted", "failed"},
+        lambda job: job["state"] in {"needs_input", "failed"},
         timeout=40,
     )
-    assert paused["state"] == "interrupted", paused.get("next_action")
+    assert paused["state"] == "needs_input", paused.get("next_action")
     assert paused["workflow_ids"]["run_id"] == primary and paused_child != primary
     review_id = paused["active_review_id"]
     native_session = paused["review_tasks"][review_id]["session_id"]
     trials_at_pause = len(executions())
     manager.close()
     calls_at_restart = len(calls)
-    resumed = JobManager(AppState(state.directory), manager.credentials, execute=host)
+    resumed = TaskRuntime(AppState(state.directory), manager.credentials, execute=host)
     try:
         recovered = resumed.get(project, submitted["id"])
         assert recovered["state"] == "interrupted"
@@ -1210,7 +958,7 @@ def test_evaluation_requires_actual_separate_review_session(
 ):
     from support.evaluation import review_for
 
-    from agentagon.experiments import preparation
+    from agentagon.capabilities.experiments import preparation
 
     missing_evidence = review_outcome == "missing"
     review_requests = []
@@ -1311,16 +1059,7 @@ def test_evaluation_requires_actual_separate_review_session(
             assert "response" not in task
             assert task["session_id"] == "reviewer-session"
             missing_evidence = False
-            manager.control(
-                project,
-                job["id"],
-                "reply",
-                {
-                    "operation_id": str(uuid.uuid4()),
-                    "question_id": job["question"]["id"],
-                    "answer": {"text": "Continue with the available coverage evidence."},
-                },
-            )
+            manager.control(project, job["id"], "resume", {"operation_id": str(uuid.uuid4())})
             resumed = wait_for(manager, project, job["id"], timeout=20)
             assert resumed["state"] == "completed", resumed.get("next_action")
             assert review_requests == [None, "reviewer-session"]
@@ -1335,17 +1074,14 @@ def test_evaluation_requires_actual_separate_review_session(
             workflows.validate_result(application, forged_job, {"text": json.dumps(job["result"])})
 
 
-def test_parallel_reflections_reserve_capacity_and_use_best_judgment_for_questions(
+def test_parallel_reflections_reserve_capacity_and_queue_distinct_questions(
     manager_factory, monkeypatch, tmp_path
 ):
-    from agentagon.experiments.budget import BudgetLedger
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments.budget import BudgetLedger
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     author_calls, native_calls, answers = [], [], {}
     barrier = threading.Barrier(2)
-    ready = threading.Event()
-    release = threading.Event()
-    answers_lock = threading.Lock()
     first_root = tmp_path / "batched-project"
 
     def host(request, emit, ask, cancelled):
@@ -1354,12 +1090,7 @@ def test_parallel_reflections_reserve_capacity_and_use_best_judgment_for_questio
             native_calls.append(name)
             emit({"type": "session", "session_id": "native-" + name, "model": "actual-model"})
             barrier.wait(timeout=3)  # A serial dispatcher cannot fulfill this batch.
-            answer = ask({"kind": "question", "text": name})
-            with answers_lock:
-                answers[name] = answer
-                if len(answers) == 2:
-                    ready.set()
-            assert release.wait(3)
+            answers[name] = ask({"kind": "question", "text": name})
             return {
                 "state": "completed",
                 "session_id": "native-" + name,
@@ -1422,23 +1153,33 @@ def test_parallel_reflections_reserve_capacity_and_use_best_judgment_for_questio
     with state.locked() as settings:
         settings["agents"]["concurrency"] = 2
     submitted = manager.submit(project, payload(options={"host_concurrency": 2}))
-    assert ready.wait(3)
+    wait_for(manager, project, submitted["id"], lambda job: job["state"] == "needs_input")
     queued = manager.submit(other, payload())
     assert manager.get(other, queued["id"])["state"] == "queued"
     assert manager.slots[(project, submitted["id"])] == 2
-    release.set()
+    seen = set()
+    for _ in range(2):
+        question = wait_for(
+            manager,
+            project,
+            submitted["id"],
+            lambda job: job["state"] == "needs_input" and job["question"]["id"] not in seen,
+        )
+        seen.add(question["question"]["id"])
+        manager.control(
+            project,
+            submitted["id"],
+            "answer",
+            {
+                "operation_id": str(uuid.uuid4()),
+                "question_id": question["question"]["id"],
+                "answer": {"text": question["question"]["text"]},
+            },
+        )
     finished = wait_for(manager, project, submitted["id"])
     assert finished["state"] == "completed_with_limits", finished
     assert sorted(native_calls) == ["prompt-0", "prompt-1"]
-    assert answers == {
-        name: {
-            "text": (
-                "Use the available evidence and your best judgment. "
-                "Return a blocker if essential evidence is missing."
-            )
-        }
-        for name in native_calls
-    }
+    assert answers == {name: {"text": name} for name in native_calls}
     assert len(author_calls) == 2 and author_calls[1] == "author-batched-project"
     assert len(finished["reflection_tasks"]) == 2 and finished["active_reflections"] == []
     assert wait_for(manager, other, queued["id"])["state"] == "completed_with_limits"
@@ -1447,8 +1188,8 @@ def test_parallel_reflections_reserve_capacity_and_use_best_judgment_for_questio
 def test_reflection_batch_restart_keeps_completed_sibling_and_native_identity(
     manager_factory, monkeypatch
 ):
-    from agentagon.experiments.budget import BudgetLedger
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments.budget import BudgetLedger
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     sessions, author_calls = [], []
     first_done = threading.Event()
@@ -1466,13 +1207,6 @@ def test_reflection_batch_restart_keeps_completed_sibling_and_native_identity(
             elif not request["session_id"]:
                 assert first_done.wait(3)
                 ask({"kind": "question", "text": "Pause this batch"})
-                job_id = manifest(request)["id"]
-                deadline = time.monotonic() + 3
-                while time.monotonic() < deadline:
-                    saved = state.db.get_record(project, "jobs", job_id)
-                    if len(saved["reflection_tasks"]) == 1:
-                        break
-                    time.sleep(0.01)
                 interrupted = True
                 return {"state": "interrupted", "session_id": "native-second"}
             return {
@@ -1528,14 +1262,14 @@ def test_reflection_batch_restart_keeps_completed_sibling_and_native_identity(
         manager,
         project,
         job["id"],
-        lambda saved: saved["state"] == "interrupted" and len(saved["reflection_tasks"]) == 1,
+        lambda saved: saved["state"] == "needs_input" and len(saved["reflection_tasks"]) == 1,
     )
     manager.close()
     saved = wait_for(manager, project, job["id"])
     assert interrupted and len(saved["active_reflections"]) == 1
     with state.locked() as settings:
         settings["agents"]["concurrency"] = 1
-    resumed = JobManager(AppState(state.directory), manager.credentials, execute=host)
+    resumed = TaskRuntime(AppState(state.directory), manager.credentials, execute=host)
     try:
         resumed.control(project, job["id"], "resume", {"operation_id": str(uuid.uuid4())})
         queued = resumed.get(project, job["id"])
@@ -1562,8 +1296,8 @@ def test_managed_gepa_batch_completes_two_real_finalists(
     from support.optimizer import candidate_text
     from test_scoring import definition
 
-    from agentagon.experiments import engine
-    from agentagon.experiments.orchestration import DEFAULT_SETTINGS
+    from agentagon.capabilities.experiments import engine
+    from agentagon.capabilities.experiments.orchestration import DEFAULT_SETTINGS
 
     profile = Config().profile(application.root, "local")
     profile["runner"]["independent_capacity"] = True
@@ -1639,7 +1373,7 @@ def test_managed_gepa_batch_completes_two_real_finalists(
     submitted = manager.submit(
         project,
         payload(
-            "fix",
+            "optimize",
             options={
                 "engine": "gepa",
                 "host_concurrency": 2,

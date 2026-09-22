@@ -4,8 +4,8 @@ from pathlib import Path
 
 import click
 
+from agentagon.capabilities.experiments import benchmarks
 from agentagon.core.records import load_json
-from agentagon.experiments import benchmarks
 from agentagon.storage.workspace import Workspace
 
 

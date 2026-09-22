@@ -8,7 +8,7 @@ For the public documentation site, see [build, preview and hosting instructions]
 
 ## Packaging checks
 
-The wheel bundles plugin manifests, the six exposed skills and their references, contracts, the signal catalog, event helpers and dashboard assets. Packaging inputs are declared in [pyproject.toml](../../pyproject.toml) and [MANIFEST.in](../../MANIFEST.in).
+The wheel bundles built-in workflows and their instructions, contracts, the signal catalog, event helpers and dashboard assets. Packaging inputs are declared in [pyproject.toml](../../pyproject.toml) and [MANIFEST.in](../../MANIFEST.in).
 
 After running `python -m build` from the repository root, check the wheel in a fresh environment outside the checkout, as CI does:
 
@@ -29,10 +29,10 @@ Use a `dist/` directory containing only the wheel you intend to test. If it cont
 The resource check prints:
 
 ```text
-Installed package, plugin resources, contracts, helpers and dashboard assets are readable.
+Installed workflow resources, contracts, event helpers, React assets and MCP load successfully.
 ```
 
-The example prints paths and `pending_action: "evidence"`, as shown in the README. These checks verify installed resources and local audit preparation; they do not register a plugin or perform a model review. The temporary environment and example directory remain available for inspection and can be removed afterward.
+The example prints paths and `pending_action: "evidence"`, as shown in the README. These checks verify installed resources and local audit preparation; they do not perform a live model review. The temporary environment and example directory remain available for inspection and can be removed afterward.
 
 The copyable Python event helper targets Python 3.10, matching the remote worker, while the Agentagon CLI requires Python 3.12+. Keep its standard-library-only boundary when editing it. See [task evidence](../task-evidence.md) for helper usage and event formats.
 
@@ -43,7 +43,7 @@ Browser tests run in a separate CI job. With the development environment active,
 ```sh
 python -m pip install -e '.[dev,browser]'
 python -m playwright install chromium
-python -m pytest tests/test_dashboard_browser.py tests/test_webapp_browser.py -q
+python -m pytest tests/test_webapp_browser.py -q
 ```
 
 The Linux CI job uses `python -m playwright install --with-deps chromium` to install browser system dependencies too. These tests exercise dashboard navigation, refresh, accessible empty states and theme persistence at mobile and desktop widths.
@@ -52,18 +52,16 @@ Without the browser extra, the regular suite skips these modules. Once the extra
 
 ## Optional integration checks
 
-Web-app provider and coding-agent tests use contract fixtures and simulated hosts. Before a release, separately verify real provider imports and a browser Goals → Measurement plan → Eval → Baseline → Fix journey with each supported coding agent under authorized limits. An installed model catalog or passing fixtures does not establish successful live model execution.
+Web-app provider and coding-agent tests use contract fixtures and simulated hosts. Before a release, separately verify real provider imports and a browser Goals → Measurement plan → Eval → Baseline → Optimize journey with each supported coding agent under authorized limits. An installed model catalog or passing fixtures does not establish successful live model execution.
 
 The regular suite exercises local execution and simulated integrations. The following environment variables enable tests that touch native hosts or remote services; leave them unset for ordinary local development:
 
 | Variable | Effect |
 |---|---|
-| `AGENTAGON_TEST_NATIVE_CODEX=1` | Enable native registration checks when `codex` is on PATH |
-| `AGENTAGON_TEST_NATIVE_CLAUDE=1` | Enable native registration checks when `claude` is on PATH |
 | `AGENTAGON_LIVE_SSH_HOST` | Set an authorized SSH host alias to enable live SSH checks |
 | `AGENTAGON_LIVE_E2B=1` | Enable live E2B checks; these also require the optional dependency and service credentials |
 
-See [installation tests](../../tests/test_installation.py), [runner tests](../../tests/test_experiment_runners.py) and [live lifecycle tests](../../tests/test_live_fix.py) for their setup and assertions. Run live tests only with authorization for the host, credentials and any charges. Passing local or simulated tests does not establish that a live integration works in your environment.
+See [runner tests](../../tests/test_experiment_runners.py) and [live lifecycle tests](../../tests/test_live_fix.py) for their setup and assertions. Run live tests only with authorization for the host, credentials and any charges. Passing local or simulated tests does not establish that a live integration works in your environment.
 
 ## Documentation changes
 

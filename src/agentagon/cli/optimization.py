@@ -4,14 +4,14 @@ from pathlib import Path
 
 import click
 
-from agentagon.core.records import AuditError
-from agentagon.experiments import engine, optimize_run
-from agentagon.experiments.optimizer import (
+from agentagon.capabilities.experiments import engine, optimize_run
+from agentagon.capabilities.experiments.optimizer import (
     ENGINES,
     MAX_BACKGROUND_BYTES,
     MetaHarnessConfig,
     validate_background,
 )
+from agentagon.core.records import AuditError
 from agentagon.storage.workspace import Workspace
 
 

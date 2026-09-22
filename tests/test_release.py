@@ -28,13 +28,11 @@ def test_version_checks_all_manifests_without_executing_package(tmp_path):
     for name in (
         "pyproject.toml",
         "src/agentagon/__init__.py",
-        ".codex-plugin/plugin.json",
-        ".claude-plugin/plugin.json",
     ):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((ROOT / name).read_bytes())
-    (tmp_path / ".claude-plugin/plugin.json").write_text('{"version": "different"}')
+    (tmp_path / "src/agentagon/__init__.py").write_text('__version__ = "different"')
     with pytest.raises(ValueError, match="disagree"):
         release.version_for_tag(f"v{current}", tmp_path)
     for tag in ("main", "--help", "v01.1.0", "v0.1.0;whoami", "v0.1.0rc1"):

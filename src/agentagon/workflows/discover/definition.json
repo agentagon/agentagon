@@ -1,0 +1,17 @@
+{
+  "id": "discover-issues",
+  "version": 1,
+  "name": "Discover issues",
+  "purpose": "Find and group evidence-backed issues in selected traces.",
+  "requires_goal": false,
+  "inputs": [
+    "Trace snapshot"
+  ],
+  "outputs": [
+    "Issues and evidence"
+  ],
+  "references": [
+    "workflows/discover/instructions.md"
+  ],
+  "workflow": "discover"
+}

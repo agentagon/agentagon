@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from support.experiments import git, passing_review
 
-from agentagon.experiments import (
+from agentagon.capabilities.experiments import (
     cleanup,
     delivery,
     engine,

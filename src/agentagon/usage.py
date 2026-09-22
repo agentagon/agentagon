@@ -15,9 +15,10 @@ import httpx
 
 from agentagon import __version__
 from agentagon.core.records import AuditError, digest, load_json, validate_record
-from agentagon.installation import SKILLS
 from agentagon.storage.config import Config
 from agentagon.storage.workspace import Workspace
+
+WORKFLOWS = {"design", "audit", "eval", "baseline", "discover", "fix", "optimize"}
 
 # Public ingestion token, not a personal or project-secret API key.
 POSTHOG_PROJECT_TOKEN = "phc_CUB2gYkuZX7TsLaJmTxqUg7iCbuitCxkYW4LVgcy9HKn"
@@ -28,7 +29,7 @@ MAX_AGE = 7 * 86400
 BATCH_SIZE = 20
 REQUEST_SECONDS = 2
 EVENTS = (
-    "skill_invoked",
+    "workflow_started",
     "intelligence_lookup_completed",
     "knowledge_returned",
     "knowledge_investigated",
@@ -188,10 +189,10 @@ def _valid_payload(payload: dict) -> bool:
         ):
             return False
         fields = properties.keys() - common
-        if event == "skill_invoked":
+        if event == "workflow_started":
             return (
-                fields == {"skill", "host"}
-                and properties["skill"] in SKILLS
+                fields == {"workflow", "host"}
+                and properties["workflow"] in WORKFLOWS
                 and properties["host"] in {"codex", "claude-code", "unknown"}
             )
         if event == "intelligence_lookup_completed":
@@ -221,13 +222,17 @@ def _prepare(event: str, fields: dict) -> tuple[list[dict], Workspace | None, Pa
     """Construct public fields from enums and validated local records only."""
     if event not in EVENTS:
         raise AuditError("unknown telemetry event")
-    if event == "skill_invoked":
-        if set(fields) - {"skill", "host"} or fields.get("skill") not in SKILLS:
+    if event == "workflow_started":
+        if set(fields) - {"workflow", "host"} or fields.get("workflow") not in WORKFLOWS:
             raise AuditError("invalid skill event")
         host = fields.get("host", "unknown")
         if host not in {"codex", "claude-code", "unknown"}:
             raise AuditError("invalid host")
-        return [{"payload": _payload(event, {"skill": fields["skill"], "host": host})}], None, None
+        return (
+            [{"payload": _payload(event, {"workflow": fields["workflow"], "host": host})}],
+            None,
+            None,
+        )
 
     lookup = event == "intelligence_lookup_completed"
     owner_fields = {"audit_id": "audit", "evaluation_id": "eval", "run_id": "fix"}
@@ -246,7 +251,7 @@ def _prepare(event: str, fields: dict) -> tuple[list[dict], Workspace | None, Pa
     workspace = fields.get("workspace", Path("."))
     if not isinstance(workspace, Workspace):
         workspace = Workspace(Path(workspace))
-    from agentagon.lookup import owners
+    from agentagon.capabilities.intelligence import owners
 
     audit = owners.load(workspace, workflow, fields[owner_field])
     # Match the registered path before opening any caller-selected file.

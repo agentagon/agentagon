@@ -9,10 +9,10 @@ from test_baselines import complete, frozen
 from test_webapp import connection as save_connection
 from test_webapp import project, running
 
+from agentagon.capabilities.experiments import baselines
+from agentagon.capabilities.traces import snapshots
 from agentagon.core.records import AuditError
-from agentagon.experiments import baselines
-from agentagon.webapp import snapshots
-from agentagon.webapp.service import Application
+from agentagon.workflows.service import Application
 
 
 @pytest.fixture
@@ -28,9 +28,9 @@ def agent(app, saved, **values):
     )
 
 
-def focus(app, saved, item, category="correctness"):
-    return app.catalog.save_focus(
-        saved["id"], item["id"], {"category": category, "goal": f"Improve {category}"}
+def goal_record(app, saved, item, category="correctness"):
+    return app.catalog.save_goal(
+        saved["id"], item["id"], {"category": category, "objective": f"Improve {category}"}
     )
 
 
@@ -51,32 +51,40 @@ def test_workspace_resource_contracts_and_unified_task_submission(app, tmp_path)
     assert projected["confirmed"][0]["responsibility"] == "Resolve support questions"
     assert "description" not in projected["confirmed"][0]
     assert app.goals(saved["id"], confirmed["id"])["goals"] == [goal]
-    assert {item["workflow"] for item in app.skills()["skills"]} == {
+    assert {item["workflow"] for item in app.workflows()["workflows"]} == {
         "design",
         "eval",
         "baseline",
-        "fix",
+        "optimize",
         "audit",
+        "discover",
+        "fix",
+        "assess",
+        "observe",
     }
     assert {item["id"] for item in app.connector_types()["connector_types"]} == {
         "braintrust",
         "langsmith",
         "langfuse",
     }
-    assert app.workflow_readiness(saved["id"], "design", confirmed["id"], goal["id"]) == {
-        "workflow": "design",
-        "workflow_version": 1,
-        "ready": True,
-        "blockers": [],
-        "next_action": "start",
-    }
+    prepared = app.prepare_workflow_start(
+        saved["id"],
+        {
+            "workflow": "design",
+            "agent_id": confirmed["id"],
+            "input": {"type": "goal", "id": goal["id"]},
+            "options": {},
+        },
+    )
+    assert prepared["state"] == "ready"
+    assert prepared["normalized_intent"]["workflow"] == "design"
 
-    app.jobs.stopping = True
+    app.runtime.stopping = True
     command = {
         "operation_id": str(uuid.uuid4()),
         "workflow": "design",
         "agent_id": confirmed["id"],
-        "goal_id": goal["id"],
+        "input": {"type": "goal", "id": goal["id"]},
         "options": {},
     }
     submitted = app.submit_task(saved["id"], command)
@@ -89,34 +97,17 @@ def test_workspace_resource_contracts_and_unified_task_submission(app, tmp_path)
     assert detail["agent_name"] == "Support"
     assert detail["goal_name"] == "Task success and correctness"
 
-
-def test_goal_accepts_ideal_behavior_as_the_single_definition(app, tmp_path):
-    saved = project(app, tmp_path)
-    confirmed = agent(app, saved)
-
-    goal = app.save_goal(
-        saved["id"],
-        confirmed["id"],
-        {
-            "category": "latency",
-            "ideal_behavior": "The agent responds within one second without reducing quality.",
-        },
-    )
-
-    assert goal["name"] == "Latency"
-    assert goal["objective"] == ("The agent responds within one second without reducing quality.")
-    assert goal["ideal_behavior"] is None
-
     audit = app.submit_task(
         saved["id"],
         {
             "operation_id": str(uuid.uuid4()),
             "workflow": "audit",
+            "input": {"type": "agent"},
             "agent_id": confirmed["id"],
             "options": {},
         },
     )
-    assert audit["focus_id"] is None
+    assert audit["goal_id"] is None
     assert [item["id"] for item in app.tasks(saved["id"], {"workflow": "audit"})["tasks"]] == [
         audit["id"]
     ]
@@ -147,34 +138,66 @@ def test_discovery_is_explicit_bounded_and_preserves_confirmed_identity(app, tmp
         app2.close()
 
 
-def test_coding_review_backfills_confirmed_discovery_responsibility(app, tmp_path):
+def test_identity_review_retains_source_and_exclusion_across_rescans(app, tmp_path):
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root
-    (root / "documents.py").write_text(
-        'from agents import Agent\ndocuments = Agent(name="DocumentAgent")\n'
-    )
-    suggested = app.catalog.discover(saved["id"])["agents"][0]
-    confirmed = app.save_application_agent(
-        saved["id"], {"status": "confirmed", "name": suggested["name"]}, suggested["id"]
+    root.joinpath("app.py").write_text(
+        'from agents import Agent\nsupport = Agent(name="Support")\n', encoding="utf-8"
     )
 
-    result = app.catalog.apply_coding_review(
+    discovered = app.catalog.discover(saved["id"])["agents"][0]
+    evidence = next(item for item in discovered["evidence"] if item["kind"] == "code")
+    assert evidence["path"] == "app.py"
+    assert evidence["context"]["start_line"] == 1
+    assert 'Agent(name="Support")' in evidence["context"]["source"]
+
+    excluded = app.exclude_application_agent(
         saved["id"],
-        [
-            {
-                "id": confirmed["id"],
-                "file": "documents.py",
-                "name": "DocumentAgent",
-                "responsibility": "Creates and edits PDF and Word documents for users.",
-                "keep": True,
-            }
-        ],
+        discovered["id"],
+        {"reason": "This is a test harness, not a deployed agent.", "expected_revision": 1},
+    )
+    assert excluded["status"] == "archived"
+    assert app.catalog.discover(saved["id"])["agents"] == []
+    inventory = app.project_agents(saved["id"])
+    assert inventory["suggestions"] == []
+    assert inventory["excluded"][0]["identity_review"]["reason"] == (
+        "This is a test harness, not a deployed agent."
     )
 
-    assert result == {"reviewed": 1, "kept": 1}
-    assert app.catalog.agent(saved["id"], confirmed["id"])["description"] == (
-        "Creates and edits PDF and Word documents for users."
+    restored = app.restore_application_agent(
+        saved["id"], discovered["id"], {"expected_revision": excluded["revision"]}
     )
+    assert restored["status"] == "suggested"
+    assert app.catalog.discover(saved["id"])["agents"][0]["id"] == discovered["id"]
+
+
+def test_suggestion_confirmation_uses_the_exact_displayed_revision(app, tmp_path):
+    saved = project(app, tmp_path)
+    root = app.state.workspace(saved["id"]).root
+    root.joinpath("app.py").write_text(
+        'from agents import Agent\nsupport = Agent(name="Support")\n', encoding="utf-8"
+    )
+    suggestion = app.catalog.discover(saved["id"])["agents"][0]
+    enriched = app.catalog.save_agent(
+        saved["id"],
+        {
+            "description": "Answers support questions using approved tools.",
+            "expected_revision": suggestion["revision"],
+        },
+        suggestion["id"],
+    )
+
+    with pytest.raises(AuditError, match="changed; reload"):
+        app.confirm_application_agent(
+            saved["id"], suggestion["id"], {"expected_revision": suggestion["revision"]}
+        )
+
+    confirmed = app.confirm_application_agent(
+        saved["id"], suggestion["id"], {"expected_revision": enriched["revision"]}
+    )
+    assert confirmed["status"] == "confirmed"
+    assert confirmed["code_scopes"] == enriched["code_scopes"]
+    assert confirmed["binding_digest"] == enriched["binding_digest"]
 
 
 def test_discovery_excludes_non_application_sources_and_retires_old_suggestions(app, tmp_path):
@@ -219,18 +242,18 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
         'from agents import Agent\nsupport = Agent(name="Support")\nresearch = Agent(name="Research")\n'
     )
     (root / "helper.py").write_text('from agents import Agent\nhelper = Agent(name="Helper")\n')
-    (root / "support_wrapper.py").write_text(
-        'from agents import Agent\nsupport = Agent(name="Support wrapper")\n'
-    )
     calls = []
 
     def execute(request, *_args):
         calls.append(request)
-        candidates = json.loads(request["prompt"].split("Candidates: ", 1)[1])
+        from test_webapp_jobs import manifest
+
+        candidates = manifest(request)["preparation"]["candidates"]
         return {
             "state": "completed",
-            "raw_final_text": json.dumps(
+            "text": json.dumps(
                 {
+                    "summary": "Reviewed candidates",
                     "candidates": [
                         {
                             "id": candidate["id"],
@@ -238,21 +261,22 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
                             "name": "Customer support"
                             if candidate["name"] == "Support"
                             else candidate["name"],
+                            "keep": candidate["name"] != "Helper",
                             "responsibility": (
-                                "Resolves customer questions using the appropriate tools."
+                                "Answers customer questions using the configured support tools."
                                 if candidate["name"] == "Support"
-                                else "Researches and summarizes requested information."
+                                else "Researches customer questions and prepares evidence."
+                                if candidate["name"] == "Research"
+                                else ""
                             ),
-                            "keep": candidate["name"] != "Helper"
-                            and candidate["file"] != "support_wrapper.py",
                         }
                         for candidate in candidates
-                    ]
+                    ],
                 }
             ),
         }
 
-    app.jobs.execute = execute
+    app.runtime.execute = execute
     monkeypatch.setattr(
         app,
         "agents",
@@ -262,126 +286,143 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
         },
     )
 
-    discovered = app.discover_application_agents(
-        saved["id"],
-        {},
-    )
+    import uuid
 
-    assert discovered["preferences"]["seen"] is True
-    assert discovered["preferences"]["coding_review"] is True
-    assert discovered["enrichment"]["coding_review"] == {"reviewed": 4, "kept": 2}
-    assert [agent["name"] for agent in discovered["agents"]] == [
-        "Customer support",
-        "Research",
+    from test_webapp_jobs import wait_for
+
+    operation = str(uuid.uuid4())
+    task = app.discover_application_agents(saved["id"], {"operation_id": operation})
+    completed = wait_for(app.runtime, saved["id"], task["task_id"])
+    assert completed["state"] == "completed", completed
+    assert [a["name"] for a in app.catalog.agents(saved["id"])] == ["Customer support", "Research"]
+    assert [a["description"] for a in app.catalog.agents(saved["id"])] == [
+        "Answers customer questions using the configured support tools.",
+        "Researches customer questions and prepares evidence.",
     ]
-    assert [agent["description"] for agent in discovered["agents"]] == [
-        "Resolves customer questions using the appropriate tools.",
-        "Researches and summarizes requested information.",
+    assert [a["responsibility"] for a in app.project_agents(saved["id"])["suggestions"]] == [
+        "Answers customer questions using the configured support tools.",
+        "Researches customer questions and prepares evidence.",
     ]
+    assert all(
+        agent["responsibility_inference"]["state"] == "inferred"
+        and agent["responsibility_inference"]["task_id"] == task["task_id"]
+        for agent in app.project_agents(saved["id"])["suggestions"]
+    )
+    from test_webapp_jobs import manifest
+
+    prepared = manifest(calls[0])["preparation"]["candidates"]
+    assert all(candidate["context"]["start_line"] == 1 for candidate in prepared)
+    assert all(len(candidate["context"]["source"].splitlines()) <= 50 for candidate in prepared)
+    assert all("Agent(name=" in candidate["context"]["source"] for candidate in prepared)
     assert calls[0]["sandbox"] == "read-only"
-    assert calls[0]["response_mode"] == "raw-final"
-    assert "set keep to false for the duplicates" in calls[0]["prompt"]
-    reviewed_candidates = json.loads(calls[0]["prompt"].split("Candidates: ", 1)[1])
-    support_entrypoint = next(
-        item["entrypoint"] for item in reviewed_candidates if item["name"] == "Support"
+    assert (
+        app.discover_application_agents(saved["id"], {"operation_id": operation})["task_id"]
+        == task["task_id"]
     )
-    assert support_entrypoint["line"] == 2
-    assert support_entrypoint["framework_call"] == "agents.Agent"
-    assert '2: support = Agent(name="Support")' in support_entrypoint["code"]
-
-    discovered_again = app.discover_application_agents(saved["id"], {})
-    assert [agent["name"] for agent in discovered_again["agents"]] == [
-        "Customer support",
-        "Research",
-    ]
-    assert discovered_again["enrichment"]["coding_review"] == {"reviewed": 2, "kept": 2}
 
 
-def test_discovery_automatically_resumes_a_timed_out_review(app, tmp_path, monkeypatch):
+def test_responsibility_retry_reviews_only_the_selected_suggestion(app, tmp_path, monkeypatch):
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root
-    (root / "app.py").write_text('from agents import Agent\nsupport = Agent(name="Support")\n')
+    (root / "app.py").write_text(
+        'from agents import Agent\nsupport = Agent(name="Support")\n'
+        'research = Agent(name="Research")\n'
+    )
+    app.catalog.discover(saved["id"], snapshot_ids=[])
+    suggestions = app.project_agents(saved["id"])["suggestions"]
+    target = next(item for item in suggestions if item["name"] == "Support")
     calls = []
-    candidates = []
 
-    def execute(request, emit, *_args):
+    def execute(request, *_args):
+        from test_webapp_jobs import manifest
+
         calls.append(request)
-        if len(calls) == 1:
-            candidates.extend(json.loads(request["prompt"].split("Candidates: ", 1)[1]))
-            emit({"type": "session", "session_id": "discovery-session"})
-            raise AuditError(
-                "Coding-agent time limit reached. Resume the saved session explicitly."
-            )
+        candidates = manifest(request)["preparation"]["candidates"]
+        assert [candidate["id"] for candidate in candidates] == [target["id"]]
+        assert len(candidates[0]["context"]["source"].splitlines()) <= 50
         return {
             "state": "completed",
-            "raw_final_text": json.dumps(
+            "text": json.dumps(
                 {
+                    "summary": "Reviewed one retained definition",
                     "candidates": [
                         {
-                            "id": candidate["id"],
-                            "file": candidate["file"],
-                            "name": candidate["name"],
-                            "responsibility": "Resolves customer questions for users.",
+                            "id": candidates[0]["id"],
+                            "file": candidates[0]["file"],
+                            "name": candidates[0]["name"],
                             "keep": True,
+                            "responsibility": "Answers customer support questions.",
                         }
-                        for candidate in candidates
-                    ]
+                    ],
                 }
             ),
         }
 
-    app.jobs.execute = execute
+    app.runtime.execute = execute
     monkeypatch.setattr(
         app,
         "agents",
         lambda: {
-            "agents": [
-                {
-                    "id": "codex",
-                    "available": True,
-                    "authenticated": True,
-                    "name": "Codex",
-                }
-            ],
+            "agents": [{"id": "codex", "available": True, "authenticated": True}],
             "settings": {},
         },
     )
+    from test_webapp_jobs import wait_for
 
-    discovered = app.discover_application_agents(saved["id"], {})
+    task = app.infer_application_agent_responsibility(
+        saved["id"], target["id"], {"operation_id": str(uuid.uuid4())}
+    )
+    completed = wait_for(app.runtime, saved["id"], task["task_id"])
+    assert completed["state"] == "completed", completed
+    assert len(calls) == 1
+    refreshed = app.project_agents(saved["id"])["suggestions"]
+    inferred = next(item for item in refreshed if item["id"] == target["id"])
+    untouched = next(item for item in refreshed if item["id"] != target["id"])
+    assert inferred["responsibility"] == "Answers customer support questions."
+    assert inferred["responsibility_inference"]["task_id"] == task["task_id"]
+    assert untouched["responsibility"] == ""
+    assert untouched["responsibility_inference"]["state"] == "pending"
+    assert app.production.onboarding(saved["id"])["state"] == "configure"
 
-    assert calls[1]["session_id"] == "discovery-session"
-    assert calls[1]["prompt"].startswith("Continue and finish")
-    assert discovered["agents"][0]["description"] == ("Resolves customer questions for users.")
 
-
-def test_discovery_requires_an_authenticated_coding_assistant(app, tmp_path, monkeypatch):
+def test_coding_review_does_not_replace_a_manual_responsibility(app, tmp_path):
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root
     (root / "app.py").write_text('from agents import Agent\nsupport = Agent(name="Support")\n')
-    monkeypatch.setattr(
-        app,
-        "agents",
-        lambda: {
-            "agents": [
-                {
-                    "id": "codex",
-                    "available": True,
-                    "authenticated": False,
-                    "name": "Codex",
-                }
-            ],
-            "settings": {},
+    app.catalog.discover(saved["id"], snapshot_ids=[])
+    suggestion = app.catalog.agents(saved["id"])[0]
+    edited = app.save_application_agent(
+        saved["id"],
+        {
+            "description": "Routes customer requests to the right support workflow.",
+            "expected_revision": suggestion["revision"],
         },
+        suggestion["id"],
     )
 
-    with pytest.raises(AuditError, match="Set up and authenticate a coding assistant"):
-        app.discover_application_agents(saved["id"], {})
+    app.catalog.apply_coding_review(
+        saved["id"],
+        [
+            {
+                "id": edited["id"],
+                "file": edited["code_scopes"][0],
+                "name": "Wrong model name",
+                "keep": False,
+                "responsibility": "",
+            }
+        ],
+        task_id="task_" + "a" * 24,
+    )
 
-    assert app.catalog.discovery_preferences(saved["id"])["seen"] is False
-    assert app.catalog.agents(saved["id"]) == []
+    retained = app.catalog.agent(saved["id"], edited["id"])
+    assert retained["status"] == "suggested"
+    assert retained["name"] == "Support"
+    assert retained["description"] == "Routes customer requests to the right support workflow."
+    assert retained["responsibility_inference"]["state"] == "edited"
+    assert retained["evidence"][-1]["decision"] == "preserve_manual_edit"
 
 
-def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path, monkeypatch):
+def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path):
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root
     (root / "support_router.py").write_text(
@@ -412,139 +453,60 @@ def test_trace_metadata_matching_is_bounded_and_advisory(app, tmp_path, monkeypa
             }
 
     app.provider_factory = Provider
-    monkeypatch.setattr(
-        app,
-        "agents",
-        lambda: {
-            "agents": [
-                {
-                    "id": "codex",
-                    "available": True,
-                    "authenticated": True,
-                    "name": "Codex",
-                }
-            ],
-            "settings": {},
-        },
-    )
-    monkeypatch.setattr(
-        app,
-        "_review_discovered_agents",
-        lambda _project_id, _coding_assistant: {"reviewed": 1, "kept": 1},
-    )
     source = save_connection(app, saved["id"])
     app.test_connection(saved["id"], source["id"])
 
-    discovered = app.discover_application_agents(
-        saved["id"],
-        {
-            "preferences": {
-                "trace_metadata": True,
-                "trace_cap": 100,
-                "trace_connection_id": source["id"],
-            }
-        },
+    discovered = app.catalog.discover(saved["id"])
+    result = app.catalog.apply_trace_metadata(
+        saved["id"], source, Provider().trace_metadata({"cap": 100})["items"]
     )
-
-    assert discovered["enrichment"]["trace_metadata"] == {"sampled": 1, "matched": 1}
+    assert result["matched"] == 1
     assert selections[0]["cap"] == 100
-    assert discovered["agents"][0]["trace_selector"] == {}
-    trace_evidence = next(
-        item for item in discovered["agents"][0]["evidence"] if item["kind"] == "trace_metadata"
-    )
-    assert trace_evidence["trace_id"] == "trace-1"
+    current = app.catalog.agent(saved["id"], discovered["agents"][0]["id"])
+    assert current["trace_selector"] == {}
+    assert any(e.get("trace_id") == "trace-1" for e in current["evidence"])
 
 
 def test_agents_and_focuses_do_not_cross_projects_or_agent_boundaries(app, tmp_path):
     one, two = project(app, tmp_path, "one"), project(app, tmp_path, "two")
     a = agent(app, one)
     b = agent(app, one, name="Research")
-    f = focus(app, one, a)
+    f = goal_record(app, one, a)
     with pytest.raises(AuditError, match="not found"):
         app.catalog.agent(two["id"], a["id"])
     with pytest.raises(AuditError, match="not found"):
-        app.catalog.focus(one["id"], b["id"], f["id"])
+        app.catalog.goal_record(one["id"], b["id"], f["id"])
     with pytest.raises(AuditError, match="private"):
         agent(app, one, code_scopes=[".agentagon"])
     with pytest.raises(AuditError, match="confirm"):
         suggested = agent(app, one, name="Maybe", status="suggested")
-        focus(app, one, suggested)
+        goal_record(app, one, suggested)
 
 
-def test_saved_issue_focus_uses_real_occurrences_and_agent_scoped_audits(
-    app, workspace, imported, fixtures
-):
-    from support.audit import finish
-    from support.dashboard import make_audit
+def test_issue_goals_require_explicit_agent_ownership(app, tmp_path):
+    from agentagon.domain.issues import record_issue
 
-    from agentagon.operations import import_traces, start
-    from agentagon.storage.issues import list_issues
-
-    finish(workspace, imported)
-    repeated = start(
-        workspace,
-        mode="traces",
-        source="braintrust",
-        project="demo",
-        start_time="2026-08-10T00:00:00Z",
-        end_time="2026-08-11T00:00:00Z",
-        limit=1,
-        scopes=[],
-        host="test",
-        model="fixture",
-    )["audit_id"]
-    import_traces(workspace, repeated, fixtures / "braintrust.json")
-    finish(workspace, repeated)
-    unrelated = make_audit(workspace)
-    issue = list_issues(workspace)[0]
-    assert issue["audit_ids"] == [imported, repeated]
-    assert issue["latest_audit_id"] == repeated
-    assert {o["audit_id"] for o in issue["occurrences"]} == {imported, repeated}
-
-    saved = app.register(str(workspace.root))
-    support, research, unused = [
-        agent(app, saved, name=name) for name in ("Support", "Research", "Unused")
+    saved = project(app, tmp_path)
+    one, two = agent(app, saved), agent(app, saved, name="Research")
+    issue = record_issue(
+        app.state.workspace(saved["id"]),
+        key="failure",
+        title="Failure",
+        summary="Missing recovery",
+        occurrences=[],
+        agent_id=one["id"],
+    )
+    assert [i["issue_id"] for i in app.agent_overview(saved["id"], one["id"])["issues"]] == [
+        issue["issue_id"]
     ]
-    for owner, audit_id in ((support, imported), (research, repeated)):
-        job_id = "job_" + uuid.uuid4().hex[:24]
-        app.state.db.put_record(
-            saved["id"],
-            "jobs",
-            job_id,
-            {
-                "id": job_id,
-                "kind": "audit",
-                "state": "completed",
-                "application_agent_id": owner["id"],
-                "workflow_ids": {"audit_id": audit_id},
-            },
-        )
-        projected = app.agent_overview(saved["id"], owner["id"])["issues"]
-        assert len(projected) == 1
-        assert projected[0]["audit_ids"] == [audit_id]
-        assert projected[0]["latest_audit_id"] == audit_id
-        source = {"kind": "issue", "issue_id": issue["issue_id"], "audit_id": audit_id}
-        retained = app.catalog.save_focus(
-            saved["id"], owner["id"], {"goal": "Handle weather timeouts", "source": source}
-        )
-        assert retained["source"] == source
-
-    assert app.agent_overview(saved["id"], unused["id"])["issues"] == []
-    source = {"kind": "issue", "issue_id": issue["issue_id"], "audit_id": repeated}
-    with pytest.raises(AuditError, match="different application agent"):
-        app.catalog.save_focus(
-            saved["id"], support["id"], {"goal": "Handle timeouts", "source": source}
-        )
-    source["audit_id"] = unrelated
-    with pytest.raises(AuditError, match="does not belong to that audit"):
-        app.catalog.save_focus(
-            saved["id"], support["id"], {"goal": "Handle timeouts", "source": source}
-        )
-    source.pop("audit_id")
-    with pytest.raises(AuditError, match="different application agent"):
-        app.catalog.save_focus(
-            saved["id"], unused["id"], {"goal": "Handle timeouts", "source": source}
-        )
+    assert not app.agent_overview(saved["id"], two["id"])["issues"]
+    goal = {
+        "objective": "Improve recovery",
+        "source": {"kind": "issue", "issue_id": issue["issue_id"]},
+    }
+    app.catalog.save_goal(saved["id"], one["id"], goal)
+    with pytest.raises(AuditError, match="another agent"):
+        app.catalog.save_goal(saved["id"], two["id"], goal)
 
 
 def test_focused_audit_binds_dirty_local_code_and_missing_baseline_blocks_fix(
@@ -552,10 +514,10 @@ def test_focused_audit_binds_dirty_local_code_and_missing_baseline_blocks_fix(
 ):
     saved = project(app, tmp_path)
     a = agent(app, saved)
-    f = focus(app, saved, a)
+    f = goal_record(app, saved, a)
     calls = []
     monkeypatch.setattr(
-        app.jobs,
+        app.runtime,
         "submit",
         lambda pid, payload, **kwargs: calls.append(copy.deepcopy(payload)) or payload,
     )
@@ -563,15 +525,15 @@ def test_focused_audit_binds_dirty_local_code_and_missing_baseline_blocks_fix(
         "operation_id": str(uuid.uuid4()),
         "kind": "audit",
         "application_agent_id": a["id"],
-        "focus_id": f["id"],
+        "goal_id": f["id"],
         "options": {},
     }
     result = app.submit_job(saved["id"], request)
     assert result["options"]["code_scopes"] == ["app.py"]
-    assert result["options"]["investigation_plan"]["focus_version"] == 1
-    assert result["goal"] == f["goal"]
+    assert result["options"]["investigation_plan"]["goal_version"] == 1
+    assert result["goal"] == f["objective"]
     with pytest.raises(AuditError, match="baselines"):
-        app.submit_job(saved["id"], {**request, "kind": "fix"})
+        app.submit_job(saved["id"], {**request, "kind": "optimize"})
     with pytest.raises(AuditError, match="binding"):
         app.submit_job(saved["id"], {**request, "options": {"code_scopes": ["."]}})
     assert len(calls) == 1
@@ -585,7 +547,7 @@ def test_new_focus_retains_prior_measurements_and_requires_its_own_baseline(
     baseline = complete(application, baselines.start(application, evaluation["evaluation_id"]))
     saved = app.register(str(application.root))
     a = app.save_application_agent(saved["id"], {"name": "Support", "code_scopes": ["app.json"]})
-    correctness = focus(app, saved, a)
+    correctness = goal_record(app, saved, a)
     attached = app.catalog.bind_measurement(
         saved["id"],
         a["id"],
@@ -596,12 +558,12 @@ def test_new_focus_retains_prior_measurements_and_requires_its_own_baseline(
             "primary_metric": "quality",
         },
     )
-    assert app.catalog.readiness(saved["id"], a["id"])["fix"]["ready"]
-    latency = focus(app, saved, a, "latency")
+    assert app.catalog.readiness(saved["id"], a["id"])["optimize"]["ready"]
+    latency = goal_record(app, saved, a, "latency")
     suite = app.catalog.suite(saved["id"], a["id"], latency["id"])
-    assert [m["focus_id"] for m in suite["members"]] == [correctness["id"]]
-    assert suite["missing"][0]["focus_id"] == latency["id"]
-    assert not app.catalog.readiness(saved["id"], a["id"])["fix"]["ready"]
+    assert [m["goal_id"] for m in suite["members"]] == [correctness["id"]]
+    assert suite["missing"][0]["goal_id"] == latency["id"]
+    assert not app.catalog.readiness(saved["id"], a["id"])["optimize"]["ready"]
     app.catalog.bind_measurement(
         saved["id"],
         a["id"],
@@ -614,7 +576,7 @@ def test_new_focus_retains_prior_measurements_and_requires_its_own_baseline(
     )
     suite = app.catalog.suite(saved["id"], a["id"], latency["id"])
     assert len(suite["members"]) == 2 and not suite["missing"]
-    quality_guard = next(m for m in suite["members"] if m["focus_id"] == correctness["id"])[
+    quality_guard = next(m for m in suite["members"] if m["goal_id"] == correctness["id"])[
         "guardrails"
     ][0]
     assert quality_guard == {
@@ -624,7 +586,7 @@ def test_new_focus_retains_prior_measurements_and_requires_its_own_baseline(
         "bound": 0,
     }
     assert (
-        app.catalog.focus(saved["id"], a["id"], correctness["id"])["measurement"]
+        app.catalog.goal_record(saved["id"], a["id"], correctness["id"])["measurement"]
         == attached["measurement"]
     )
     history = app.catalog.metrics(saved["id"], a["id"])
@@ -644,7 +606,7 @@ def test_new_focus_retains_prior_measurements_and_requires_its_own_baseline(
     suite = app.catalog.suite(saved["id"], a["id"], latency["id"])
     assert suite["missing"][0]["application_agent_id"] == other["id"]
     assert "narrow permitted changes" in suite["missing"][0]["reason"]
-    other_focus = focus(app, saved, other)
+    other_focus = goal_record(app, saved, other)
     app.catalog.bind_measurement(
         saved["id"],
         other["id"],
@@ -656,7 +618,7 @@ def test_new_focus_retains_prior_measurements_and_requires_its_own_baseline(
     # Retained IDs are not enough after actual measurement evidence is lost.
     retained = baselines.status(application, baseline["baseline_id"])
     (application.root / retained["measurement_artifact"]).unlink()
-    assert not app.catalog.readiness(saved["id"], a["id"])["fix"]["ready"]
+    assert not app.catalog.readiness(saved["id"], a["id"])["optimize"]["ready"]
     assert len(app.catalog.suite(saved["id"], a["id"], latency["id"])["missing"]) == 3
 
 
@@ -709,19 +671,19 @@ def test_recent_trace_selection_preserves_children_and_newest_matching_roots(app
 
 def test_agent_routes_require_session_and_reading_never_discovers(app, tmp_path):
     saved = project(app, tmp_path)
-    base = f"/api/projects/{saved['id']}/application-agents"
+    base = f"/api/projects/{saved['id']}/agents"
     with running(app) as (client, _):
-        assert client.get(base).json() == {"agents": []}
+        assert client.get(base).json()["agents"] == []
         response = client.post(base, json={"name": "Support", "code_scopes": ["app.py"]})
         assert response.status_code == 200
         a = response.json()
         f = client.post(
-            f"{base}/{a['id']}/focuses",
-            json={"category": "latency", "goal": "Reduce time to answer"},
+            f"{base}/{a['id']}/goals",
+            json={"category": "latency", "objective": "Reduce time to answer"},
         ).json()
-        overview = client.get(f"{base}/{a['id']}/overview", params={"focus_id": f["id"]}).json()
-        assert overview["active_focus_id"] == f["id"]
-        assert overview["readiness"]["fix"]["ready"] is False
+        overview = client.get(f"{base}/{a['id']}/overview", params={"goal_id": f["id"]}).json()
+        assert overview["active_goal_id"] == f["id"]
+        assert overview["readiness"]["optimize"]["ready"] is False
         client.headers.pop("X-Agentagon-Token")
         assert client.post(f"{base}/{a['id']}", json={"name": "Changed"}).status_code == 403
 
@@ -731,13 +693,13 @@ def test_focused_request_replay_keeps_original_binding_after_agent_edits(
 ):
     saved = project(app, tmp_path)
     a = agent(app, saved)
-    f = focus(app, saved, a)
-    monkeypatch.setattr(app.jobs, "_dispatch", lambda: None)
+    f = goal_record(app, saved, a)
+    monkeypatch.setattr(app.runtime, "_dispatch", lambda: None)
     request = {
         "operation_id": str(uuid.uuid4()),
         "kind": "audit",
         "application_agent_id": a["id"],
-        "focus_id": f["id"],
+        "goal_id": f["id"],
         "options": {},
     }
     first = app.submit_job(saved["id"], request)
@@ -749,7 +711,7 @@ def test_focused_request_replay_keeps_original_binding_after_agent_edits(
     assert replay["options"]["code_scopes"] == ["app.py"]
     with pytest.raises(AuditError, match="different"):
         app.submit_job(saved["id"], {**request, "goal": "Changed request"})
-    assert len(app.jobs.list(saved["id"])) == 1
+    assert len(app.runtime.list(saved["id"])) == 1
 
 
 @pytest.mark.parametrize(
@@ -947,7 +909,7 @@ def test_discovery_excludes_non_application_paths_at_any_depth_and_saved_suggest
 def test_discovery_is_bounded_and_skips_generated_symlink_and_local_framework_shadow(
     app, tmp_path, monkeypatch
 ):
-    from agentagon.webapp import discovery
+    from agentagon.capabilities import discovery
 
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root
@@ -1041,7 +1003,7 @@ def test_existing_generated_suggestions_are_hidden_without_changing_manual_agent
 def test_discovery_bounds_import_reads_before_loading_and_verifies_selected_records(
     app, tmp_path, monkeypatch
 ):
-    from agentagon.webapp import catalog
+    from agentagon.domain import catalog
 
     saved = project(app, tmp_path)
     workspace = app.state.workspace(saved["id"])

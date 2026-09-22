@@ -1,0 +1,18 @@
+{
+  "id": "observe",
+  "version": 1,
+  "name": "Observe production",
+  "purpose": "Measure production outcomes and recommend improvements.",
+  "requires_goal": false,
+  "inputs": [
+    "Monitor"
+  ],
+  "outputs": [
+    "Evidence and recommendations"
+  ],
+  "references": [
+    "workflows/observe/instructions.md",
+    "workflows/discover/instructions.md"
+  ],
+  "workflow": "observe"
+}

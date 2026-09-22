@@ -8,11 +8,11 @@ from support.evaluation import draft, review_for
 from support.experiments import executions, git
 from test_baselines import complete, frozen
 
+from agentagon.capabilities.evaluation.comparisons import compare
+from agentagon.capabilities.experiments import baselines, engine, preparation
 from agentagon.core.records import AuditError
-from agentagon.experiments import baselines, engine, preparation
 from agentagon.storage.config import Config
 from agentagon.storage.workspace import Workspace
-from agentagon.webapp.comparisons import compare
 
 
 @pytest.fixture
@@ -91,7 +91,7 @@ def test_comparison_rejects_modified_score_and_unverified_evidence(application, 
     with pytest.raises(AuditError, match="score or measurement"):
         compare(application, left["baseline_id"], right["baseline_id"])
     baselines._save(application, right)
-    from agentagon.experiments.store import load_run, save_run
+    from agentagon.capabilities.experiments.store import load_run, save_run
 
     run = load_run(application, right["execution_run_id"])
     run["candidates"][run["baseline_id"]]["state"] = "awaiting_review"

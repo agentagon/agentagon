@@ -7,10 +7,10 @@ import pytest
 from support.audit import finish
 from support.experiments import git, passing_review, verify
 
+from agentagon.capabilities.experiments import engine
 from agentagon.core.records import AuditError
-from agentagon.experiments import engine
+from agentagon.domain.issues import list_issues, update_issue
 from agentagon.storage.config import Config
-from agentagon.storage.issues import list_issues, update_issue
 
 
 def prepare_defect(workspace, imported):

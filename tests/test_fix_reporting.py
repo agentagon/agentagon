@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from agentagon.reporting import build_fix_report, render_fix_markdown
+from agentagon.capabilities.reporting import build_fix_report, render_fix_markdown
 
 
 def test_fix_parity_report_keeps_history_and_counts_without_private_payloads(workspace, fix_run):

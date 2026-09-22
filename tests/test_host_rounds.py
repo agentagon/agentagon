@@ -6,9 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from support.experiments import passing_review, verify
 
+from agentagon.capabilities.experiments import engine, learning, orchestration
+from agentagon.capabilities.experiments.store import load_run, locked, save_run
 from agentagon.core.records import AuditError
-from agentagon.experiments import engine, learning, orchestration
-from agentagon.experiments.store import load_run, locked, save_run
 from agentagon.storage.config import Config
 
 

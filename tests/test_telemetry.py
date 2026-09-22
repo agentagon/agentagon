@@ -3,10 +3,10 @@ import json
 
 import pytest
 
+from agentagon.capabilities.traces.normalize import normalize, unpack
 from agentagon.core.records import AuditError, digest, timestamp_ns, validate_record
 from agentagon.core.signals import measure
-from agentagon.operations import import_traces, start
-from agentagon.telemetry.normalize import normalize, unpack
+from agentagon.workflows.audit.operations import import_traces, start
 
 
 @pytest.mark.parametrize("provider", ["braintrust", "langfuse", "langsmith", "phoenix", "otlp"])

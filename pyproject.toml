@@ -5,17 +5,18 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentagon"
 version = "0.1.3"
-description = "Inspect and improve AI agents with measured fixes and custom scores."
+description = "Recursive self-improvement for AI agents."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
-license-files = ["LICENSE", "THIRD_PARTY_NOTICES.txt"]
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.txt"]
 dependencies = [
     "click>=8.1,<9",
     "jsonschema>=4.21,<5",
     "referencing>=0.28.4,<1",
     "httpx>=0.28,<1",
     "gepa==0.1.4",
+    "mcp>=1.25,<2",
 ]
 
 [project.urls]
@@ -39,28 +40,11 @@ agentagon = "agentagon.cli.main:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-agentagon = ["dashboard_assets/*"]
+agentagon = ["dashboard/assets/*", "workflows/**/*.json", "workflows/**/*.md", "workflows/**/*.py", "workflows/**/*.cjs"]
 
 [tool.setuptools.data-files]
 "share/agentagon/contracts/v1" = ["contracts/v1/*.json"]
 "share/agentagon/signals" = ["signals/*.json"]
-"share/agentagon/hooks" = ["hooks/*.json"]
-"share/agentagon/.codex-plugin" = [".codex-plugin/plugin.json"]
-"share/agentagon/.claude-plugin" = [".claude-plugin/plugin.json"]
-"share/agentagon/skills/init" = ["skills/init/SKILL.md"]
-"share/agentagon/skills/eval" = ["skills/eval/SKILL.md"]
-"share/agentagon/skills/audit" = ["skills/audit/SKILL.md"]
-"share/agentagon/skills/audit/references" = ["skills/audit/references/*.md"]
-"share/agentagon/skills/setup" = ["skills/setup/SKILL.md"]
-"share/agentagon/skills/setup/references" = ["skills/setup/references/*.md"]
-"share/agentagon/skills/dashboard" = ["skills/dashboard/SKILL.md"]
-"share/agentagon/skills/dashboard/references" = ["skills/dashboard/references/*.md"]
-"share/agentagon/skills/fix" = ["skills/fix/SKILL.md"]
-"share/agentagon/skills/fix/references" = ["skills/fix/references/*.md"]
-"share/agentagon/skills/eval/references" = ["skills/eval/references/*.md"]
-"share/agentagon/skills/eval/helpers" = ["skills/eval/helpers/*.py", "skills/eval/helpers/*.cjs"]
-"share/agentagon/skills/workflows" = ["skills/workflows/*.md"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
@@ -73,4 +57,4 @@ line-length = 100
 select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
 
 [tool.ruff.per-file-target-version]
-"skills/eval/helpers/*.py" = "py310"
+"src/agentagon/workflows/evaluate/helpers/*.py" = "py310"

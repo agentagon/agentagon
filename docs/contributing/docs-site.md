@@ -61,7 +61,7 @@ Website source lives in `website/`. The landing template preserves the approved 
 
 Add articles as Markdown in `website/blogs/`. Frontmatter requires `title`, `description`, `author`, `published_at`, `updated_at`, and `original_url`. Filenames become `/blogs/<filename>/` routes. Use the approved publication dates and set the revision date to the actual edit date. The builder creates article metadata, related links, and permanent redirects from each original URL.
 
-The initial articles were adapted from the corresponding files under `aegon/web/src/content/seo/pages/`. They describe the current CLI/plugin workflows. The old model-comparison study is excluded because its reported rates and counts require reconciliation.
+The initial articles were adapted from the corresponding files under `aegon/web/src/content/seo/pages/`. They now describe the dashboard, managed workflows and local MCP interface. The old model-comparison study is excluded because its reported rates and counts require reconciliation.
 
 The build routes former sign-in, demo, and workspace entries to `/welcome/`. Unselected legacy articles and unknown paths return the branded 404; there is no catch-all SPA fallback.
 

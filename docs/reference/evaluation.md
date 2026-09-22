@@ -8,7 +8,7 @@ A frozen package is immutable. Ask your coding agent to create a new draft from 
 
 === "Codex"
 
-    Select **ag:eval**, then send:
+    Select **Prepare evaluation**, then send:
 
     ```text
     Create a new evaluation draft from EVALUATION_ID. Add coverage for
@@ -21,7 +21,7 @@ A frozen package is immutable. Ask your coding agent to create a new draft from 
 === "Claude Code"
 
     ```text
-    /ag:eval Create a new evaluation draft from EVALUATION_ID. Add coverage
+    Prepare evaluation Create a new evaluation draft from EVALUATION_ID. Add coverage
     for tool timeouts and empty search results, using the configured local
     profile. Agree the preparation limits with me, validate the revised
     benchmark, and obtain an independent review before freezing it.
@@ -33,7 +33,7 @@ To measure compatible later application source, use a [baseline rerun](../baseli
 ??? details "Create a draft from the CLI"
 
     ```sh
-    agentagon eval start --from EVALUATION_ID --profile local --budget-file BUDGET_JSON --author AUTHOR
+    agentagon _internal eval start --from EVALUATION_ID --profile local --budget-file BUDGET_JSON --author AUTHOR
     ```
 
     Supply a real author identity and a preparation budget file. The coding agent normally prepares these inputs for you.
@@ -43,12 +43,12 @@ To measure compatible later application source, use a [baseline rerun](../baseli
 The coding host normally prepares these files and runs these operations. For direct use, replace uppercase placeholders with actual IDs and files:
 
 ```sh
-agentagon eval start --intent INTENT_ID --goal 'Check tool routing' --profile local --budget-file BUDGET_JSON --author AUTHOR
-agentagon eval start --audit AUDIT_ID --issue ISSUE_ID --profile local --budget-file BUDGET_JSON --author AUTHOR
-agentagon eval lookup EVALUATION_ID --context-file CONTEXT_FILE --goal-file GOAL_FILE --phase initial --limit 5
-agentagon eval check EVALUATION_ID --plan-file PLAN_JSON
-agentagon eval freeze EVALUATION_ID --review-file REVIEW_JSON
-agentagon fix start --evaluation EVALUATION_ID --profile local
+agentagon _internal eval start --intent INTENT_ID --goal 'Check tool routing' --profile local --budget-file BUDGET_JSON --author AUTHOR
+agentagon _internal eval start --audit AUDIT_ID --issue ISSUE_ID --profile local --budget-file BUDGET_JSON --author AUTHOR
+agentagon _internal eval lookup EVALUATION_ID --context-file CONTEXT_FILE --goal-file GOAL_FILE --phase initial --limit 5
+agentagon _internal eval check EVALUATION_ID --plan-file PLAN_JSON
+agentagon _internal eval freeze EVALUATION_ID --review-file REVIEW_JSON
+agentagon _internal fix start --evaluation EVALUATION_ID --profile local
 ```
 
 A preparation budget file has this shape:
@@ -61,6 +61,6 @@ A preparation budget file has this shape:
 }
 ```
 
-Use the [plan and review contracts](../../skills/eval/references/preparation.md) and returned templates for the other files. Do not fill a review with claimed results that were not observed. See [task evidence helpers](../task-evidence.md) for benchmark diagnostics.
+Use the [plan and review contracts](../../src/agentagon/workflows/evaluate/references/preparation.md) and returned templates for the other files. Do not fill a review with claimed results that were not observed. See [task evidence helpers](../task-evidence.md) for benchmark diagnostics.
 
 A passing benchmark establishes evidence for its declared cases. It does not erase coverage limitations or prove production improvement.

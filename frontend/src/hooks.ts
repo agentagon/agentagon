@@ -7,10 +7,12 @@ import type {
   AssistantModel,
   ConnectorType,
   Goal,
+  LessonDetail,
+  LessonsResponse,
   Project,
   ProjectConnector,
   ProjectOverview,
-  SkillDefinition,
+  WorkflowDefinition,
   TaskDetail,
   TaskSummary,
 } from "./types";
@@ -26,7 +28,7 @@ export function useAgents(projectId?: string) {
   return useQuery({
     queryKey: ["projects", projectId, "agents"],
     queryFn: ({ signal }) =>
-      api<{ agents: Agent[]; confirmed: Agent[]; suggestions: Agent[] }>(projectPath(projectId!, "/agents"), { signal }),
+      api<{ agents: Agent[]; confirmed: Agent[]; suggestions: Agent[]; excluded?: Agent[] }>(projectPath(projectId!, "/agents"), { signal }),
     enabled: Boolean(projectId),
   });
 }
@@ -81,6 +83,24 @@ export function useTask(projectId?: string, taskId?: string | null) {
   });
 }
 
+export function useLessons(projectId?: string, agentId?: string) {
+  const query = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : "";
+  return useQuery({
+    queryKey: ["projects", projectId, "lessons", agentId],
+    queryFn: ({ signal }) => api<LessonsResponse>(projectPath(projectId!, `/lessons${query}`), { signal }),
+    enabled: Boolean(projectId),
+  });
+}
+
+export function useLesson(projectId?: string, groupId?: string, entryId?: string, agentId?: string) {
+  const query = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : "";
+  return useQuery({
+    queryKey: ["projects", projectId, "lessons", groupId, entryId, agentId],
+    queryFn: ({ signal }) => api<LessonDetail>(projectPath(projectId!, `/lessons/${encodeURIComponent(groupId!)}/${encodeURIComponent(entryId!)}${query}`), { signal }),
+    enabled: Boolean(projectId && groupId && entryId),
+  });
+}
+
 export function useOverview(projectId?: string) {
   return useQuery({
     queryKey: ["projects", projectId, "overview"],
@@ -89,10 +109,10 @@ export function useOverview(projectId?: string) {
   });
 }
 
-export function useSkills() {
+export function useWorkflows() {
   return useQuery({
-    queryKey: ["skills"],
-    queryFn: ({ signal }) => api<{ skills: SkillDefinition[] }>("/api/skills", { signal }),
+    queryKey: ["workflows"],
+    queryFn: ({ signal }) => api<{ workflows: WorkflowDefinition[] }>("/api/workflows", { signal }),
   });
 }
 

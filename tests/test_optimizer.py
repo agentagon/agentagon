@@ -6,10 +6,10 @@ import time
 import pytest
 from support.optimizer import candidate_text, proposal_response
 
+from agentagon.capabilities.experiments.budget import BudgetExhausted, BudgetLedger
+from agentagon.capabilities.experiments.host_bridge import HostBridge
+from agentagon.capabilities.experiments.optimizer import MetaHarnessConfig, OptimizerCoordinator
 from agentagon.core.records import AuditError
-from agentagon.experiments.budget import BudgetExhausted, BudgetLedger
-from agentagon.experiments.host_bridge import HostBridge
-from agentagon.experiments.optimizer import MetaHarnessConfig, OptimizerCoordinator
 from agentagon.storage.workspace import Workspace
 
 RUN = "run_" + "a" * 24
@@ -66,12 +66,12 @@ def test_unused_preparation_flows_without_verification_leak(workspace):
 
 
 def test_time_reserve_and_baseline_only_budget(workspace, monkeypatch):
-    monkeypatch.setattr("agentagon.experiments.budget.time.time", lambda: 100)
+    monkeypatch.setattr("agentagon.capabilities.experiments.budget.time.time", lambda: 100)
     ledger = BudgetLedger(workspace, RUN)
     ledger.create(10, 100)
-    monkeypatch.setattr("agentagon.experiments.budget.time.time", lambda: 179)
+    monkeypatch.setattr("agentagon.capabilities.experiments.budget.time.time", lambda: 179)
     assert ledger.admit("last-search", "optimization")["timeout_seconds"] == 1
-    monkeypatch.setattr("agentagon.experiments.budget.time.time", lambda: 180)
+    monkeypatch.setattr("agentagon.capabilities.experiments.budget.time.time", lambda: 180)
     with pytest.raises(BudgetExhausted, match="time budget"):
         ledger.admit("too-late", "optimization")
     assert ledger.admit("verification", "verification")["timeout_seconds"] == 20
@@ -457,7 +457,7 @@ def test_bridge_recovers_reply_persisted_before_projection_crash(workspace, monk
 
 
 def test_late_host_reply_is_retained_and_marked_exceeded(workspace, monkeypatch):
-    monkeypatch.setattr("agentagon.experiments.budget.time.time", lambda: 100)
+    monkeypatch.setattr("agentagon.capabilities.experiments.budget.time.time", lambda: 100)
     BudgetLedger(workspace, RUN).create(10, 100)
     bridge = HostBridge(workspace, RUN)
     request = bridge.request(
@@ -471,7 +471,7 @@ def test_late_host_reply_is_retained_and_marked_exceeded(workspace, monkeypatch)
         payload={},
     )
     bridge.start(request["request_id"], timeout_seconds=10)
-    monkeypatch.setattr("agentagon.experiments.budget.time.time", lambda: 111)
+    monkeypatch.setattr("agentagon.capabilities.experiments.budget.time.time", lambda: 111)
     reply = bridge.reply(
         request["request_id"],
         {"review": "saved"},

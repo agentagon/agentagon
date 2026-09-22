@@ -4,10 +4,10 @@ from pathlib import Path
 
 from support.audit import finish_change_review
 
+from agentagon.capabilities.reporting import build_report, report
 from agentagon.core.records import load_json
-from agentagon.dashboard import _detail
-from agentagon.operations import start
-from agentagon.reporting import build_report, report
+from agentagon.dashboard.evidence import _detail
+from agentagon.workflows.audit.operations import start
 
 
 def test_review_report_preserves_recommendations_and_deletion_citations(workspace):

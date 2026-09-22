@@ -34,7 +34,7 @@ def test_demo_state_assertions_catch_duplicates_preserve_success_and_reject_miss
     ):
         shutil.copyfile(EXAMPLE / name, tmp_path / name)
     shutil.copyfile(
-        EXAMPLE.parents[1] / "skills/eval/helpers/agentagon_events.py",
+        EXAMPLE.parents[1] / "src/agentagon/workflows/evaluate/helpers/agentagon_events.py",
         tmp_path / "agentagon_events.py",
     )
     (tmp_path / "model.py").write_text(

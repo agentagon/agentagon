@@ -8,10 +8,10 @@ from click.testing import CliRunner
 from support.controls import request, submit
 from support.experiments import baseline, executions, propose, verify
 
-from agentagon.cli.main import main
+from agentagon.capabilities.experiments import controls, engine
+from agentagon.capabilities.experiments.store import load_run
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError
-from agentagon.experiments import controls, engine
-from agentagon.experiments.store import load_run
 
 
 @pytest.fixture

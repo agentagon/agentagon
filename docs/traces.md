@@ -1,8 +1,20 @@
 # Connect execution traces
 
-Traces add recorded runtime behavior to an audit: calls, timing, failures, and available usage. Use them when source inspection alone cannot show how your agent behaved in real executions.
+Traces add recorded runtime behavior to issue discovery, Fix, production observation, and explicit Audit: calls, timing, failures, and available usage. Use them when source inspection alone cannot show how your agent behaved in real executions.
 
-Agentagon imports supported exports. Your coding host retrieves provider data through available tools; Agentagon is not an always-on production trace collector.
+Agentagon imports supported exports and bounded selections from saved provider connections. A connection does not enable monitoring or authorize recurring collection. Your coding host can also retrieve provider data through available tools.
+
+## Check a trace in the dashboard
+
+Choose **All issues** from Overview or an agent workspace, then use **Share a trace**:
+
+1. Paste or upload JSON/JSONL, or select a saved connection and enter a provider trace ID.
+2. Leave **Trace format** on **Auto-detect** unless Agentagon reports more than one matching format.
+3. Choose **Check trace**. This validates and redacts the bounded input without retaining a project snapshot.
+4. Review the detected format, trace identities, usable spans, incomplete coverage, redaction, blockers, and known limitations.
+5. Choose **Import and investigate** to discover and group issues, or **Import and prepare fix** to prepare a focused repair.
+
+Only the final import creates immutable project evidence. Editing the data, format, connection, or trace ID invalidates the preview and requires another check. Unsupported input and input with no usable spans remain unimported.
 
 ## Choose a source
 
@@ -14,11 +26,11 @@ Agentagon imports supported exports. Your coding host retrieves provider data th
 | Phoenix | Supply project/endpoint and access when required, or an export. |
 | OpenTelemetry | Supply a supported local export. There is no universal historical-query endpoint. |
 
-Exact supported shapes are documented in the [export-format reference](../skills/audit/references/formats.md). A file from a provider is not automatically compatible with every export endpoint or format that provider offers.
+Exact supported shapes are documented in the [export-format reference](../src/agentagon/workflows/audit/references/formats.md). A file from a provider is not automatically compatible with every export endpoint or format that provider offers.
 
-## Option A: use an existing local export
+## Use an export in an explicit Audit
 
-Open the application in your coding host and select **ag:audit**. Give it the file and explicit selection details:
+Open the application in your coding host and select **Audit**. Give it the file and explicit selection details:
 
 ```text
 Audit the traces in /path/to/export.json in trace-only mode.
@@ -32,9 +44,11 @@ Replace the provider, path, project, dates, and count with values that match you
 
 Local exports do not require a provider connection. Use only data permitted for your coding host to inspect.
 
-## Option B: save a provider connection
+## Save a provider connection
 
-Use **ag:setup** in Codex or `/ag:setup` in Claude Code. For example:
+Use **Settings** → **Connections** in the dashboard. Credential discovery first lists accessible provider projects; selecting one saves the connection. Discovery alone does not save credentials, import traces, or enable monitoring.
+
+You can also configure provider access through a coding host. For example:
 
 ```text
 Configure Braintrust traces for this checkout using project MY_PROJECT.
@@ -47,7 +61,7 @@ Configure the actual secret outside chat and ensure the host can read it. The sa
 For direct configuration:
 
 ```sh
-agentagon setup --scope project --set traces.source braintrust --set traces.project MY_PROJECT --set traces.api_key_env BRAINTRUST_API_KEY --set traces.state enabled
+agentagon _internal setup --scope project --set traces.source braintrust --set traces.project MY_PROJECT --set traces.api_key_env BRAINTRUST_API_KEY --set traces.state enabled
 ```
 
 Other providers may need endpoint or public-key references; use [Settings and profiles](settings.md). Saving a connection does not authorize downloads or production instrumentation.
@@ -70,7 +84,7 @@ uncommitted changes. Preserve that limitation when relating code to failures.
 
 With dirty or non-Git source, alignment cannot be verified. Even matching revision metadata in a clean checkout remains a provenance assumption. Contradictory metadata prevents unsupported code/trace correlation. The report retains these limitations.
 
-Changes reviews stay code-only by default. To add traces to `ag:audit`, explicitly explain their connection to the captured changes; trace-only mode cannot satisfy a changes review.
+Changes reviews stay code-only by default. To add traces to `Audit`, explicitly explain their connection to the captured changes; trace-only mode cannot satisfy a changes review.
 
 ## Interpret runtime measurements
 
@@ -81,7 +95,7 @@ Import diagnostics and coverage matter as much as the findings. Read [Reports an
 ## Disconnect later
 
 ```sh
-agentagon setup --scope project --set traces.state disabled
+agentagon _internal setup --scope project --set traces.state disabled
 ```
 
 This changes future audit defaults and retains existing audit evidence. Use `unset` instead of `disabled` only if you want the trace-setup question to appear again.

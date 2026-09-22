@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from agentagon.experiments import preparation
+from agentagon.capabilities.experiments import preparation
 from agentagon.storage.config import Config
 from agentagon.storage.workspace import Workspace
 
@@ -73,7 +73,7 @@ def initialize(destination, repetitions=2):
     prepared = work.root / started["worktree"]
     for name in EVALUATOR_FILES:
         source = (
-            HERE.parents[1] / "skills/eval/helpers" / name
+            HERE.parents[1] / "src/agentagon/workflows/evaluate/helpers" / name
             if name == "agentagon_events.py"
             else HERE / name
         )

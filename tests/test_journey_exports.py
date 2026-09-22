@@ -4,8 +4,12 @@ import copy
 import json
 from pathlib import Path
 
-from agentagon.experiments import baselines, preparation, store
-from agentagon.reporting import build_fix_report, build_journey_report, export_journey_report
+from agentagon.capabilities.experiments import baselines, preparation, store
+from agentagon.capabilities.reporting import (
+    build_fix_report,
+    build_journey_report,
+    export_journey_report,
+)
 
 
 def test_baseline_export_filters_nested_private_payloads(workspace, monkeypatch):

@@ -11,8 +11,8 @@ from support.delivery import creates, pushes
 from support.evaluation import draft, review_for
 from support.experiments import git, propose, verify
 
+from agentagon.capabilities.experiments import delivery, engine, patches, preparation, store
 from agentagon.core.records import AuditError
-from agentagon.experiments import delivery, engine, patches, preparation, store
 
 
 def ship(selected, **kwargs):

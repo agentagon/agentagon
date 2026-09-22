@@ -11,13 +11,13 @@ import httpx
 import pytest
 from click.testing import CliRunner
 
+from agentagon.capabilities.traces import snapshots
+from agentagon.capabilities.traces.providers import CredentialStore, ProviderError
 from agentagon.cli.main import main
 from agentagon.core.records import AuditError
+from agentagon.dashboard.server import create_server
 from agentagon.storage.config import Config
-from agentagon.webapp import snapshots
-from agentagon.webapp.providers import CredentialStore, ProviderError
-from agentagon.webapp.server import create_server
-from agentagon.webapp.service import Application
+from agentagon.workflows.service import Application
 
 
 class Provider:
@@ -36,6 +36,20 @@ class Provider:
 
     def preview(self, kind, selection):
         self.calls.append((kind, selection))
+        if kind == "traces":
+            return {
+                "items": [
+                    {
+                        "span_id": "span-one",
+                        "root_span_id": "trace-one",
+                        "span_parents": [],
+                        "span_attributes": {"type": "agent"},
+                        "metrics": {"start": 1, "end": 2},
+                    }
+                ],
+                "provenance": {"provider": "braintrust", "version": "pinned-version"},
+                "completeness": {"complete": True, "count": 1},
+            }
         return {
             "items": [
                 {
@@ -110,7 +124,7 @@ def test_claude_credential_rotation_follows_settings_commit(
 
     keyring = Keyring()
     app.credentials = CredentialStore(keyring)
-    monkeypatch.setattr("agentagon.webapp.service.detect_agents", lambda: [])
+    monkeypatch.setattr("agentagon.workflows.service.detect_backends", lambda: [])
     app.save_agents({"claude_api_key": "old-secret", "credential_mode": "keyring"})
     previous = app.state.read()["agents"]["claude_api_key_ref"]
     monkeypatch.setenv("REPLACEMENT_CLAUDE_KEY", "new-secret")
@@ -152,7 +166,7 @@ def test_claude_credential_rotation_waits_for_starting_session(app, tmp_path, mo
     release = threading.Event()
     rotating = threading.Event()
     observed = []
-    monkeypatch.setattr("agentagon.webapp.service.detect_agents", lambda: [])
+    monkeypatch.setattr("agentagon.workflows.service.detect_backends", lambda: [])
     app.save_agents({"claude_api_key": "old-secret", "credential_mode": "session"})
     previous = app.state.read()["agents"]["claude_api_key_ref"]
     resolve = app.credentials.resolve
@@ -174,10 +188,10 @@ def test_claude_credential_rotation_waits_for_starting_session(app, tmp_path, mo
         return {"state": "interrupted", "session_id": "saved-session"}
 
     monkeypatch.setattr(app.credentials, "resolve", paused_resolve)
-    app.jobs.condition = ObservedCondition(threading.RLock())
-    app.jobs.execute = host
+    app.runtime.condition = ObservedCondition(threading.RLock())
+    app.runtime.execute = host
     saved = project(app, tmp_path)
-    job = app.jobs.submit(
+    job = app.runtime.submit(
         saved["id"],
         {
             "operation_id": str(uuid.uuid4()),
@@ -199,9 +213,9 @@ def test_claude_credential_rotation_waits_for_starting_session(app, tmp_path, mo
             finally:
                 release.set()
             rotation.result(timeout=5)
-        for worker in list(app.jobs.threads):
+        for worker in list(app.runtime.threads):
             worker.join(timeout=5)
-        result = app.jobs.get(saved["id"], job["id"])
+        result = app.runtime.get(saved["id"], job["id"])
         assert result["state"] == "interrupted", result["next_action"]
         assert result["session_id"] == "saved-session"
         assert observed == ["old-secret"]
@@ -237,9 +251,14 @@ def running(app):
 def test_register_and_read_never_initializes_or_executes(app, tmp_path):
     saved = project(app, tmp_path)
     assert app.register(saved["path"])["id"] == saved["id"]
+    assert app.projects()["projects"][0]["source"] == {
+        "kind": "folder",
+        "revision": None,
+        "dirty": None,
+    }
     assert not (tmp_path / "project" / ".agentagon").exists()
     assert app.overview(saved["id"])["audits"] == []
-    assert app.overview(saved["id"])["jobs"] == []
+    assert app.overview(saved["id"])["tasks"] == []
     assert not (tmp_path / "project" / ".agentagon").exists()
 
 
@@ -295,6 +314,22 @@ def test_snapshot_import_replay_and_project_isolation(app, tmp_path):
     saved = app.import_preview(first["id"], payload)
     assert saved["state"] == "draft" and saved["missing_expectations"] == 1
     assert app.import_preview(first["id"], payload)["id"] == saved["id"]
+    repeated_preview = app.preview(
+        first["id"],
+        {
+            "connection_id": source["id"],
+            "kind": "dataset",
+            "selection": {"dataset_id": "one", "cap": 10},
+        },
+    )
+    assert repeated_preview["preview_id"] != preview["preview_id"]
+    assert (
+        app.import_preview(
+            first["id"],
+            {**payload, "preview_id": repeated_preview["preview_id"]},
+        )["id"]
+        == saved["id"]
+    )
     assert app.overview(first["id"])["datasets"][0]["id"] == saved["id"]
     with pytest.raises(AuditError, match="not found"):
         app.result(second["id"], "dataset", saved["id"])
@@ -302,8 +337,112 @@ def test_snapshot_import_replay_and_project_isolation(app, tmp_path):
     assert app.overview(first["id"])["datasets"][0]["id"] == saved["id"]
 
 
+def test_preview_confirmation_consumes_preview_and_shares_import_operation_namespace(app, tmp_path):
+    saved_project = project(app, tmp_path)
+    source = connection(app, saved_project["id"])
+    preview = app.preview(
+        saved_project["id"],
+        {
+            "connection_id": source["id"],
+            "kind": "dataset",
+            "selection": {"dataset_id": "one"},
+        },
+    )
+    operation = str(uuid.uuid4())
+    app.import_preview(
+        saved_project["id"],
+        {"preview_id": preview["preview_id"], "operation_id": operation},
+    )
+    assert preview["preview_id"] not in app.previews
+
+    trace = {
+        "span_id": "root",
+        "root_span_id": "trace-one",
+        "span_parents": [],
+        "span_attributes": {"type": "task"},
+        "metrics": {"start": 1, "end": 2},
+        "metadata": {},
+    }
+    with pytest.raises(AuditError, match="operation_id already belongs"):
+        app.import_trace(
+            saved_project["id"],
+            {
+                "operation_id": operation,
+                "provider": "braintrust",
+                "data": [trace],
+            },
+        )
+
+    direct_operation = str(uuid.uuid4())
+    app.import_trace(
+        saved_project["id"],
+        {
+            "operation_id": direct_operation,
+            "provider": "braintrust",
+            "data": [trace],
+        },
+    )
+    another = app.preview(
+        saved_project["id"],
+        {
+            "connection_id": source["id"],
+            "kind": "dataset",
+            "selection": {"dataset_id": "one"},
+        },
+    )
+    with pytest.raises(AuditError, match="operation_id already belongs"):
+        app.import_preview(
+            saved_project["id"],
+            {"preview_id": another["preview_id"], "operation_id": direct_operation},
+        )
+
+
+def test_trace_preview_confirmation_is_idempotent_and_operation_bound(app, tmp_path):
+    saved_project = project(app, tmp_path)
+    trace = [
+        {
+            "traceId": "a" * 32,
+            "spanId": "1" * 16,
+            "name": "weather",
+            "startTimeUnixNano": "1000000000",
+            "endTimeUnixNano": "2000000000",
+        }
+    ]
+    preview = app.preview_trace_import(saved_project["id"], {"provider": "auto", "data": trace})
+    workspace = app.state.workspace(saved_project["id"])
+    assert snapshots.list_snapshots(workspace) == []
+
+    operation = str(uuid.uuid4())
+    payload = {"preview_id": preview["preview_id"], "operation_id": operation}
+    saved = app.import_preview(saved_project["id"], payload)
+    repeated_preview = app.preview_trace_import(
+        saved_project["id"], {"provider": "auto", "data": trace}
+    )
+    assert (
+        app.import_preview(
+            saved_project["id"],
+            {"preview_id": repeated_preview["preview_id"], "operation_id": operation},
+        )["id"]
+        == saved["id"]
+    )
+
+    changed = app.preview_trace_import(
+        saved_project["id"],
+        {"provider": "auto", "data": [{**trace[0], "spanId": "2" * 16}]},
+    )
+    with pytest.raises(AuditError, match="operation_id already belongs to another import"):
+        app.import_preview(
+            saved_project["id"],
+            {"preview_id": changed["preview_id"], "operation_id": operation},
+        )
+
+    app.previews.clear()
+    assert app.import_preview(saved_project["id"], payload)["id"] == saved["id"]
+    assert len(snapshots.list_snapshots(workspace)) == 1
+
+
 def test_import_uses_provider_cleaned_selection_without_echoing_credentials(app, tmp_path):
-    from agentagon.webapp.providers import ProviderClient
+    from agentagon.capabilities.traces.providers import ProviderClient
 
     saved_project = project(app, tmp_path)
     secret = "private-filter-test-value"
@@ -339,7 +478,7 @@ def test_import_uses_provider_cleaned_selection_without_echoing_credentials(app,
         {"preview_id": preview["preview_id"], "operation_id": str(uuid.uuid4())},
     )
     workspace = app.state.workspace(saved_project["id"])
-    path = workspace.state / "webapp" / "imports" / f"{saved['id']}.json"
+    path = workspace.state / "runtime" / "imports" / f"{saved['id']}.json"
     assert secret not in path.read_text()
     assert secret not in json.dumps(app.result(saved_project["id"], "dataset", saved["id"]))
 
@@ -359,15 +498,16 @@ def test_copied_snapshot_retains_its_original_project_binding(app, tmp_path, kin
     original = app.state.workspace(first["id"])
     target = app.state.workspace(second["id"])
     target.initialize()
-    relative = f"webapp/imports/{saved['id']}.json"
+    relative = f"runtime/imports/{saved['id']}.json"
     target.write_bytes(target.state / relative, (original.state / relative).read_bytes())
 
     with pytest.raises(AuditError, match="belongs to another project"):
         snapshots.load(target, saved["id"])
     with pytest.raises(AuditError, match="belongs to another project"):
         app.result(second["id"], kind, saved["id"])
-    with pytest.raises(AuditError, match="belongs to another project"):
-        app.overview(second["id"])
+    assert all(item["id"] != saved["id"] for item in snapshots.list_snapshots(target))
+    overview = app.overview(second["id"])
+    assert all(item["id"] != saved["id"] for item in [*overview["datasets"], *overview["traces"]])
     assert app.result(first["id"], kind, saved["id"])["project_id"] == first["id"]
 
 
@@ -436,7 +576,7 @@ def test_snapshot_tampering_is_detected(app, tmp_path):
         {"preview_id": preview["preview_id"], "operation_id": str(uuid.uuid4())},
     )
     workspace = app.state.workspace(saved_project["id"])
-    path = workspace.state / "webapp" / "imports" / f"{saved['id']}.json"
+    path = workspace.state / "runtime" / "imports" / f"{saved['id']}.json"
     content = json.loads(path.read_text())
     content["items"][0]["expected"] = "invented answer"
     path.write_text(json.dumps(content))
@@ -501,7 +641,7 @@ def test_http_bootstrap_origin_host_and_project_routing(app, tmp_path):
         assert "frame-ancestors 'none'" in root.headers["content-security-policy"]
         deep = client.get(f"/projects/{saved['id']}/skills")
         assert deep.status_code == 200 and 'id="root"' in deep.text
-        assert len(client.get("/api/skills").json()["skills"]) == 5
+        assert len(client.get("/api/workflows").json()["workflows"]) == 9
         assert len(client.get("/api/connector-types").json()["connector_types"]) == 3
         assert client.get("/api/session").status_code == 403
         boot = client.get(
@@ -550,27 +690,28 @@ def test_http_bootstrap_origin_host_and_project_routing(app, tmp_path):
 
 
 def test_bare_cli_opens_app_but_subcommands_stay_independent(monkeypatch, tmp_path):
-    from agentagon.webapp import launcher
+    from agentagon.workflows import service_host as launcher
 
     calls = []
-    monkeypatch.setattr(launcher, "launch", lambda path, **kwargs: calls.append((path, kwargs)))
+    monkeypatch.setattr(
+        launcher, "open_dashboard", lambda path, **kwargs: calls.append((path, kwargs))
+    )
     runner = CliRunner()
     assert runner.invoke(main, ["--workspace", str(tmp_path)]).exit_code == 0
     assert calls[0][0] == tmp_path
-    assert runner.invoke(main, ["app", "--no-open"]).exit_code == 0
-    assert calls[-1][1]["open_browser"] is False
+    assert runner.invoke(main, ["app"]).exit_code != 0
     count = len(calls)
     assert runner.invoke(main, ["--help"]).exit_code == 0
     assert runner.invoke(main, ["--version"]).exit_code == 0
-    assert runner.invoke(main, ["--workspace", str(tmp_path), "setup"]).exit_code == 0
+    assert runner.invoke(main, ["--workspace", str(tmp_path), "setup"]).exit_code != 0
     assert len(calls) == count
 
 
 def test_private_dataset_materializes_only_in_preparation_worktree(app, application, specification):
     from support.evaluation import draft
 
-    from agentagon.experiments import checkouts
-    from agentagon.experiments.engine import _freeze
+    from agentagon.capabilities.experiments import checkouts
+    from agentagon.capabilities.experiments.engine import _freeze
 
     saved_project = app.register(str(application.root))
     source = connection(app, saved_project["id"])
@@ -600,8 +741,8 @@ def test_private_dataset_materializes_only_in_preparation_worktree(app, applicat
 
 
 def test_launcher_reuses_verified_service(app, tmp_path, capsys):
-    from agentagon.webapp.launcher import _reuse
-    from agentagon.webapp.state import atomic_write
+    from agentagon.storage.state import atomic_write
+    from agentagon.workflows.service_host import _reuse
 
     saved = project(app, tmp_path)
     with running(app) as (_, server):
@@ -749,7 +890,7 @@ def test_discovery_replacement_failure_and_expiry_clear_temporary_credentials(
         expired.set()
 
     monkeypatch.setattr(app, "_discard_discovery", observe_expiry)
-    monkeypatch.setattr("agentagon.webapp.service.DISCOVERY_TTL_SECONDS", 0.05)
+    monkeypatch.setattr("agentagon.workflows.service.DISCOVERY_TTL_SECONDS", 0.05)
     result = app.discover_connection(saved["id"], command)
     assert expired.wait(2), "discovery timer did not clear expired credentials"
     assert not app.connection_discoveries
@@ -836,11 +977,11 @@ def test_connections_reject_remote_project_overrides_and_cross_project_actions(a
 
 def test_http_connections_discover_save_and_remain_project_scoped(app, tmp_path):
     first, second = project(app, tmp_path), project(app, tmp_path, "other")
-    path = f"/api/projects/{first['id']}/connections"
-    other = f"/api/projects/{second['id']}/connections"
+    path = f"/api/projects/{first['id']}/connectors"
+    other = f"/api/projects/{second['id']}/connectors"
     with running(app) as (client, _):
-        assert client.get("/api/connections").status_code == 400
-        assert client.post("/api/connections", json={}).status_code == 400
+        assert client.get("/api/connectors").status_code == 400
+        assert client.post("/api/connectors", json={}).status_code == 400
         discovery = client.post(
             path + "/discover",
             json={"provider": "braintrust", "credentials": {"api_key": "secret"}},
@@ -872,7 +1013,7 @@ def test_http_connections_discover_save_and_remain_project_scoped(app, tmp_path)
 def test_discovery_cache_bounds_and_close_remove_only_temporary_credentials(
     app, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr("agentagon.webapp.service.MAX_CONNECTION_DISCOVERIES", 2)
+    monkeypatch.setattr("agentagon.workflows.service.MAX_CONNECTION_DISCOVERIES", 2)
     projects = [project(app, tmp_path, f"project-{index}") for index in range(3)]
     discoveries = []
     for saved in projects:

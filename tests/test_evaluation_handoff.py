@@ -9,12 +9,12 @@ from support.audit import finish
 from support.dashboard import make_audit
 from support.evaluation import BUDGET
 
-from agentagon.cli.main import main
+from agentagon.capabilities.experiments import preparation
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError, digest
-from agentagon.experiments import preparation
-from agentagon.operations import findings
+from agentagon.domain.issues import list_issues
 from agentagon.storage.config import Config
-from agentagon.storage.issues import list_issues
+from agentagon.workflows.audit.operations import findings
 
 
 def test_cli_handoff_retains_selected_evidence_and_requires_expectation_review(

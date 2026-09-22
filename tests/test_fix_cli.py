@@ -6,8 +6,8 @@ import support.delivery as delivery_fixtures
 from click.testing import CliRunner
 from support.experiments import git
 
-from agentagon.cli.main import main
-from agentagon.experiments import delivery, engine
+from agentagon.capabilities.experiments import delivery, engine
+from agentagon.cli.internal import main
 from agentagon.storage.config import Config
 
 
@@ -54,7 +54,6 @@ def test_setup_saves_named_profile_outside_checkout_and_project_override(workspa
         ["setup", "--profile", "local"],
         ["status", "--candidate", "candidate_any"],
         ["status", "--audit", "audit_any", "--run", "run_any"],
-        ["dashboard", "audit_any", "--run", "run_any"],
         [
             "audit",
             "issues",

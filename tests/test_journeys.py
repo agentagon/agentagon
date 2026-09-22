@@ -7,9 +7,9 @@ import pytest
 from click.testing import CliRunner
 from test_scoring import definition
 
-from agentagon.cli.main import main
+from agentagon.capabilities.experiments import journeys
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError
-from agentagon.experiments import journeys
 from agentagon.storage.workspace import Workspace
 
 
@@ -66,8 +66,8 @@ def test_eval_creation_gate_and_first_baseline_share_the_overall_budget(applicat
     from support.evaluation import draft, review_for
     from test_baselines import complete
 
-    from agentagon.experiments import baselines, preparation
-    from agentagon.experiments.budget import BudgetLedger
+    from agentagon.capabilities.experiments import baselines, preparation
+    from agentagon.capabilities.experiments.budget import BudgetLedger
 
     definition = intent_definition()
     definition["goal"] = specification["goal"]
@@ -87,7 +87,7 @@ def test_eval_creation_gate_and_first_baseline_share_the_overall_budget(applicat
     waiting = baselines.advance(application, initial["baseline_id"])
     from support.experiments import passing_review
 
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     bridge = HostBridge(application, waiting["budget_id"])
     request = next(r for r in bridge.pending() if r["role"] == "review")

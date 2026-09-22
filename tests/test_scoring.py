@@ -4,8 +4,8 @@ import copy
 
 import pytest
 
+from agentagon.capabilities.experiments import scoring
 from agentagon.core.records import AuditError
-from agentagon.experiments import scoring
 
 
 def definition():
@@ -81,8 +81,8 @@ def test_custom_function_is_a_frozen_runner_metric_and_not_executed_by_host():
 def test_selection_rejects_tampered_cached_trial_score(application, specification):
     from support.experiments import baseline, propose, verify
 
-    from agentagon.experiments import engine
-    from agentagon.experiments.store import load_run, save_run
+    from agentagon.capabilities.experiments import engine
+    from agentagon.capabilities.experiments.store import load_run, save_run
 
     specification["scoring"] = definition()
     original = baseline(application, specification)
@@ -101,8 +101,8 @@ def test_late_execution_retains_evidence_but_cannot_establish_score(
     import time
     from datetime import datetime
 
-    from agentagon.experiments import engine, runners
-    from agentagon.experiments.budget import BudgetLedger
+    from agentagon.capabilities.experiments import engine, runners
+    from agentagon.capabilities.experiments.budget import BudgetLedger
 
     budget_id = "run_" + "d" * 24
     ledger = BudgetLedger(application, budget_id)
@@ -113,7 +113,9 @@ def test_late_execution_retains_evidence_but_cannot_establish_score(
 
     def delayed_collection(*args, **kwargs):
         result = execute(*args, **kwargs)
-        monkeypatch.setattr("agentagon.experiments.budget.time.time", lambda: clock() + 101)
+        monkeypatch.setattr(
+            "agentagon.capabilities.experiments.budget.time.time", lambda: clock() + 101
+        )
         return result
 
     monkeypatch.setattr(runners, "execute", delayed_collection)

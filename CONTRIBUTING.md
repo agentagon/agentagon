@@ -10,7 +10,7 @@ Participation follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report suspecte
 
 Use Python 3.12+, Git and Node.js 22 on macOS or Linux. Node runs JavaScript syntax checks and event-helper tests; it is not required for the local example below. You need network access to install dependencies.
 
-Clone the repository as shown in the [README](README.md#installation), or clone your fork if you will submit changes without repository write access. From the repository root:
+Clone the repository as shown in the [README](README.md#install-and-start), or clone your fork if you will submit changes without repository write access. From the repository root:
 
 ```sh
 python3 -m venv .venv
@@ -35,11 +35,11 @@ python -m pytest tests/test_config.py -q
 | Location | Contents |
 |---|---|
 | `src/agentagon/cli/` | Click commands and JSON output |
-| `src/agentagon/storage/`, `src/agentagon/core/`, `src/agentagon/telemetry/` | Saved state, record validation and trace processing |
-| `src/agentagon/experiments/` | Evaluation preparation, candidate execution and delivery |
-| `src/agentagon/webapp/` | Multi-project application service, managed agent jobs and provider imports |
-| `src/agentagon/dashboard.py`, `src/agentagon/dashboard_assets/` | Local dashboard server and browser assets |
-| `skills/`, `contracts/v1/`, `signals/` | Host workflows, JSON contracts and audit criteria |
+| `src/agentagon/storage/`, `src/agentagon/core/`, `src/agentagon/capabilities/traces/` | Saved state, record validation and trace processing |
+| `src/agentagon/capabilities/experiments/` | Evaluation preparation, candidate execution and delivery |
+| `src/agentagon/workflows/`, `src/agentagon/brain/` | Shared runtime, built-in workflows and managed sessions |
+| `src/agentagon/dashboard/`, `frontend/` | Local dashboard server and browser assets |
+| `src/agentagon/workflows/`, `contracts/v1/`, `signals/` | Host workflows, JSON contracts and audit criteria |
 | `tests/`, `examples/`, `docs/` | Behavioral checks, runnable examples and documentation |
 
 Use `AGENTAGON_CONFIG` to point manual experiments at a separate settings file; `--workspace PATH` selects a separate application directory. The test fixtures isolate their settings and create temporary application repositories. For dashboard work, follow the [example guide](examples/local-audit/README.md) and run the [browser checks](docs/contributing/README.md#browser-checks).
@@ -49,12 +49,11 @@ Use `AGENTAGON_CONFIG` to point manual experiments at a separate settings file; 
 These commands match the checks in [.github/workflows/tests.yml](.github/workflows/tests.yml):
 
 ```sh
-python -m ruff check src tests skills/eval/helpers scripts examples
-python -m ruff format --check src tests skills/eval/helpers scripts examples
-for script in src/agentagon/dashboard_assets/*.js skills/eval/helpers/*.cjs; do
+python -m ruff check src tests scripts examples
+python -m ruff format --check src tests scripts examples
+for script in src/agentagon/dashboard/assets/*.js src/agentagon/workflows/evaluate/helpers/*.cjs; do
   node --check "$script"
 done
-sh -n scripts/install.sh
 python -m pytest -q
 python -m build
 ```

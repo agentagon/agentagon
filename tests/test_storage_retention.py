@@ -9,14 +9,12 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from support.dashboard import request as http_request
-from support.dashboard import running
 from support.experiments import baseline, git, passing_review, propose
 from support.runners import FakeRemote, command, request
 
-from agentagon.cli.main import main
+from agentagon.capabilities.experiments import engine, evidence, inspection, runners, store, worker
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError
-from agentagon.experiments import engine, evidence, inspection, runners, store, worker
 
 
 def artifact_request():
@@ -216,15 +214,18 @@ def test_dashboard_downloads_retained_binary_artifacts(application, specificatio
     started = baseline(application, specification)
     candidate = started["candidate"]
     trial = candidate["trials"][0]
-    prefix = f"/api/runs/{started['run_id']}/candidates/{candidate['candidate_id']}"
-    url = f"{prefix}/trials/{trial['trial_id']}/artifacts/0"
+    from agentagon.capabilities.experiments import inspection
+
     retained = application.read_artifact(trial["artifact"])
     entry = retained["evidence"]["artifacts"][0]
-    with running(application) as server:
-        status, _, body = http_request(server, prefix)
-        assert status == 200 and b"content_path" not in body and b"content_base64" not in body
-        status, _, content = http_request(server, url)
-        assert status == 200 and content == b"payload" * 1000
+    detail = inspection.candidate(application, started["run_id"], candidate["candidate_id"])
+    assert "content_path" not in json.dumps(detail) and "content_base64" not in json.dumps(detail)
+    assert (
+        inspection.artifact(
+            application, started["run_id"], candidate["candidate_id"], trial["trial_id"], 0
+        )
+        == b"payload" * 1000
+    )
     binary = application.root / entry["content_path"]
     binary.write_bytes(b"tampered")
     with pytest.raises(AuditError, match="checksum"):

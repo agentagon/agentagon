@@ -1,3 +1,4 @@
+<!-- Engine commands below are private to managed workflow sessions. -->
 # Fix configuration and controls
 
 Describe the change you want to your coding agent. It prepares the configuration and runs the commands. For your first comparison, follow [Measure candidate fixes](../fix.md).
@@ -8,16 +9,16 @@ The prompts below are examples. Replace IDs, paths, metrics, and limits to fit y
 
 | Task | In Codex | In Claude Code |
 |---|---|---|
-| Configure execution or saved defaults | Select **ag:setup**, then send the prompt. | Start the prompt with `/ag:setup`. |
-| Define, run, or steer a comparison | Select **ag:fix**, then send the prompt. | Start the prompt with `/ag:fix`. |
-| Inspect results or use visual controls | Select **ag:dashboard**, then send the prompt. | Start the prompt with `/ag:dashboard`. |
-| Prepare a chosen candidate for delivery | Select **ag:fix**, then send the prompt. | Start the prompt with `/ag:fix`. |
+| Configure execution or saved defaults | Select **Settings**, then send the prompt. | Start the prompt with `Settings`. |
+| Define, run, or steer a comparison | Select **Optimize**, then send the prompt. | Start the prompt with `Optimize`. |
+| Inspect results or use visual controls | Select **Dashboard**, then send the prompt. | Start the prompt with `Dashboard`. |
+| Prepare a chosen candidate for delivery | Select **Optimize**, then send the prompt. | Start the prompt with `Optimize`. |
 
 Use the dashboard to compare results and operate run controls. Expand the technical details only when you need the exact CLI or file format.
 
 ## Configure execution once
 
-Use **ag:setup** to save where evaluations run and how much work they may perform. Reuse that profile for later runs.
+Use **Settings** to save where evaluations run and how much work they may perform. Reuse that profile for later runs.
 
 ```text
 Create a project execution profile named local. Run on this machine with
@@ -30,11 +31,11 @@ For remote execution, name your SSH host or E2B template and the inputs it may r
 
 ??? details "Profile fields and setup commands"
 
-    Start in a clean application Git checkout with an existing commit. Initialize ignored local state with `agentagon --workspace CHECKOUT init` if needed. Keep run specifications, private data and review responses in `.agentagon/`; do not commit them merely to satisfy the clean-checkout requirement. Existing unrelated edits must be handled by their owner before starting a run.
+    Start in a clean application Git checkout with an existing commit. Initialize ignored local state with `agentagon _internal --workspace CHECKOUT init` if needed. Keep run specifications, private data and review responses in `.agentagon/`; do not commit them merely to satisfy the clean-checkout requirement. Existing unrelated edits must be handled by their owner before starting a run.
 
-    If Git or the initial commit is missing, measured `ag:eval` and `ag:fix` execution stops, explain what is missing, and ask you to set it up or approve setup by the agent. They do not fall back to an untracked manual fix. Authorized setup reviews the files and ignore rules, excludes private state and credentials, and creates a local application baseline before resuming. It does not create a remote or publish code. `agentagon init` initializes Agentagon state, not a Git repository.
+    If Git or the initial commit is missing, measured `Prepare evaluation` and `Optimize` execution stops, explain what is missing, and ask you to set it up or approve setup by the agent. They do not fall back to an untracked manual fix. Authorized setup reviews the files and ignore rules, excludes private state and credentials, and creates a local application baseline before resuming. It does not create a remote or publish code. `agentagon _internal init` initializes Agentagon state, not a Git repository.
 
-    Choose a named execution profile through `ag:setup`. The first use requires explicit limits for candidates, trials, elapsed time, candidate/trial concurrency and individual trial timeout. Reuse the saved profile for later runs. This example illustrates the shape; choose limits appropriate to the authorized work before saving it:
+    Choose a named execution profile through `Settings`. The first use requires explicit limits for candidates, trials, elapsed time, candidate/trial concurrency and individual trial timeout. Reuse the saved profile for later runs. This example illustrates the shape; choose limits appropriate to the authorized work before saving it:
 
     ```json
     {
@@ -54,8 +55,8 @@ For remote execution, name your SSH host or E2B template and the inputs it may r
     ```
 
     ```sh
-    agentagon --workspace CHECKOUT setup --scope project --profile local --profile-file PROFILE_JSON
-    agentagon --workspace CHECKOUT setup
+    agentagon _internal --workspace CHECKOUT setup --scope project --profile local --profile-file PROFILE_JSON
+    agentagon _internal --workspace CHECKOUT setup
     ```
 
     Use `--scope user` for a reusable default across checkouts. A project profile replaces the complete same-named user profile. Normal settings still use `--set`/`--unset`; those options cannot be combined with profile input. Profiles and credentials remain in the existing user-local config file. The `env` mapping stores environment-variable names, never their secret values.
@@ -74,7 +75,7 @@ For remote execution, name your SSH host or E2B template and the inputs it may r
 
 ## Define the benchmark and hard constraints
 
-Use a [prepared evaluation](../eval.md) when you have one. Otherwise, describe the metrics, allowed edits, and required behavior to **ag:fix** so it can prepare the specification.
+Use a [prepared evaluation](../eval.md) when you have one. Otherwise, describe the metrics, allowed edits, and required behavior to **Optimize** so it can prepare the specification.
 
 ```text
 Reduce response latency while preserving answer quality. Only edit app.py.
@@ -127,13 +128,13 @@ Choose thresholds supported by your application's requirements. Multiple candida
 
     Three repetitions are the default. A saved profile can override `repetitions`; an explicit specification takes precedence. Agentagon freezes that choice and the seeds before execution, then reports the median and observed range.
 
-    `evaluation_paths` protect the benchmark, controls and test harness from candidate edits. Use identical `overlays` on baseline and candidates when adding a new regression check. Each overlay declares its local file `source`, execution `path`, and whether it should be delivered on the selected branch (`deliver`, default true). `inputs` similarly declare file sources and execution paths for frozen data. Only declared private inputs should be transferred remotely. See the [complete input contract](../../skills/fix/references/contract.md).
+    `evaluation_paths` protect the benchmark, controls and test harness from candidate edits. Use identical `overlays` on baseline and candidates when adding a new regression check. Each overlay declares its local file `source`, execution `path`, and whether it should be delivered on the selected branch (`deliver`, default true). `inputs` similarly declare file sources and execution paths for frozen data. Only declared private inputs should be transferred remotely. See the [complete input contract](../../src/agentagon/workflows/optimize/references/contract.md).
 
     Constraints use `absolute`, `baseline_delta` or `baseline_ratio` references. Baseline-relative constraints stay anchored to the original baseline throughout the experiment tree. A successful baseline process can still have improvable metrics. Issue-specific checks can declare `baseline_expected: "fail"` when the intended defect should reproduce; a setup failure is not proof of reproduction. Changing the evaluation, protected inputs or objective definitions requires a new run.
 
 ## Choose how to explore
 
-Tell **ag:fix** which measured results to explore next, or change the search policy through dashboard controls. This changes future exploration while preserving the benchmark and prior results.
+Tell **Optimize** which measured results to explore next, or change the search policy through dashboard controls. This changes future exploration while preserving the benchmark and prior results.
 
 ```text
 For run RUN_ID, cycle through the three best eligible candidates for
@@ -141,7 +142,7 @@ latency_ms when proposing new improvements. Keep the frozen benchmark,
 hard constraints, and existing execution limits.
 ```
 
-To make this a default for future runs, ask **ag:setup** to save the policy in your profile. Changing a saved profile does not change an existing run.
+To make this a default for future runs, ask **Settings** to save the policy in your profile. Changing a saved profile does not change an existing run.
 
 ??? details "Search strategies and policy fields"
 
@@ -170,7 +171,7 @@ To make this a default for future runs, ask **ag:setup** to save the policy in y
 
 ## Explore, review and select
 
-Use **ag:fix** to run the comparison and **ag:dashboard** to inspect its progress, measurements, and candidate reviews.
+Use **Optimize** to run the comparison and **Dashboard** to inspect its progress, measurements, and candidate reviews.
 
 ```text
 Continue run RUN_ID within its saved limits. Measure and independently
@@ -202,26 +203,26 @@ Completed measurements and unsuccessful attempts remain in history. Selection pr
     Machine checks and independent host review are separate requirements. After trials, use the returned review template. A reviewer other than the author inspects the sealed diff, frozen checks, issue evidence and engine results; the review must reference their exact identities. Continue with:
 
     ```sh
-    agentagon --workspace CHECKOUT fix run RUN_ID CANDIDATE_ID --review-file REVIEW_JSON
-    agentagon --workspace CHECKOUT status --run RUN_ID --candidate CANDIDATE_ID
-    agentagon --workspace CHECKOUT dashboard --run RUN_ID --no-open
+    agentagon _internal --workspace CHECKOUT fix run RUN_ID CANDIDATE_ID --review-file REVIEW_JSON
+    agentagon _internal --workspace CHECKOUT status --run RUN_ID --candidate CANDIDATE_ID
+    agentagon --workspace CHECKOUT
     ```
 
     This continuation reuses valid completed trials. Host review cannot replace metrics, rewrite exit codes or directly promote a candidate. Missing measurements, failed constraints, source changes, rejected reviews and incomplete remote evidence do not enter the verified frontier.
 
-    `ag:fix` continues the proposal/edit/run/review loop within the saved limits. `max_candidates` counts proposals after the baseline; `max_trials` includes baseline executions, cancelled attempts and replacements. Three completed rounds without new nondominated metric vectors stop the loop by default. Equal-valued patches remain on the frontier but do not reset this counter.
+    `Optimize` continues the proposal/edit/run/review loop within the saved limits. `max_candidates` counts proposals after the baseline; `max_trials` includes baseline executions, cancelled attempts and replacements. Three completed rounds without new nondominated metric vectors stop the loop by default. Equal-valued patches remain on the frontier but do not reset this counter.
 
     A stopped run requires `fix run RUN_ID [CANDIDATE_ID] --continue`; add `--limits-file LIMITS_JSON` when extending exhausted limits. Consumed counts and elapsed time remain recorded. Confirmed cancellation permits a new attempt for the unfinished repetition, while completed repetitions are reused. Connection loss instead reconciles the same attempt. Unknown outcomes remain inconclusive. Result collection and cleanup use recorded ownership; do not manually delete worktrees, locks or trial files to bypass recovery.
 
-    Run transitions save canonical state. `agentagon fix report RUN_ID` exports the current state as Markdown and JSON and returns their paths; these snapshots are replaced only on another explicit export. The dashboard and `status` read current state without creating reports. Reports retain unsuccessful, dominated and interrupted experiments as well as the verified frontier.
+    Run transitions save canonical state. `agentagon _internal fix report RUN_ID` exports the current state as Markdown and JSON and returns their paths; these snapshots are replaced only on another explicit export. The dashboard and `status` read current state without creating reports. Reports retain unsuccessful, dominated and interrupted experiments as well as the verified frontier.
 
     Finished candidate worktrees are released automatically after their source is sealed and their terminal state is saved. Retained Git references preserve the source for inspection, descendants and delivery. Trees with staged, unstaged, untracked or ignored files that are not captured in the sealed snapshot remain in place, as do active candidates and candidates awaiting review.
 
-    Select only after the user chooses a candidate. The resulting branch reproduces its verified source snapshot. Selection does not apply changes to the original checkout, merge, open a PR, deploy or resolve an audit issue. A candidate may improve the objective without fixing a particular issue. Separately authorized verified-resolution updates must cite the engine run and candidate and satisfy the current-source checks described in [issue history](../../skills/audit/references/history.md).
+    Select only after the user chooses a candidate. The resulting branch reproduces its verified source snapshot. Selection does not apply changes to the original checkout, merge, open a PR, deploy or resolve an audit issue. A candidate may improve the objective without fixing a particular issue. Separately authorized verified-resolution updates must cite the engine run and candidate and satisfy the current-source checks described in [issue history](../../src/agentagon/workflows/audit/references/history.md).
 
 ## Steer a run without losing queued work
 
-Give **ag:fix** a specific direction, or use the dashboard controls to stop, continue, select, or change the search policy.
+Give **Optimize** a specific direction, or use the dashboard controls to stop, continue, select, or change the search policy.
 
 ```text
 For run RUN_ID, explore a candidate from CANDIDATE_ID that avoids repeated
@@ -246,8 +247,8 @@ The coding agent handles control files and retries. Inspect pending actions and 
     ```
 
     ```sh
-    agentagon --workspace CHECKOUT status --run RUN_ID
-    agentagon --workspace CHECKOUT fix steer RUN_ID --control-file CONTROL_JSON
+    agentagon _internal --workspace CHECKOUT status --run RUN_ID
+    agentagon _internal --workspace CHECKOUT fix steer RUN_ID --control-file CONTROL_JSON
     ```
 
     Retry an uncertain request with the identical file and operation ID. A reused ID with different contents is rejected. For a new action, refresh the revision and use a new ID. A revision conflict means the run changed; inspect it before resubmitting. The [control schema](../../contracts/v1/fix-control.json) defines supported fields.
@@ -271,7 +272,7 @@ The coding agent handles control files and retries. Inspect pending actions and 
 
 ## Learn from completed experiments
 
-Ask **ag:setup** to enable bounded experiment scans in the profile before starting a run. Your coding agent can then retain lessons from completed attempts and use them to guide later candidates.
+Ask **Settings** to enable bounded experiment scans in the profile before starting a run. Your coding agent can then retain lessons from completed attempts and use them to guide later candidates.
 
 ```text
 For future runs using the local profile, enable up to 3 experiment scans,
@@ -304,36 +305,9 @@ Scans are optional. Updating the profile does not expand an existing run's scan 
 
 ## Dashboard controls and delivery
 
-Use **ag:dashboard** for visual inspection and controls:
+Inspect the shared task in the React dashboard. Answer its pending question, cancel it, or resume interrupted work explicitly. MCP exposes the same controls and task identity. The dashboard has no separate host lifecycle or control runtime.
 
-```text
-Open run RUN_ID in the dashboard with controls enabled so I can compare
-candidates and steer the run.
-```
-
-After choosing a candidate, use **ag:fix**:
-
-```text
-Prepare delivery for the selected candidate in run RUN_ID. Check for useful
-cleanup, verify any resulting changes, and prepare the patch, measurement
-summary, and draft PR description. Stop before publication.
-```
-
-Tell the coding agent when you are ready to publish. See [the delivery guide](../delivery.md) for the full workflow.
-
-??? details "Dashboard commands and delivery mechanics"
-
-    The dashboard is read-only by default. Explicitly enable controls for a session with:
-
-    ```sh
-    agentagon --workspace CHECKOUT dashboard --run RUN_ID --controls --no-open
-    ```
-
-    Open the exact localhost URL from startup. The controls use the same revisions and operations as the CLI. They can change search policy, queue proposals/directives/continuation, stop, select, invalidate/exhaust candidates and cancel queued work. The page shows pending work and outcomes; it never calls a model service or acknowledges host work. Scans and host acknowledgment remain in the coding-agent workflow. Session credentials are temporary and are not stored in run records. See [ag:dashboard](../../skills/dashboard/SKILL.md).
-
-    After selection, `ag:fix` inspects the application diff for useful cleanup. `fix cleanup RUN_ID --operation-id ID --author AUTHOR` reserves a separate candidate from that winner. It uses the same frozen benchmark and remaining optimization budget. Execute it with `fix run`, obtain a fresh independent review, then compare with `fix cleanup RUN_ID --finish CLEANUP_ID`. Automatic substitution requires frontier admission and no worse results on every objective, including declared task objectives. Failed or regressed cleanup preserves the original selection and evidence; changed tradeoffs require a user decision. Cleanup cannot edit frozen evaluation files.
-
-    `agentagon --workspace CHECKOUT fix ship RUN_ID` prepares a local delivery summary and draft PR body, including any verified cleanup comparison. When publication to the chosen destination is authorized, repeat with `--publish` to push the exact selected branch and create a GitHub draft PR. Follow [ag:fix](../../skills/fix/references/delivery.md) for evidence checks, destination choices and interruption recovery. Shipping does not merge, deploy or resolve an audit issue.
+Prepare a selected candidate as a local reviewable branch and patch. Publication requires a separate explicit instruction and validated destination. Cleanup changes require fresh verification against the frozen evaluator; unsuccessful cleanup retains the original selection. See [delivery](../delivery.md).
 
 ## What verification means
 
@@ -346,11 +320,11 @@ Repeated trials and retained inputs help compare candidates, but external models
 Configure the current host before proposing candidates, then advance the same run after servicing its pending host requests:
 
 ```sh
-agentagon fix optimize RUN_ID --intent INTENT_ID --host ACTUAL_HOST --model ACTUAL_MODEL --engine omni --host-concurrency ACTUAL_CAPACITY --finalist-count 3 --background-file ACCEPTED_CONTEXT.txt
-agentagon fix optimize-status RUN_ID
-agentagon fix optimize RUN_ID
+agentagon _internal fix optimize RUN_ID --intent INTENT_ID --host ACTUAL_HOST --model ACTUAL_MODEL --engine omni --host-concurrency ACTUAL_CAPACITY --finalist-count 3 --background-file ACCEPTED_CONTEXT.txt
+agentagon _internal fix optimize-status RUN_ID
+agentagon _internal fix optimize RUN_ID
 ```
 
-Standalone advanced engines are `gepa`, `autoresearch` and `meta_harness`. Explicit Meta-Harness overrides use `--meta-harness-host` and `--meta-harness-model`; judge configuration stays separate. The host follows the [durable request/reply procedure](../../skills/fix/references/native-host.md). Proposals contain source changes; only bounded Agentagon execution and bound grading observations supply scores.
+Standalone advanced engines are `gepa`, `autoresearch` and `meta_harness`. Explicit Meta-Harness overrides use `--meta-harness-host` and `--meta-harness-model`; judge configuration stays separate. The host follows the [durable request/reply procedure](../../src/agentagon/workflows/optimize/references/native-host.md). Proposals contain source changes; only bounded Agentagon execution and bound grading observations supply scores.
 
 `--finalist-count` accepts one to ten and defaults to three, excluding the baseline. It reserves verification work independently from requested parallelism. `--background-file` is optional accepted evidence analysis, bounded to 128 KiB; configuration freezes its text and any completed approved Intelligence receipts for this run. A suite-bound run must bind the same finalist count before optimizer configuration.

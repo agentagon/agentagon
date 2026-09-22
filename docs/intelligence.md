@@ -8,9 +8,9 @@ Your coding agent prepares privacy-safe summaries and shows each proposed call. 
 
 ## Start with your coding agent
 
-After obtaining access, use **ag:setup** in Codex or `/ag:setup` in Claude Code. Supply the issued service origin and the name of the environment variable containing your key; keep the key itself outside chat.
+After obtaining access, use **Settings** in Codex or `Settings` in Claude Code. Supply the issued service origin and the name of the environment variable containing your key; keep the key itself outside chat.
 
-Once configured, **ag:audit** and **ag:fix** can consult Intelligence, including during their internal evaluation preparation stages. You do not need to prepare request files or run lookup commands yourself. Describe what you want investigated or improved in your normal request.
+Once configured, **Audit** and **Optimize** can consult Intelligence, including during their internal evaluation preparation stages. You do not need to prepare request files or run lookup commands yourself. Describe what you want investigated or improved in your normal request.
 
 ## Configure access
 
@@ -18,19 +18,19 @@ Request access through [hello@agentagon.ai](mailto:hello@agentagon.ai). In the w
 
 ??? details "Direct CLI configuration"
 
-    Request access through [hello@agentagon.ai](mailto:hello@agentagon.ai). The documented hosted origin is `https://brain.agentagon.ai`; configure the exact issued origin explicitly. Keep the issued key in an environment variable or credential store. Save its environment-variable name with `agentagon setup --scope user --set intelligence.api_key_env AGENTAGON_API_KEY` and the service origin with `--set intelligence.endpoint https://brain.agentagon.ai`. Project-scoped values can override user defaults in the same config file. There is no implicit service address. Do not paste secrets into coding-agent conversations or store them in `.agentagon/`.
+    Request access through [hello@agentagon.ai](mailto:hello@agentagon.ai). The documented hosted origin is `https://brain.agentagon.ai`; configure the exact issued origin explicitly. Keep the issued key in an environment variable or credential store. Save its environment-variable name with `agentagon _internal setup --scope user --set intelligence.api_key_env AGENTAGON_API_KEY` and the service origin with `--set intelligence.endpoint https://brain.agentagon.ai`. Project-scoped values can override user defaults in the same config file. There is no implicit service address. Do not paste secrets into coding-agent conversations or store them in `.agentagon/`.
 
-    `agentagon status` reports whether the key and endpoint are configured without revealing their values. Missing configuration leaves audits, evaluation preparation and fixes available locally. `agentagon setup --scope user --set intelligence.access_presented true` records that optional access was discussed.
+    `agentagon _internal status` reports whether the key and endpoint are configured without revealing their values. Missing configuration leaves audits, evaluation preparation and fixes available locally. `agentagon _internal setup --scope user --set intelligence.access_presented true` records that optional access was discussed.
 
 ## Choose approval mode
 
 The default `ask` mode shows the purpose, destination, workflow and exact redacted JSON payload, then waits for your approval of that request. Declining skips Intelligence and continues the journey locally. A configured key or the coding host's full-access permissions never imply Intelligence consent.
 
-Choose **full access** explicitly through **ag:setup** to allow Intelligence calls without individual approval. Calls and their exact redacted payloads remain visible. Privacy restrictions and workflow limits still apply. You can switch back to `ask` at any time; project settings override user defaults.
+Choose **full access** explicitly through **Settings** to allow Intelligence calls without individual approval. Calls and their exact redacted payloads remain visible. Privacy restrictions and workflow limits still apply. You can switch back to `ask` at any time; project settings override user defaults.
 
 ```sh
-agentagon setup --scope user --set intelligence.mode full_access
-agentagon --workspace CHECKOUT setup --scope project --set intelligence.mode ask
+agentagon _internal setup --scope user --set intelligence.mode full_access
+agentagon _internal --workspace CHECKOUT setup --scope project --set intelligence.mode ask
 ```
 
 Existing installations default to `ask` unless this setting is explicitly saved. Credentials are never included in previews.
@@ -48,16 +48,16 @@ Guidance is advisory. It cannot change your permissions, benchmark, constraints,
     Exclude raw code/traces, personal information, customer identifiers, private URLs, local paths, credentials and protected evaluation material from both files. For evaluation preparation, protected material includes plans, fixtures, cases, ground truth, private inputs and exact acceptance details. For a fix, exclude the frozen evaluator and candidate-specific private material. Generalize proprietary details. Pattern redaction is additional protection and does not guarantee complete removal of sensitive content.
 
     ```sh
-    agentagon --workspace CHECKOUT audit lookup AUDIT_ID --context-file CONTEXT_FILE --focus-file FOCUS_FILE --phase initial --limit 5
-    agentagon --workspace CHECKOUT eval lookup EVALUATION_ID --context-file CONTEXT_FILE --goal-file GOAL_FILE --phase initial --limit 5
-    agentagon --workspace CHECKOUT fix lookup RUN_ID --context-file CONTEXT_FILE --focus-file FOCUS_FILE --phase initial --limit 5
+    agentagon _internal --workspace CHECKOUT audit lookup AUDIT_ID --context-file CONTEXT_FILE --focus-file FOCUS_FILE --phase initial --limit 5
+    agentagon _internal --workspace CHECKOUT eval lookup EVALUATION_ID --context-file CONTEXT_FILE --goal-file GOAL_FILE --phase initial --limit 5
+    agentagon _internal --workspace CHECKOUT fix lookup RUN_ID --context-file CONTEXT_FILE --focus-file FOCUS_FILE --phase initial --limit 5
     ```
 
     In `ask` mode these commands first return `status: "approval_required"`, an opaque `approval_id`, and the exact redacted request preview without making a network call. The coding host shows that preview and obtains explicit user consent. Repeat the same command and files with `--approve APPROVAL_ID` after consent, or `--decline APPROVAL_ID` to skip it. Do not infer consent from starting a journey. Both options are available on all three commands and cannot be combined.
 
     Approval is single use and bound to the owner state, destination, credential reference, phase, payload and refresh choice. Changes require a new preview and approval. A failed or interrupted request consumes its approval, so retries require fresh approval. An approved dispatch sends the saved redacted payload and emits its preview to stderr before sending; the final result remains JSON on stdout. Full access emits the same visible preview while skipping the approval prompt. Successful local cache reads are marked `cached: true` and send nothing, so they need no approval. A follow-up or `--refresh` sends a new request and requires new approval in `ask` mode.
 
-    The ID selects the local owner and the client selects the matching service path: `/v1/audit`, `/v1/eval` or `/v1/fix`. The endpoints share a response contract; audit accepts `context` and/or `focus`, evaluation accepts `context` and/or `goal`, and fix requires `focus` with optional `context`. The fix coordinator owns lookups for a run; do not invoke one for each candidate or reviewer. Each workflow proposes at most two logical lookups for its owner: an initial request and, when useful, one distinct `--phase follow_up` request after later evidence or measurements. Identical completed requests for the same owner, endpoint and phase reuse receipts; changing a supplied field creates a distinct request. `--refresh` explicitly repeats a completed request. Requests are not automatically retried. See the [shared skill reference](../skills/audit/references/intelligence.md) for preparation and workflow rules.
+    The ID selects the local owner and the client selects the matching service path: `/v1/audit`, `/v1/eval` or `/v1/fix`. The endpoints share a response contract; audit accepts `context` and/or `focus`, evaluation accepts `context` and/or `goal`, and fix requires `focus` with optional `context`. The fix coordinator owns lookups for a run; do not invoke one for each candidate or reviewer. Each workflow proposes at most two logical lookups for its owner: an initial request and, when useful, one distinct `--phase follow_up` request after later evidence or measurements. Identical completed requests for the same owner, endpoint and phase reuse receipts; changing a supplied field creates a distinct request. `--refresh` explicitly repeats a completed request. Requests are not automatically retried. See the [shared skill reference](../src/agentagon/workflows/audit/references/intelligence.md) for preparation and workflow rules.
 
 ## Client contract
 
@@ -89,9 +89,9 @@ These implementation details are handled by the coding agent and CLI.
 
     Receipts retain redacted request fields, responses, suggestion IDs, versions, timestamps and status in local `.agentagon/` artifacts. Each receipt is attached to its audit, evaluation preparation or fix run; completed requests are cached per owner, endpoint and phase. Reports identify consulted versions and suggestions where that workflow exposes them. Guidance requires local evidence before it can support a finding, cannot define evaluation ground truth by itself, and cannot override permissions, fixed rubrics, frozen evaluators, hard constraints or execution budgets.
 
-    Use `agentagon eval status EVALUATION_ID` or `agentagon status --run RUN_ID` to inspect the owner-linked receipt index (`intelligence` on evaluation state and `intelligence_receipts` on fix status). Audit reports retain their guidance summary; fix reports and the dashboard keep guidance payloads private. Do not hand-edit receipts or canonical workflow state.
+    Use `agentagon _internal eval status EVALUATION_ID` or `agentagon _internal status --run RUN_ID` to inspect the owner-linked receipt index (`intelligence` on evaluation state and `intelligence_receipts` on fix status). Audit reports retain their guidance summary; fix reports and the dashboard keep guidance payloads private. Do not hand-edit receipts or canonical workflow state.
 
-    [Product telemetry](telemetry.md) is enabled by default and can be disabled. It records lookup outcomes and returned knowledge IDs without context, focus, goal or local references for all three workflows. Cached rereads do not repeat returned-entry events. The `knowledge_investigated` and `knowledge_cited` stages remain audit-only because they refer to local audit evidence and saved findings.
+    [Product telemetry](telemetry.md) is disabled by default and can be explicitly enabled. When enabled, it records lookup outcomes and returned knowledge IDs without context, focus, goal or local references for all three workflows. Cached rereads do not repeat returned-entry events. The `knowledge_investigated` and `knowledge_cited` stages remain audit-only because they refer to local audit evidence and saved findings.
 
 ## Data processing
 

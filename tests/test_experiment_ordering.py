@@ -3,8 +3,8 @@ from itertools import permutations
 
 import pytest
 
+from agentagon.capabilities.experiments import engine, evaluation
 from agentagon.core.records import now
-from agentagon.experiments import engine, evaluation
 
 
 def specification():

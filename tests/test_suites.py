@@ -11,8 +11,7 @@ from test_baselines import complete
 from test_journeys import intent_definition
 from test_scoring import definition
 
-from agentagon.core.records import AuditError, digest
-from agentagon.experiments import (
+from agentagon.capabilities.experiments import (
     baselines,
     delivery,
     engine,
@@ -21,9 +20,10 @@ from agentagon.experiments import (
     preparation,
     suites,
 )
-from agentagon.experiments.budget import BudgetLedger
-from agentagon.experiments.host_bridge import HostBridge, HostWorkPending
-from agentagon.experiments.store import load_run, save_run
+from agentagon.capabilities.experiments.budget import BudgetLedger
+from agentagon.capabilities.experiments.host_bridge import HostBridge, HostWorkPending
+from agentagon.capabilities.experiments.store import load_run, save_run
+from agentagon.core.records import AuditError, digest
 
 
 def _suite(application, specification, timeout=None, finalist_count=1, target=80):
@@ -40,8 +40,8 @@ def _suite(application, specification, timeout=None, finalist_count=1, target=80
         baseline = complete(application, baselines.start(application, frozen["evaluation_id"]))
         members.append(
             {
-                "focus_id": "focus_" + ("a" if primary == "quality" else "b") * 24,
-                "focus_version": 2,
+                "goal_id": "goal_" + ("a" if primary == "quality" else "b") * 24,
+                "goal_version": 2,
                 "name": primary.title(),
                 "evaluation_id": frozen["evaluation_id"],
                 "evaluator_digest": preparation.evaluator_identity(
@@ -64,7 +64,7 @@ def _suite(application, specification, timeout=None, finalist_count=1, target=80
     manifest = {
         "version": 1,
         "agent_id": "agent_" + "a" * 24,
-        "focus_id": members[-1]["focus_id"],
+        "goal_id": members[-1]["goal_id"],
         "members": members,
     }
     manifest.update(digest=digest(manifest), missing=[])
@@ -306,7 +306,7 @@ def test_three_finalists_keep_passing_alternatives_and_recheck_selected_suite(
     assert len(result["selection"]["alternatives"]) == 1
     assert load_run(application, run_id)["candidates"][winner]["metrics"]["latency"] == 80
     failed = next(cid for cid, f in state["finalists"].items() if not f["result"]["passed"])
-    from agentagon.reporting import build_fix_report
+    from agentagon.capabilities.reporting import build_fix_report
 
     displayed = build_fix_report(application, load_run(application, run_id))
     assert {c["id"] for c in displayed["comparisons"]["alternatives"]} == {winner, alternative}

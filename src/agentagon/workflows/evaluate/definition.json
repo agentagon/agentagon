@@ -1,0 +1,23 @@
+{
+  "id": "prepare-evaluation",
+  "version": 1,
+  "name": "Prepare an evaluation",
+  "purpose": "Create or reuse a reviewed evaluator and dataset for a goal.",
+  "requires_goal": true,
+  "inputs": [
+    "Accepted measurement plan",
+    "Dataset or examples"
+  ],
+  "outputs": [
+    "Frozen evaluator"
+  ],
+  "references": [
+    "workflows/shared/adapt-evaluation.md",
+    "workflows/shared/review-evaluation.md",
+    "workflows/evaluate/references/authoring.md",
+    "workflows/evaluate/references/preparation.md",
+    "workflows/optimize/references/evaluation.md",
+    "workflows/optimize/references/native-host.md"
+  ],
+  "workflow": "eval"
+}

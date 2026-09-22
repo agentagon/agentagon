@@ -6,16 +6,15 @@ import os
 import re
 import sqlite3
 import stat
-import uuid
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-from agentagon.core.records import AuditError, encoded, now
+from agentagon.core.records import AuditError, encoded, identifier, now
 
 _PROJECT = re.compile(r"project_[a-f0-9]{24}")
 _NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,159}")
 _REFERENCE = re.compile(r"(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:session|keyring):[a-f0-9]{32})")
-_VERSION = 2
+_VERSION = 4
 _AGENTS = {"default_agent": "codex", "models": {"codex": "", "claude": ""}, "concurrency": 1}
 _SCHEMA = (
     """CREATE TABLE projects (
@@ -82,7 +81,10 @@ class MetadataTransaction:
             self.connection.execute("UPDATE projects SET active = 1 WHERE id = ?", (project["id"],))
             return project
         project = {
-            "id": "project_" + uuid.uuid4().hex[:24],
+            # A checkout keeps the same identity when the local application
+            # database is recreated. The canonical path is already the
+            # registration authority and distinguishes Git worktrees.
+            "id": identifier("project", str(path)),
             "path": str(path),
             "name": Path(path).name,
             "created_at": now(),

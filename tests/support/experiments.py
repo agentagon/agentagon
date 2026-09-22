@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from agentagon.experiments import engine
+from agentagon.capabilities.experiments import engine
 from agentagon.storage.config import Config
 from agentagon.storage.workspace import Workspace
 

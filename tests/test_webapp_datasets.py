@@ -6,11 +6,12 @@ import uuid
 import pytest
 from click.testing import CliRunner
 
-from agentagon.cli.main import main
+from agentagon.capabilities.evaluation import datasets
+from agentagon.capabilities.traces import snapshots
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError, digest
-from agentagon.webapp import datasets, snapshots
-from agentagon.webapp.jobs import JobManager
-from agentagon.webapp.state import AppState
+from agentagon.storage.state import AppState
+from agentagon.workflows.runtime import TaskRuntime
 
 
 @pytest.fixture
@@ -80,6 +81,160 @@ def test_derive_preserves_structured_inputs_but_never_promotes_observed_answers(
     assert datasets.derive(workspace, project, source["id"], {}) == result
     assert result in snapshots.list_snapshots(workspace)
     assert snapshots.load(workspace, source["id"])["items"] == [root, child]
+
+
+def test_proposed_trace_case_requires_and_freezes_a_reviewed_expectation(registered):
+    _, project, workspace = registered
+    root = {
+        "span_id": "root",
+        "root_span_id": "root",
+        "span_parents": [],
+        "metrics": {"start": 100, "end": 101},
+        "metadata": {"session_id": "conversation-one", "api_key": "private-key"},
+        "input": {"question": "What is my status?", "authorization": "Bearer abcdefghijkl"},
+        "output": {"answer": "observed output", "token": "sk-abcdefghijklmnop"},
+    }
+    source = imported(workspace, project, [root], "traces")
+    proposal = {
+        "trace_id": "root",
+        "case_name": "Account status remains grounded",
+        "expected_behavior": "Return the current account status from available evidence.",
+        "reviewed": True,
+    }
+
+    result = datasets.propose_case(workspace, project, source["id"], proposal)
+    saved = snapshots.load(workspace, result["id"])
+    item = saved["items"][0]
+
+    assert result["missing_expectations"] == 0
+    assert result["next_action"] == "Attach this reviewed case to an evaluation"
+    assert saved["state"] == "draft"
+    assert item["expected"] == proposal["expected_behavior"]
+    assert item["expected_present"] is True
+    assert item["observed_output"] == {"answer": "observed output", "token": "[REDACTED]"}
+    assert item["input"]["authorization"] == "[REDACTED]"
+    assert item["metadata"]["api_key"] == "[REDACTED]"
+    assert item["source"] == {
+        "snapshot_id": source["id"],
+        "snapshot_digest": source["digest"],
+        "snapshot_version": 1,
+        "trace_id": "root",
+        "span_id": "root",
+        "provider": "braintrust",
+        "redaction": {
+            "applied": True,
+            "policy": "common credential keys and token patterns",
+            "redacted_value_count": 3,
+            "limitation": "This is not a general PII detector.",
+        },
+    }
+    assert saved["provenance"]["expectation_status"] == "reviewed"
+    assert saved["provenance"]["expectation_source"] == "user_supplied"
+    assert saved["provenance"]["observed_outputs_are_expectations"] is False
+    assert saved["provenance"]["source_snapshot_id"] == source["id"]
+    assert saved["provenance"]["source_digest"] == source["digest"]
+    assert datasets.propose_case(workspace, project, source["id"], proposal) == result
+    assert snapshots.load(workspace, source["id"])["items"] == [root]
+
+    revised = datasets.propose_case(
+        workspace,
+        project,
+        source["id"],
+        {**proposal, "expected_behavior": "Ask for clarification when status is unavailable."},
+    )
+    assert revised["id"] != result["id"]
+    assert (
+        snapshots.load(workspace, result["id"])["items"][0]["expected"]
+        == proposal["expected_behavior"]
+    )
+
+
+def test_proposed_trace_case_never_uses_observed_output_without_review(registered):
+    _, project, workspace = registered
+    source = imported(
+        workspace,
+        project,
+        [
+            {
+                "span_id": "root",
+                "root_span_id": "root",
+                "span_parents": [],
+                "metrics": {"start": 100, "end": 101},
+                "input": {"question": "task"},
+                "output": "observed answer",
+            }
+        ],
+        "traces",
+    )
+    before = list(snapshots.list_snapshots(workspace))
+
+    with pytest.raises(AuditError, match="review the expected behavior"):
+        datasets.propose_case(
+            workspace,
+            project,
+            source["id"],
+            {
+                "trace_id": "root",
+                "expected_behavior": "observed answer",
+                "reviewed": False,
+            },
+        )
+    with pytest.raises(AuditError, match="expected behavior"):
+        datasets.propose_case(
+            workspace,
+            project,
+            source["id"],
+            {"trace_id": "root", "expected_behavior": "", "reviewed": True},
+        )
+
+    assert snapshots.list_snapshots(workspace) == before
+
+
+def test_http_trace_case_operation_requires_session_and_returns_immutable_snapshot(registered):
+    from test_webapp import running
+
+    from agentagon.workflows.service import Application
+
+    state, project, workspace = registered
+    source = imported(
+        workspace,
+        project,
+        [
+            {
+                "span_id": "root",
+                "root_span_id": "root",
+                "span_parents": [],
+                "metrics": {"start": 100, "end": 101},
+                "input": {"question": "task"},
+                "output": "an observed answer",
+            }
+        ],
+        "traces",
+    )
+    app = Application(state.directory, execute=lambda *_: pytest.fail("must not start a host"))
+    path = f"/api/projects/{project}/traces/{source['id']}/evaluation-case"
+    payload = {
+        "trace_id": "root",
+        "case_name": "Reviewed production failure",
+        "expected_behavior": "Return a grounded answer or state that evidence is unavailable.",
+        "reviewed": True,
+    }
+
+    with running(app) as (client, _):
+        token = client.headers.pop("X-Agentagon-Token")
+        assert client.post(path, json=payload).status_code == 403
+        assert not any(item["kind"] == "dataset" for item in snapshots.list_snapshots(workspace))
+        client.headers["X-Agentagon-Token"] = token
+
+        response = client.post(path, json=payload)
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["name"] == payload["case_name"]
+        retained = client.get(f"/api/projects/{project}/results/dataset/{result['id']}").json()
+        assert retained["items"][0]["expected"] == payload["expected_behavior"]
+        assert retained["items"][0]["observed_output"] == "an observed answer"
+        assert retained["items"][0]["source"]["snapshot_digest"] == source["digest"]
+        assert client.post(path, json=payload).json()["id"] == result["id"]
 
 
 def test_split_deduplicates_and_merges_families_before_assigning_partitions(registered):
@@ -181,7 +336,7 @@ def test_final_partition_rejected_by_development_tools_and_other_project(registe
         main, ["--workspace", str(workspace.root), "dataset", "inspect", final]
     )
     assert cli.exit_code != 0 and "reserved" in cli.output
-    manager = JobManager(state, None, execute=lambda *_: pytest.fail("host should not run"))
+    manager = TaskRuntime(state, None, execute=lambda *_: pytest.fail("host should not run"))
     try:
         with pytest.raises(AuditError, match="final verification"):
             manager.submit(
@@ -219,8 +374,8 @@ def test_final_claim_requires_actual_suite_binding_and_reviewed_rule_then_one_de
 ):
     from test_baselines import frozen
 
-    from agentagon.experiments import engine, preparation, suites
-    from agentagon.experiments.store import load_run
+    from agentagon.capabilities.experiments import engine, preparation, suites
+    from agentagon.capabilities.experiments.store import load_run
 
     evaluation = frozen(application, specification)
     state = AppState(tmp_path / "app")
@@ -300,7 +455,7 @@ def test_final_claim_requires_actual_suite_binding_and_reviewed_rule_then_one_de
 def test_http_derivation_and_split_require_session_and_hide_reserved_payloads(registered):
     from test_webapp import running
 
-    from agentagon.webapp.service import Application
+    from agentagon.workflows.service import Application
 
     state, project, workspace = registered
     (workspace.root / "app.py").write_text("def agent(): return 'test'\n")

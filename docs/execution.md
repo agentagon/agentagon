@@ -18,7 +18,7 @@ A code-only audit inspects captured source without running the application. It n
 
 Local worktrees protect the original checkout's files; they are not a machine or network sandbox. Remote runners receive frozen execution inputs and return evidence. Only declared private inputs should be transferred.
 
-Use [Settings and profiles](settings.md#configure-execution-before-evaluations-or-fixes) for your first setup, or the [profile and runner reference](reference/fix.md#configure-execution-once) for exact fields, concurrency requirements, and limits.
+Use [Settings and profiles](settings.md) for your first setup, or the [profile and runner reference](reference/fix.md) for exact fields, concurrency requirements, and limits.
 
 ## A stable environment for comparison
 

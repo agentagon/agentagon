@@ -6,8 +6,8 @@ import pytest
 from support.delivery import creates, pushes
 from support.experiments import git, passing_review, verify
 
+from agentagon.capabilities.experiments import cleanup, delivery, engine, store
 from agentagon.core.records import AuditError
-from agentagon.experiments import cleanup, delivery, engine, store
 
 
 def candidate(selected, latency=80, quality=0.8):

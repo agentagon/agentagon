@@ -19,17 +19,16 @@
 | Task | Command |
 |---|---|
 | Development setup | `python3 -m venv .venv && . .venv/bin/activate && python -m pip install -e '.[dev]'` |
-| Focused test example | `python -m pytest tests/test_dashboard.py -q` |
+| Focused test example | `python -m pytest tests/test_workflow_runtime.py -q` |
 | Full suite | `python -m pytest -q` |
-| Lint | `python -m ruff check src tests skills/eval/helpers scripts examples` |
-| Format check | `python -m ruff format --check src tests skills/eval/helpers scripts examples` |
-| Browser setup and tests | `python -m pip install -e '.[dev,browser]' && python -m playwright install chromium && python -m pytest tests/test_dashboard_browser.py -q` |
-| JavaScript syntax | `for script in src/agentagon/dashboard_assets/*.js skills/eval/helpers/*.cjs; do node --check "$script"; done` |
-| Installer syntax | `sh -n scripts/install.sh` |
+| Lint | `python -m ruff check src tests scripts examples` |
+| Format check | `python -m ruff format --check src tests scripts examples` |
+| Browser setup and tests | `python -m pip install -e '.[dev,browser]' && python -m playwright install chromium && python -m pytest tests/test_webapp_browser.py -q` |
+| JavaScript syntax | `for script in src/agentagon/dashboard/assets/*.js src/agentagon/workflows/evaluate/helpers/*.cjs; do node --check "$script"; done` |
 | Build sdist and wheel | `python -m build` |
 
 - Validate packaging changes by installing the built wheel in a fresh environment outside the checkout using the [packaging checks](docs/contributing/README.md#packaging-checks).
-- Local HTTP/browser tests need loopback access; require authorization before enabling [native registration or live SSH/E2B tests](docs/contributing/README.md#optional-integration-checks), and report skips separately from verified results.
+- Local HTTP/browser tests need loopback access; require authorization before enabling [live SSH/E2B tests](docs/contributing/README.md#optional-integration-checks), and report skips separately from verified results.
 
 ## Project boundaries
 
@@ -45,7 +44,7 @@
 
 - Regenerate build output and caches from source; do not commit `.venv/`, `build/`, `dist/`, `*.egg-info/`, `__pycache__/`, `.pytest_cache/` or `.ruff_cache/` (see [.gitignore](.gitignore)).
 - Keep `.agentagon/` private and ignored; use CLI operations for saved state, reports and immutable evidence. Edit prepared host response/templates as workflow inputs, without rewriting frozen records or checksum-addressed artifacts.
-- Treat `contracts/`, `signals/`, `skills/` and `src/agentagon/dashboard_assets/` as shipped source, not disposable generated output; keep packaging declarations and resource references aligned when changing them.
+- Treat `contracts/`, `signals/`, `src/agentagon/workflows/` and `src/agentagon/dashboard/assets/` as shipped source, not disposable generated output; keep packaging declarations and resource references aligned when changing them.
 
 ## Documentation and commits
 

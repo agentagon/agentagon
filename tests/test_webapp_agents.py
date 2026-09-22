@@ -10,8 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from agentagon.brain import adapters as agents
 from agentagon.core.records import AuditError
-from agentagon.webapp import agents
 
 
 def fake_codex(tmp_path, scenario="success"):
@@ -19,8 +19,10 @@ def fake_codex(tmp_path, scenario="success"):
     log = tmp_path / "requests.jsonl"
     executable.write_text(
         f"#!{sys.executable}\n"
-        "import json, sys, time\n"
+        "import json, os, sys, time\n"
         f"log = {str(log)!r}\nscenario = {scenario!r}\n"
+        "with open(log + '.env', 'w') as stream:\n"
+        " json.dump({k: v for k, v in os.environ.items() if k in ['AGENTAGON_CONFIG', 'AGENTAGON_APP_STATE', 'AGENTAGON_MEMORY_SNAPSHOT']}, stream)\n"
         "def send(value):\n"
         " print(json.dumps(value), flush=True)\n"
         "def read():\n"
@@ -52,6 +54,14 @@ def fake_codex(tmp_path, scenario="success"):
         "  if scenario == 'oversize':\n"
         "   print('x' * 1100000, flush=True); time.sleep(30)\n"
         "  if scenario == 'disconnect': raise SystemExit()\n"
+        "  if scenario == 'assess':\n"
+        "   send({'method': 'item/completed', 'params': {'threadId': session, 'item': {'type': 'agentMessage', 'phase': 'commentary', 'text': \"I'll inspect the repository.\"}}})\n"
+        "   send({'method': 'item/started', 'params': {'threadId': session, 'item': {'type': 'commandExecution', 'id': 'assess-tool'}}})\n"
+        "   send({'method': 'item/completed', 'params': {'threadId': session, 'item': {'type': 'commandExecution', 'id': 'assess-tool'}}})\n"
+        "   text = json.dumps({'summary': 'Assessment complete', 'issues': [], 'lessons': []})\n"
+        "   send({'method': 'item/completed', 'params': {'threadId': session, 'item': {'type': 'agentMessage', 'phase': 'final_answer', 'text': text}}})\n"
+        "   send({'method': 'turn/completed', 'params': {'threadId': session, 'turn': {'id': 'turn-1', 'status': 'completed'}}})\n"
+        "   continue\n"
         "  send({'id': 'approval-1', 'method': 'item/commandExecution/requestApproval',\n"
         "        'params': {'command': 'python -m pytest', 'cwd': '.', 'threadId': session}})\n"
         "  read()\n"
@@ -60,6 +70,8 @@ def fake_codex(tmp_path, scenario="success"):
         "        'options': [{'label': 'Minimal'}]}], 'threadId': session}})\n"
         "  read()\n"
         "  send({'method': 'item/started', 'params': {'threadId': session,\n"
+        "        'item': {'type': 'commandExecution', 'id': 'tool-1'}}})\n"
+        "  send({'method': 'item/completed', 'params': {'threadId': session,\n"
         "        'item': {'type': 'commandExecution', 'id': 'tool-1'}}})\n"
         "  send({'method': 'item/agentMessage/delta', 'params': {'delta': 'super-'}})\n"
         "  send({'method': 'item/agentMessage/delta', 'params': {'delta': 'secret-value'}})\n"
@@ -95,6 +107,13 @@ def test_codex_streams_approval_question_and_redacted_result(tmp_path, monkeypat
     executable, log = fake_codex(tmp_path)
     config = tmp_path / "config.json"
     config.write_text("{}")
+    snapshot = tmp_path / "memory.json"
+    snapshot.write_text('{"purpose":"agent","groups":[]}')
+    environment = {
+        "AGENTAGON_CONFIG": str(config),
+        "AGENTAGON_APP_STATE": str(tmp_path),
+        "AGENTAGON_MEMORY_SNAPSHOT": str(snapshot),
+    }
     events, questions = [], []
 
     def ask(question):
@@ -105,20 +124,28 @@ def test_codex_streams_approval_question_and_redacted_result(tmp_path, monkeypat
         request(
             tmp_path,
             executable=str(executable),
-            env={"AGENTAGON_CONFIG": str(config), "AGENTAGON_APP_STATE": str(tmp_path)},
+            env=environment,
         ),
         events.append,
         ask,
         threading.Event(),
     )
     messages = [json.loads(line) for line in log.read_text().splitlines()]
+    assert json.loads(log.with_suffix(".jsonl.env").read_text()) == environment
     assert result == {
         "state": "completed",
         "session_id": "session-1",
         "text": "Finished [redacted]",
     }
     assert events[0] == {"type": "session", "session_id": "session-1", "model": "host-model"}
-    assert any(event["type"] == "progress" for event in events)
+    activity = [event for event in events if event["type"] == "tool_activity"]
+    assert [(event["state"], event["tool"]) for event in activity] == [
+        ("running", "commandExecution"),
+        ("completed", "commandExecution"),
+    ]
+    assert all(event["visibility"] == "diagnostic" for event in activity)
+    assistant = next(event for event in events if event["type"] == "message")
+    assert assistant["visibility"] == "diagnostic"
     assert "super-secret-value" not in json.dumps(events + questions)
     assert {"id": "approval-1", "result": {"decision": "decline"}} in messages
     assert {
@@ -316,7 +343,18 @@ def test_codex_timeout_stops_owned_process(tmp_path, monkeypatch):
     assert any(message.get("method") == "turn/interrupt" for message in sent)
 
 
-@pytest.mark.parametrize("invalid", ["relative", "file", "missing", "unknown"])
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "relative",
+        "file",
+        "missing",
+        "unknown",
+        "snapshot-relative",
+        "snapshot-missing",
+        "snapshot-directory",
+    ],
+)
 def test_host_environment_rejects_invalid_app_paths_before_launch(tmp_path, invalid):
     config = tmp_path / "config.json"
     config.write_text("{}")
@@ -325,8 +363,11 @@ def test_host_environment_rejects_invalid_app_paths_before_launch(tmp_path, inva
         "file": {"AGENTAGON_APP_STATE": str(config)},
         "missing": {"AGENTAGON_APP_STATE": str(tmp_path / "missing")},
         "unknown": {"ARBITRARY_OVERRIDE": str(tmp_path)},
+        "snapshot-relative": {"AGENTAGON_MEMORY_SNAPSHOT": "memory.json"},
+        "snapshot-missing": {"AGENTAGON_MEMORY_SNAPSHOT": str(tmp_path / "missing.json")},
+        "snapshot-directory": {"AGENTAGON_MEMORY_SNAPSHOT": str(tmp_path)},
     }[invalid]
-    with pytest.raises(AuditError, match="environment|application state"):
+    with pytest.raises(AuditError, match="environment|application state|memory snapshot"):
         agents.run_agent(
             request(tmp_path, env=environment),
             lambda event: pytest.fail("host should not start"),
@@ -407,13 +448,19 @@ def test_claude_api_key_approvals_exact_resume_and_redaction(tmp_path, monkeypat
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "subscription-secret")
     config = tmp_path / "frozen-config.json"
     config.write_text("{}")
+    snapshot = tmp_path / "memory.json"
+    snapshot.write_text('{"purpose":"agent","groups":[]}')
     result = agents.run_agent(
         request(
             tmp_path,
             agent="claude",
             api_key="sdk-secret-value",
             session_id="exact-saved-id",
-            env={"AGENTAGON_CONFIG": str(config), "AGENTAGON_APP_STATE": str(tmp_path)},
+            env={
+                "AGENTAGON_CONFIG": str(config),
+                "AGENTAGON_APP_STATE": str(tmp_path),
+                "AGENTAGON_MEMORY_SNAPSHOT": str(snapshot),
+            },
         ),
         events.append,
         lambda event: (
@@ -428,6 +475,7 @@ def test_claude_api_key_approvals_exact_resume_and_redaction(tmp_path, monkeypat
     assert options.env["CLAUDE_CODE_OAUTH_TOKEN"] == ""
     assert options.env["AGENTAGON_CONFIG"] == str(config)
     assert options.env["AGENTAGON_APP_STATE"] == str(tmp_path)
+    assert options.env["AGENTAGON_MEMORY_SNAPSHOT"] == str(snapshot)
     assert options.setting_sources == ["user", "project", "local"]
     assert type(record["approval"]).__name__ == "PermissionResultDeny"
     assert record["answer"].updated_input["answers"] == {"Which option?": "Minimal"}
@@ -529,7 +577,7 @@ def test_detection_does_not_expose_credentials(monkeypatch):
     monkeypatch.setattr(agents.shutil, "which", lambda name: None)
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "never-return-this")
-    detected = agents.detect_agents()
+    detected = agents.detect_backends()
     assert detected[1]["available"] is False
     assert detected[1]["sdk_available"] is False
     assert detected[1]["authenticated"] is True
@@ -554,8 +602,8 @@ def test_invalid_requests_are_rejected_before_execution(tmp_path, kwargs):
 
 @pytest.fixture
 def reflection(tmp_path):
-    from agentagon.experiments.budget import BudgetLedger
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments.budget import BudgetLedger
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
     from agentagon.storage.workspace import Workspace
 
     workspace = Workspace(tmp_path)
@@ -652,7 +700,7 @@ def test_reflection_interruption_resumes_only_its_saved_session(reflection):
 def test_reflection_reply_crash_replays_checkpoint_without_another_host_turn(
     reflection, monkeypatch
 ):
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     calls = []
 

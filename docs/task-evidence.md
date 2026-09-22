@@ -4,7 +4,7 @@ Benchmarks can explain individual tasks without changing measurement or verifica
 
 The [event contract](../contracts/v1/task-event.json) has five fields: `version: 1`, `event`, `task_id`, `at`, and an object `data`. Event names are `task_start`, `progress`, `input`, `output`, `failure`, `artifact`, and `task_end`. Use `data.path` for an artifact path relative to the artifacts directory. End a completed task with `task_end`; include an explicit outcome in its data.
 
-Copy the [Python helper](../skills/eval/helpers/agentagon_events.py) or [Node helper](../skills/eval/helpers/agentagon_events.cjs) into the benchmark package. Both use standard libraries, append one record at a time, and return false when instrumentation is disabled. Other languages can write the same format. Record only inputs and outputs the user has permitted you to retain.
+Copy the [Python helper](../src/agentagon/workflows/evaluate/helpers/agentagon_events.py) or [Node helper](../src/agentagon/workflows/evaluate/helpers/agentagon_events.cjs) into the benchmark package. Both use standard libraries, append one record at a time, and return false when instrumentation is disabled. Other languages can write the same format. Record only inputs and outputs the user has permitted you to retain.
 
 ```python
 from agentagon_events import emit

@@ -15,9 +15,9 @@ from support.experiments import (
     verify,
 )
 
-from agentagon.cli.main import main
+from agentagon.capabilities.experiments import engine
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError
-from agentagon.experiments import engine
 from agentagon.storage.config import Config
 
 

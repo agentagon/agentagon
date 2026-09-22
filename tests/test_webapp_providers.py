@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from agentagon.capabilities.traces import providers
+from agentagon.capabilities.traces.providers import CredentialStore, ProviderClient, ProviderError
 from agentagon.core.records import AuditError
-from agentagon.webapp import providers
-from agentagon.webapp.providers import CredentialStore, ProviderClient, ProviderError
 
 
 def client(provider, handler, **overrides):

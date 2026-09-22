@@ -6,12 +6,12 @@ import pytest
 from click.testing import CliRunner
 from support.audit import cluster, diagnose_failure, finish, respond, review_unknown
 
-from agentagon.cli.main import main
+from agentagon.capabilities.reporting import report
+from agentagon.cli.internal import main
 from agentagon.core.analysis import check_diagnosis, flags_for
 from agentagon.core.records import AuditError, load_json
-from agentagon.operations import import_traces, prepare, start, status, submit
-from agentagon.reporting import report
-from agentagon.storage.issues import list_issues, update_issue
+from agentagon.domain.issues import list_issues, update_issue
+from agentagon.workflows.audit.operations import import_traces, prepare, start, status, submit
 
 
 def test_complete_trace_audit_retains_report_and_resumes(workspace, imported):

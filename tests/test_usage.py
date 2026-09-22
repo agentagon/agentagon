@@ -14,9 +14,9 @@ from click.testing import CliRunner
 from support.audit import finish
 
 from agentagon import usage
-from agentagon.cli.main import main
+from agentagon.capabilities.intelligence.client import lookup
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError
-from agentagon.lookup.client import lookup
 from agentagon.storage.config import Config
 from agentagon.usage import track
 
@@ -28,6 +28,14 @@ RESPONSE = {
         {"id": "retry-002", "title": "Check timeouts", "suggestion": "Inspect timeout evidence."},
     ],
 }
+
+
+@pytest.fixture(autouse=True)
+def explicit_telemetry_opt_in(request):
+    """Delivery tests opt in; the default-behavior test exercises a fresh config."""
+
+    if request.node.name != "test_defaults_and_inspection_have_no_side_effects":
+        Config().update("user", values={"telemetry.enabled": True})
 
 
 @pytest.fixture
@@ -93,12 +101,13 @@ def receipt_for(workspace, audit_id, monkeypatch):
 
 def test_defaults_and_inspection_have_no_side_effects(posthog):
     assert Config().summary()["telemetry"] == {
-        "enabled": True,
+        "enabled": False,
         "configured": True,
         "pending": 0,
         "dropped": 0,
         "delivery": "idle",
     }
+    assert track("workflow_started", workflow="audit") == {"status": "disabled"}
     runner = CliRunner()
     assert runner.invoke(main, ["setup", "--scope", "user"]).exit_code == 0
     assert runner.invoke(main, ["--help"]).exit_code == 0
@@ -109,7 +118,7 @@ def test_defaults_and_inspection_have_no_side_effects(posthog):
 def test_skill_payload_contains_only_anonymous_fields(posthog, monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", "https://person:password@private.example")
     monkeypatch.setenv("AGENTAGON_API_KEY", "agi_privateCustomerKey")
-    result = track("skill_invoked", skill="audit", host="codex")
+    result = track("workflow_started", workflow="audit", host="codex")
     assert result == {"status": "accepted"} and pending() == []
     request = posthog["requests"][0]
     envelope = json.loads(request.content)
@@ -123,7 +132,7 @@ def test_skill_payload_contains_only_anonymous_fields(posthog, monkeypatch):
         "$ip": None,
         "schema_version": 1,
         "agentagon_version": usage.__version__,
-        "skill": "audit",
+        "workflow": "audit",
         "host": "codex",
     }
     assert not {"authorization", "cookie", "x-forwarded-for"} & set(request.headers)
@@ -137,9 +146,9 @@ def test_skill_payload_contains_only_anonymous_fields(posthog, monkeypatch):
     "event,fields",
     [
         ("arbitrary_event", {}),
-        ("skill_invoked", {"skill": "audit", "prompt": "secret"}),
-        ("skill_invoked", {"skill": "private-project"}),
-        ("skill_invoked", {"skill": "audit", "host": "person@example.com"}),
+        ("workflow_started", {"workflow": "audit", "prompt": "secret"}),
+        ("workflow_started", {"workflow": "private-project"}),
+        ("workflow_started", {"workflow": "audit", "host": "person@example.com"}),
         ("knowledge_returned", {"entry_id": "retry-001", "knowledge_version": "a" * 64}),
         ("intelligence_lookup_completed", {"outcome": "complete", "duration_ms": float("nan")}),
     ],
@@ -152,7 +161,7 @@ def test_invalid_events_never_enter_storage_or_transport(event, fields, posthog)
 
 def test_disable_clears_queue_and_prevents_backfill(posthog):
     posthog["response"] = httpx.Response(503)
-    assert track("skill_invoked", skill="audit")["status"] == "retry"
+    assert track("workflow_started", workflow="audit")["status"] == "retry"
     assert len(pending()) == 1
     original_id = pending()[0]["uuid"]
     result = CliRunner().invoke(
@@ -160,21 +169,21 @@ def test_disable_clears_queue_and_prevents_backfill(posthog):
     )
     assert result.exit_code == 0
     assert json.loads(result.output)["telemetry"]["pending"] == 0
-    assert track("skill_invoked", skill="fix") == {"status": "disabled"}
+    assert track("workflow_started", workflow="fix") == {"status": "disabled"}
     assert len(posthog["requests"]) == 1
     Config().update("user", values={"telemetry.enabled": True})
     posthog["response"] = httpx.Response(200, json={"status": 1})
-    assert track("skill_invoked", skill="fix")["status"] == "accepted"
-    assert [event["properties"]["skill"] for event in received(posthog)] == ["audit", "fix"]
+    assert track("workflow_started", workflow="fix")["status"] == "accepted"
+    assert [event["properties"]["workflow"] for event in received(posthog)] == ["audit", "fix"]
     assert received(posthog)[-1]["uuid"] != original_id
 
 
 def test_environment_disable_overrides_enabled_config_and_purges(posthog, monkeypatch):
     posthog["response"] = httpx.Response(503)
-    track("skill_invoked", skill="audit")
+    track("workflow_started", workflow="audit")
     monkeypatch.setenv("AGENTAGON_TELEMETRY_DISABLED", "1")
     assert not Config().summary()["telemetry"]["enabled"]
-    assert track("skill_invoked", skill="fix")["status"] == "disabled"
+    assert track("workflow_started", workflow="fix")["status"] == "disabled"
     assert pending() == [] and len(posthog["requests"]) == 1
 
 
@@ -187,26 +196,26 @@ def test_user_wide_setting_rejects_project_override(workspace):
 
 
 def test_missing_or_secret_token_never_sends(monkeypatch):
-    assert track("skill_invoked", skill="setup") == {"status": "unconfigured"}
+    assert track("workflow_started", workflow="design") == {"status": "unconfigured"}
     assert len(pending()) == 1
     for prefix in ("phx_", "phs_"):
         monkeypatch.setenv("AGENTAGON_POSTHOG_PROJECT_TOKEN", prefix + "secret" * 8)
-        assert track("skill_invoked", skill="setup") == {"status": "unconfigured"}
+        assert track("workflow_started", workflow="design") == {"status": "unconfigured"}
         assert not Config().summary()["telemetry"]["configured"]
 
 
 def test_retry_keeps_identity_and_applies_global_backoff(posthog):
     posthog["response"] = httpx.Response(429, headers={"Retry-After": "120"})
-    assert track("skill_invoked", skill="audit")["status"] == "retry"
+    assert track("workflow_started", workflow="audit")["status"] == "retry"
     first = received(posthog)[0]
-    assert track("skill_invoked", skill="fix")["status"] == "queued"
+    assert track("workflow_started", workflow="fix")["status"] == "queued"
     assert len(posthog["requests"]) == 1 and len(pending()) == 2
     with closing(sqlite3.connect(usage._path(Config()))) as db:
         due = db.execute("SELECT next_attempt FROM delivery").fetchone()[0]
     assert 115 <= due - time.time() <= 121
     retry_now()
     posthog["response"] = httpx.Response(200, json={"status": 1})
-    assert track("skill_invoked", skill="fix")["status"] == "accepted"
+    assert track("workflow_started", workflow="fix")["status"] == "accepted"
     assert received(posthog)[1] == first
     assert pending() == []
 
@@ -230,7 +239,7 @@ def test_retry_keeps_identity_and_applies_global_backoff(posthog):
 )
 def test_response_classification(response, expected, retained, posthog):
     posthog["response"] = response
-    assert track("skill_invoked", skill="audit")["status"] == expected
+    assert track("workflow_started", workflow="audit")["status"] == expected
     assert bool(pending()) is retained
     assert len(posthog["requests"]) == 1
 
@@ -248,17 +257,17 @@ def test_streaming_request_has_a_total_deadline(monkeypatch):
         usage.httpx, "AsyncClient", lambda **kw: original(transport=httpx.MockTransport(slow), **kw)
     )
     before = time.monotonic()
-    assert track("skill_invoked", skill="audit")["status"] == "unavailable"
+    assert track("workflow_started", workflow="audit")["status"] == "unavailable"
     assert time.monotonic() - before < 0.5 and len(pending()) == 1
 
 
 def test_async_python_caller_enqueues_without_nested_loop(posthog):
     async def call():
-        return track("skill_invoked", skill="audit")
+        return track("workflow_started", workflow="audit")
 
     assert asyncio.run(call()) == {"status": "queued"}
     assert posthog["requests"] == [] and len(pending()) == 1
-    assert track("skill_invoked", skill="fix")["status"] == "accepted"
+    assert track("workflow_started", workflow="fix")["status"] == "accepted"
     assert len(received(posthog)) == 2
 
 
@@ -266,7 +275,7 @@ def test_queue_count_bytes_expiry_and_one_batch_limit(posthog, monkeypatch):
     posthog["response"] = httpx.Response(503)
     monkeypatch.setattr(usage, "MAX_EVENTS", 25)
     for _ in range(30):
-        track("skill_invoked", skill="audit")
+        track("workflow_started", workflow="audit")
     assert len(pending()) == 25
     assert Config().summary()["telemetry"]["dropped"] == 5
     with closing(sqlite3.connect(usage._path(Config()))) as db, db:
@@ -274,16 +283,16 @@ def test_queue_count_bytes_expiry_and_one_batch_limit(posthog, monkeypatch):
             "UPDATE events SET created=? WHERE rowid=(SELECT min(rowid) FROM events)",
             (time.time() - usage.MAX_AGE - 1,),
         )
-    track("skill_invoked", skill="fix")
+    track("workflow_started", workflow="fix")
     assert len(pending()) == 25 and Config().summary()["telemetry"]["dropped"] == 6
     retry_now()
     posthog["response"] = httpx.Response(200, json={"status": 1})
-    track("skill_invoked", skill="fix")
+    track("workflow_started", workflow="fix")
     assert len(json.loads(posthog["requests"][-1].content)["batch"]) == 20
     assert len(pending()) == 5
     monkeypatch.setattr(usage, "MAX_BYTES", 1000)
     posthog["response"] = httpx.Response(503)
-    track("skill_invoked", skill="setup")
+    track("workflow_started", workflow="design")
     assert (
         sum(len(json.dumps(event, separators=(",", ":")).encode()) for event in pending()) <= 1000
     )
@@ -299,10 +308,10 @@ def test_concurrent_writers_do_not_lose_events_or_hold_database_during_send(post
 
     monkeypatch.setattr(usage, "_post", blocked)
     with ThreadPoolExecutor(max_workers=8) as pool:
-        first = pool.submit(track, "skill_invoked", skill="audit")
+        first = pool.submit(track, "workflow_started", workflow="audit")
         try:
             assert entered.wait(10)
-            later = [pool.submit(track, "skill_invoked", skill="fix") for _ in range(12)]
+            later = [pool.submit(track, "workflow_started", workflow="fix") for _ in range(12)]
             results = [future.result(timeout=10) for future in later]
             assert all(result["status"] == "queued" for result in results), results
             assert len(pending()) == 13
@@ -323,7 +332,7 @@ def test_queue_waits_for_brief_database_contention(monkeypatch):
     with closing(usage._connect(Config())) as db, ThreadPoolExecutor(max_workers=1) as pool:
         db.execute("BEGIN IMMEDIATE")
         monkeypatch.setattr(usage.sqlite3, "connect", connect)
-        queued = pool.submit(track, "skill_invoked", skill="audit")
+        queued = pool.submit(track, "workflow_started", workflow="audit")
         try:
             assert connecting.wait(5)
             # The writer must keep waiting instead of dropping the event when a
@@ -338,14 +347,14 @@ def test_queue_waits_for_brief_database_contention(monkeypatch):
 
 def test_tampered_queue_is_not_forwarded(posthog):
     posthog["response"] = httpx.Response(503)
-    track("skill_invoked", skill="audit")
+    track("workflow_started", workflow="audit")
     event = pending()[0]
     event["properties"]["prompt"] = "private customer content"
     with closing(sqlite3.connect(usage._path(Config()))) as db, db:
         db.execute("UPDATE events SET payload=?", (json.dumps(event),))
     retry_now()
     posthog["response"] = httpx.Response(200, json={"status": 1})
-    track("skill_invoked", skill="fix")
+    track("workflow_started", workflow="fix")
     assert len(received(posthog)) == 2
     assert b"private customer content" not in posthog["requests"][-1].content
     assert Config().summary()["telemetry"]["dropped"] == 1
@@ -357,11 +366,11 @@ def test_unavailable_and_symlinked_storage_never_interrupts(tmp_path, posthog, m
     target = tmp_path / "private"
     target.write_text("private contents", encoding="utf-8")
     path.symlink_to(target)
-    assert track("skill_invoked", skill="audit")["status"] == "invalid_event"
+    assert track("workflow_started", workflow="audit")["status"] == "invalid_event"
     assert target.read_text() == "private contents" and posthog["requests"] == []
     path.unlink()
     path.write_text("not sqlite", encoding="utf-8")
-    assert track("skill_invoked", skill="audit")["status"] == "unavailable"
+    assert track("workflow_started", workflow="audit")["status"] == "unavailable"
     assert Config().summary()["telemetry"]["delivery"] == "storage_unavailable"
 
 
@@ -441,53 +450,9 @@ def test_investigated_and_cited_require_local_evidence_and_deduplicate(
     assert all(finding.encode() not in request.content for request in posthog["requests"])
 
 
-def test_cli_is_one_hook_and_rejects_free_text(posthog, tmp_path):
-    runner = CliRunner()
-    good = runner.invoke(
-        main,
-        [
-            "--workspace",
-            str(tmp_path),
-            "telemetry",
-            "skill_invoked",
-            "--data",
-            '{"skill":"fix","host":"claude-code"}',
-        ],
-    )
-    assert good.exit_code == 0 and json.loads(good.output)["status"] == "accepted"
-    for data in (
-        "null",
-        "not json",
-        '{"workspace":"/private"}',
-        '{"skill":"fix","text":"private"}',
-    ):
-        result = runner.invoke(main, ["telemetry", "skill_invoked", "--data", data])
-        assert result.exit_code == 0
-        assert json.loads(result.output) == {"status": "invalid_event"}
-        assert "private" not in result.output
-    assert len(posthog["requests"]) == 1
-
-
-def test_workspace_cli_validates_knowledge(posthog, workspace, imported, monkeypatch):
-    receipt = receipt_for(workspace, imported, monkeypatch)
-    result = CliRunner().invoke(
-        main,
-        [
-            "--workspace",
-            str(workspace.root),
-            "telemetry",
-            "knowledge_investigated",
-            "--data",
-            json.dumps({"audit_id": imported, "receipt": receipt, "entry_id": "retry-001"}),
-        ],
-    )
-    assert result.exit_code == 0 and json.loads(result.output)["status"] == "accepted"
-    assert received(posthog)[0]["properties"]["entry_id"] == "retry-001"
-
-
 def test_inspection_does_not_drain_existing_queue(posthog, workspace):
     posthog["response"] = httpx.Response(503)
-    track("skill_invoked", skill="audit")
+    track("workflow_started", workflow="audit")
     retry_now()
     assert CliRunner().invoke(main, ["--workspace", str(workspace.root), "status"]).exit_code == 0
     assert Config().summary()["telemetry"]["pending"] == 1
@@ -535,11 +500,11 @@ def test_annotation_symlink_is_rejected(workspace, imported, posthog, monkeypatc
 
 def test_changed_token_never_sends_old_queue_to_new_project(posthog, monkeypatch):
     posthog["response"] = httpx.Response(503)
-    track("skill_invoked", skill="audit")
+    track("workflow_started", workflow="audit")
     old_id = pending()[0]["uuid"]
     monkeypatch.setenv("AGENTAGON_POSTHOG_PROJECT_TOKEN", "phc_newTelemetryProject12345")
     posthog["response"] = httpx.Response(200, json={"status": 1})
-    assert track("skill_invoked", skill="fix")["status"] == "accepted"
+    assert track("workflow_started", workflow="fix")["status"] == "accepted"
     last = json.loads(posthog["requests"][-1].content)
     assert last["api_key"] == "phc_newTelemetryProject12345"
     assert len(last["batch"]) == 1 and last["batch"][0]["uuid"] != old_id

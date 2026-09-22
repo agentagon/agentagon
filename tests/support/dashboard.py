@@ -1,38 +1,10 @@
 """Shared dashboard test support."""
 
 import copy
-import http.client
-import threading
-from contextlib import contextmanager
 
 import pytest
 
-from agentagon.dashboard import create_server
-from agentagon.operations import start
-
-
-@contextmanager
-def running(workspace, audit_id=None, *, run_id=None):
-    server = create_server(workspace, audit_id=audit_id, run_id=run_id)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield server
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
-
-def request(server, path="/api/audits", *, method="GET", headers=None):
-    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
-    try:
-        client.request(method, path, headers=headers or {})
-        response = client.getresponse()
-        data = response.read()
-        return response.status, dict(response.getheaders()), data
-    finally:
-        client.close()
+from agentagon.workflows.audit.operations import start
 
 
 def make_audit(workspace, *, goal=None, created_at=None):

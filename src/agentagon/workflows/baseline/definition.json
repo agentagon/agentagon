@@ -1,0 +1,18 @@
+{
+  "id": "run-baseline",
+  "version": 1,
+  "name": "Run a baseline",
+  "purpose": "Measure current behavior with the goal's frozen evaluator.",
+  "requires_goal": true,
+  "inputs": [
+    "Frozen evaluator"
+  ],
+  "outputs": [
+    "Immutable baseline"
+  ],
+  "references": [
+    "workflows/shared/interpret-baseline.md",
+    "workflows/optimize/references/native-host.md"
+  ],
+  "workflow": "baseline"
+}

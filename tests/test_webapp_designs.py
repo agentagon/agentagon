@@ -2,18 +2,20 @@
 
 import copy
 import json
+import threading
 import uuid
 
 import pytest
 from test_baselines import frozen
 from test_scoring import definition
 from test_webapp import project, running
-from test_webapp_catalog import agent, focus
+from test_webapp_catalog import agent, goal_record
 from test_webapp_jobs import wait_for
 
 from agentagon.core.records import AuditError
-from agentagon.webapp.designs import Designs, score_definition, validate
-from agentagon.webapp.service import Application
+from agentagon.workflows.design.handler import accept as accept_design
+from agentagon.workflows.evaluate.designs import Designs, score_definition, validate
+from agentagon.workflows.service import Application
 
 
 @pytest.fixture
@@ -73,7 +75,7 @@ def test_background_is_observation_list_with_legacy_text_compatibility():
 def setup(app, tmp_path):
     saved = project(app, tmp_path)
     application = agent(app, saved)
-    goal = focus(app, saved, application)
+    goal = goal_record(app, saved, application)
     return saved["id"], application["id"], goal["id"]
 
 
@@ -95,6 +97,59 @@ def test_acceptance_is_explicit_versioned_and_keeps_original_score_and_gates(app
     assert next_version["digest"] != accepted["digest"]
     assert app.state.db.get_record(ids[0], "accepted_designs", accepted["id"]) == accepted
     assert len(app.state.db.list_records(ids[0], "accepted_designs")) == 2
+
+
+def test_create_design_can_name_a_future_evaluator_entrypoint(app, tmp_path):
+    ids = setup(app, tmp_path)
+    evaluation = {
+        "mode": "create",
+        "framework": "braintrust",
+        "entrypoint": "app/evals/run_activity_customization_eval.py",
+        "command": {
+            "argv": ["python", "-m", "app.evals.run_activity_customization_eval"],
+            "cwd": ".",
+        },
+        "scorer": "Require every retained correctness gate to pass.",
+        "output_mapping": {"quality": "summary.quality"},
+    }
+
+    draft = app.designs.save(*ids, proposal(evaluation=evaluation))
+
+    assert draft["native_plan"]["state"] == "ready"
+    assert draft["native_plan"]["entrypoint"] == evaluation["entrypoint"]
+    assert draft["native_plan"]["source_files"] == []
+
+
+def test_resumed_design_reuses_a_proposal_saved_by_an_earlier_attempt(app, tmp_path):
+    project_id, agent_id, goal_id = setup(app, tmp_path)
+    draft = app.designs.save(project_id, agent_id, goal_id, proposal())
+    agent_record = app.catalog.agent(project_id, agent_id)
+    goal = app.catalog.goal_record(project_id, agent_id, goal_id)
+    investigation = app.catalog.investigation(
+        project_id, agent_id, goal_id, {"code_scopes": agent_record["code_scopes"]}
+    )
+    job = {
+        "id": "task_" + "d" * 24,
+        "kind": "design",
+        "project_id": project_id,
+        "application_agent_id": agent_id,
+        "goal_id": goal_id,
+        "options": {"design_revision": 0, "investigation_plan": investigation},
+    }
+
+    automatic = app.production.prepare(app.state.workspace(project_id), job, threading.Event())
+    assert automatic is not None
+    state, result, next_action = accept_design(
+        app.state.workspace(project_id), job, json.loads(automatic["text"])
+    )
+    assert state == "completed" and next_action is None
+
+    completed = app.completed_job(app.state.workspace(project_id), job, result)
+
+    assert completed["design_id"] == draft["id"]
+    assert completed["design_revision"] == draft["revision"]
+    assert app.designs.get(project_id, agent_id, goal_id) == draft
+    assert app.catalog.goal_record(project_id, agent_id, goal_id)["revision"] == goal["revision"]
 
 
 def test_stale_writes_scope_and_source_changes_cannot_be_accepted(app, tmp_path):
@@ -129,7 +184,7 @@ def test_existing_frozen_evaluation_cannot_silently_change_scoring(app, applicat
     evaluation = frozen(application, specification)
     saved = app.register(str(application.root))
     item = agent(app, saved, code_scopes=["app.json"])
-    goal = focus(app, saved, item)
+    goal = goal_record(app, saved, item)
     ids = saved["id"], item["id"], goal["id"]
     value = proposal(evaluation={"mode": "reuse", "evaluation_id": evaluation["evaluation_id"]})
     draft = app.designs.save(*ids, value)
@@ -157,15 +212,15 @@ def test_design_job_proposes_once_without_acceptance_or_execution_profile(app, t
         value.pop("expected_revision")
         return {"state": "completed", "text": json.dumps({"measurement_design": value})}
 
-    app.jobs.execute = host
+    app.runtime.execute = host
     payload = {
         "operation_id": str(uuid.uuid4()),
         "kind": "design",
         "application_agent_id": ids[1],
-        "focus_id": ids[2],
+        "goal_id": ids[2],
     }
     submitted = app.submit_job(ids[0], payload)
-    result = wait_for(app.jobs, ids[0], submitted["id"])
+    result = wait_for(app.runtime, ids[0], submitted["id"])
     assert result["state"] == "completed", result
     assert result["result"]["design_id"] == app.designs.get(*ids)["id"]
     assert app.designs.accepted(*ids) is None
@@ -182,13 +237,13 @@ def test_design_http_reads_are_passive_and_accept_requires_current_revision(app,
     ids = setup(app, tmp_path)
     root = app.state.workspace(ids[0]).root
     (root / "test_eval.py").write_text("def test_response(): pass\n")
-    path = f"/api/projects/{ids[0]}/application-agents/{ids[1]}/focuses/{ids[2]}/design"
+    path = f"/api/projects/{ids[0]}/agents/{ids[1]}/goals/{ids[2]}/design"
     with running(app) as (client, server):
         response = client.get(path)
         assert response.status_code == 200
         assert response.json()["draft"] is None
         assert any(e["entrypoint"] == "test_eval.py" for e in response.json()["evaluators"])
-        assert app.jobs.list(ids[0]) == []
+        assert app.runtime.list(ids[0]) == []
         saved = client.post(path, json=proposal())
         assert saved.status_code == 200, saved.text
         accepted = client.post(
@@ -205,7 +260,7 @@ def test_design_http_reads_are_passive_and_accept_requires_current_revision(app,
 def _native_design_ids(app, application):
     saved = app.register(str(application.root))
     item = agent(app, saved, code_scopes=["app.json"])
-    goal = focus(app, saved, item)
+    goal = goal_record(app, saved, item)
     return saved["id"], item["id"], goal["id"]
 
 
@@ -240,7 +295,7 @@ def test_frozen_reuse_rejects_mutable_native_choices_and_wrong_evaluator(
 def test_unscored_frozen_reuse_gives_actionable_error(app, application, specification):
     from support.evaluation import draft, review_for
 
-    from agentagon.experiments import preparation
+    from agentagon.capabilities.experiments import preparation
 
     started, plan = draft(application, specification)
     checked = preparation.check(application, started["evaluation_id"], plan)
@@ -260,8 +315,8 @@ def test_created_evaluator_requires_exact_reviewed_private_dataset(
     from support.evaluation import draft, review_for
     from test_webapp_evaluators import dataset
 
-    from agentagon.experiments import preparation
-    from agentagon.webapp import snapshots
+    from agentagon.capabilities.experiments import preparation
+    from agentagon.capabilities.traces import snapshots
 
     ids = _native_design_ids(app, application)
     workspace = app.state.workspace(ids[0])
@@ -306,7 +361,7 @@ def test_accepting_new_scoring_removes_old_measurement_from_ready_suite(
 ):
     from test_baselines import complete
 
-    from agentagon.experiments import baselines
+    from agentagon.capabilities.experiments import baselines
 
     specification["repetitions"] = 1
     evaluation = frozen(application, specification)
@@ -319,20 +374,20 @@ def test_accepting_new_scoring_removes_old_measurement_from_ready_suite(
     app.catalog.bind_measurement(
         *ids, {"evaluation_id": evaluation["evaluation_id"], "baseline_id": baseline["baseline_id"]}
     )
-    assert app.catalog.measurement_status(ids[0], ids[1], app.catalog.focus(*ids))["baseline"][
-        "ready"
-    ]
+    assert app.catalog.measurement_status(ids[0], ids[1], app.catalog.goal_record(*ids))[
+        "baseline"
+    ]["ready"]
     changed = proposal(expected_revision=app.designs.get(*ids)["revision"])
     changed["metrics"]["quality"]["weight"] = 5
     draft = app.designs.save(*ids, changed)
     app.designs.accept(*ids, {"expected_revision": draft["revision"]})
-    current = app.catalog.focus(*ids)
+    current = app.catalog.goal_record(*ids)
     assert current["measurement"]["baseline_id"] == baseline["baseline_id"]
     readiness = app.catalog.measurement_status(ids[0], ids[1], current)
     assert not readiness["evaluation"]["ready"] and not readiness["baseline"]["ready"]
     assert "accepted measurement design" in readiness["evaluation"]["reason"]
     suite = app.catalog.suite(*ids)
-    assert suite["members"] == [] and suite["missing"][0]["focus_id"] == ids[2]
+    assert suite["members"] == [] and suite["missing"][0]["goal_id"] == ids[2]
 
 
 def test_accepting_frozen_b_runs_its_baseline_and_keeps_a_history(app, application, specification):
@@ -340,8 +395,8 @@ def test_accepting_frozen_b_runs_its_baseline_and_keeps_a_history(app, applicati
     from test_baselines import complete
     from test_webapp_jobs import manifest
 
-    from agentagon.experiments import baselines
-    from agentagon.experiments.host_bridge import HostBridge
+    from agentagon.capabilities.experiments import baselines
+    from agentagon.capabilities.experiments.host_bridge import HostBridge
 
     specification["repetitions"] = 1
     first = frozen(application, specification)
@@ -352,7 +407,7 @@ def test_accepting_frozen_b_runs_its_baseline_and_keeps_a_history(app, applicati
         *ids, proposal(evaluation={"mode": "reuse", "evaluation_id": first["evaluation_id"]})
     )
     app.designs.accept(*ids, {"expected_revision": draft["revision"]})
-    initially_ready = app.catalog.measurement_status(ids[0], ids[1], app.catalog.focus(*ids))
+    initially_ready = app.catalog.measurement_status(ids[0], ids[1], app.catalog.goal_record(*ids))
     assert initially_ready["evaluation"]["ready"] and not initially_ready["baseline"]["ready"]
     app.catalog.bind_measurement(
         *ids, {"evaluation_id": first["evaluation_id"], "baseline_id": baseline_a["baseline_id"]}
@@ -365,7 +420,7 @@ def test_accepting_frozen_b_runs_its_baseline_and_keeps_a_history(app, applicati
         ),
     )
     app.designs.accept(*ids, {"expected_revision": draft["revision"]})
-    current = app.catalog.focus(*ids)
+    current = app.catalog.goal_record(*ids)
     assert current["measurement"]["evaluation_id"] == first["evaluation_id"]
     ready = app.catalog.measurement_status(ids[0], ids[1], current)
     assert ready["evaluation"]["ready"] and not ready["baseline"]["ready"]
@@ -373,11 +428,11 @@ def test_accepting_frozen_b_runs_its_baseline_and_keeps_a_history(app, applicati
         "operation_id": str(uuid.uuid4()),
         "kind": "baseline",
         "application_agent_id": ids[1],
-        "focus_id": ids[2],
+        "goal_id": ids[2],
         "options": {"evaluation_id": second["evaluation_id"]},
     }
     with pytest.raises(AuditError, match="baseline.*accepted evaluator"):
-        app.submit_job(ids[0], {**request, "kind": "fix"})
+        app.submit_job(ids[0], {**request, "kind": "optimize"})
     with pytest.raises(AuditError, match="baseline does not measure"):
         app.submit_job(
             ids[0],
@@ -407,22 +462,22 @@ def test_accepting_frozen_b_runs_its_baseline_and_keeps_a_history(app, applicati
                 output["needs_review"] = {"owner_id": owner, "request_id": pending["request_id"]}
         return {"state": "completed", "session_id": session, "text": json.dumps(output)}
 
-    app.jobs.execute = host
+    app.runtime.execute = host
     submitted = app.submit_job(ids[0], request)
-    finished = wait_for(app.jobs, ids[0], submitted["id"], timeout=20)
+    finished = wait_for(app.runtime, ids[0], submitted["id"], timeout=20)
     assert finished["state"] == "completed", finished
-    measurement = app.catalog.focus(*ids)["measurement"]
+    measurement = app.catalog.goal_record(*ids)["measurement"]
     assert measurement["evaluation_id"] == second["evaluation_id"]
-    assert app.catalog.measurement_status(ids[0], ids[1], app.catalog.focus(*ids))["baseline"][
-        "ready"
-    ]
+    assert app.catalog.measurement_status(ids[0], ids[1], app.catalog.goal_record(*ids))[
+        "baseline"
+    ]["ready"]
     assert (
         baselines.status(application, baseline_a["baseline_id"])["evaluation_id"]
         == first["evaluation_id"]
     )
     assert any(
         record["definition"].get("measurement", {}).get("baseline_id") == baseline_a["baseline_id"]
-        for record in app.state.db.list_records(ids[0], "focus_versions")
+        for record in app.state.db.list_records(ids[0], "goal_versions")
     )
 
 
@@ -432,7 +487,7 @@ def test_new_native_plan_cannot_reuse_a_predating_evaluator_with_identical_scori
 ):
     from test_baselines import complete
 
-    from agentagon.experiments import baselines
+    from agentagon.capabilities.experiments import baselines
 
     specification["repetitions"] = 1
     previous = frozen(application, specification)
@@ -445,9 +500,9 @@ def test_new_native_plan_cannot_reuse_a_predating_evaluator_with_identical_scori
     accepted = app.designs.accept(*ids, {"expected_revision": saved["revision"]})
     with pytest.raises(AuditError, match="prepared after its acceptance"):
         app.designs.validate_evaluator(application, accepted, previous["evaluation_id"])
-    status = app.catalog.measurement_status(ids[0], ids[1], app.catalog.focus(*ids))
+    status = app.catalog.measurement_status(ids[0], ids[1], app.catalog.goal_record(*ids))
     assert not status["evaluation"]["ready"] and not status["baseline"]["ready"]
-    for kind in ("baseline", "fix"):
+    for kind in ("baseline", "optimize"):
         with pytest.raises(AuditError, match="prepared after its acceptance"):
             app.submit_job(
                 ids[0],
@@ -455,17 +510,17 @@ def test_new_native_plan_cannot_reuse_a_predating_evaluator_with_identical_scori
                     "operation_id": str(uuid.uuid4()),
                     "kind": kind,
                     "application_agent_id": ids[1],
-                    "focus_id": ids[2],
+                    "goal_id": ids[2],
                 },
             )
-    monkeypatch.setattr(app.jobs, "_dispatch", lambda: None)
+    monkeypatch.setattr(app.runtime, "_dispatch", lambda: None)
     task = app.submit_job(
         ids[0],
         {
             "operation_id": str(uuid.uuid4()),
             "kind": "eval",
             "application_agent_id": ids[1],
-            "focus_id": ids[2],
+            "goal_id": ids[2],
             "options": {"profile": "local"},
         },
     )

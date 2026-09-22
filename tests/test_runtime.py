@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from agentagon.experiments.runtime import (
+from agentagon.capabilities.experiments.runtime import (
     BudgetTracker,
     EvalBudgetExhausted,
     EvalServer,

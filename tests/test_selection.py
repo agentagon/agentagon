@@ -3,10 +3,10 @@ import json
 
 import pytest
 
+from agentagon.capabilities.reporting import build_report
+from agentagon.capabilities.traces.selection import plan_acquisition
 from agentagon.core.records import AuditError
-from agentagon.operations import import_traces, start
-from agentagon.reporting import build_report
-from agentagon.telemetry.selection import plan_acquisition
+from agentagon.workflows.audit.operations import import_traces, start
 
 START = "2026-08-10T00:00:00Z"
 END = "2026-08-11T00:00:00Z"

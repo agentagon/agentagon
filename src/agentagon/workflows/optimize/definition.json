@@ -1,0 +1,28 @@
+{
+  "id": "improve-agent",
+  "version": 1,
+  "name": "Optimize an agent",
+  "purpose": "Search for a bounded improvement and compare verified candidates.",
+  "requires_goal": true,
+  "inputs": [
+    "Frozen baseline",
+    "Scope",
+    "Budget"
+  ],
+  "outputs": [
+    "Verified candidates",
+    "Review package"
+  ],
+  "references": [
+    "workflows/shared/prepare-optimization-context.md",
+    "workflows/shared/review-candidate.md",
+    "workflows/shared/prepare-delivery.md",
+    "workflows/evaluate/references/authoring.md",
+    "workflows/optimize/references/evaluation.md",
+    "workflows/optimize/references/native-host.md",
+    "workflows/optimize/references/roles.md",
+    "workflows/optimize/references/experiments.md",
+    "workflows/optimize/references/delivery.md"
+  ],
+  "workflow": "optimize"
+}

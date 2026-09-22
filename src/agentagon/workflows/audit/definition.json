@@ -1,0 +1,20 @@
+{
+  "id": "audit-agent",
+  "version": 1,
+  "name": "Audit an agent",
+  "purpose": "Inspect code or trace evidence and retain reviewable findings.",
+  "requires_goal": false,
+  "inputs": [
+    "Agent",
+    "Code or trace evidence"
+  ],
+  "outputs": [
+    "Findings",
+    "Evidence report"
+  ],
+  "references": [
+    "workflows/audit/references/records.md",
+    "workflows/audit/references/analysis.md"
+  ],
+  "workflow": "audit"
+}

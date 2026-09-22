@@ -8,12 +8,12 @@ from click.testing import CliRunner
 from support.audit import finish, respond, review_unknown
 from support.changes import git
 
-from agentagon.cli.main import main
+from agentagon.capabilities.reporting import report
+from agentagon.cli.internal import main
 from agentagon.core.records import AuditError, load_json
-from agentagon.dashboard import _detail
-from agentagon.operations import import_traces, prepare, start
-from agentagon.reporting import report
+from agentagon.dashboard.evidence import _detail
 from agentagon.storage.workspace import Workspace
+from agentagon.workflows.audit.operations import import_traces, prepare, start
 
 
 @pytest.fixture(params=["directory", "unborn", "dirty", "clean"])

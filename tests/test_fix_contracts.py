@@ -4,8 +4,13 @@ import math
 import pytest
 from jsonschema import Draft202012Validator
 
+from agentagon.capabilities.experiments.spec import (
+    finite,
+    validate_limits,
+    validate_profile,
+    validate_spec,
+)
 from agentagon.core.records import AuditError, load_json, resource_path, validate_record
-from agentagon.experiments.spec import finite, validate_limits, validate_profile, validate_spec
 
 
 def profile():

@@ -8,10 +8,10 @@ from support.experiments import executions, git, passing_review
 from test_journeys import intent_definition
 from test_scoring import definition
 
+from agentagon.capabilities.experiments import baselines, journeys, preparation
+from agentagon.capabilities.experiments.budget import BudgetLedger
+from agentagon.capabilities.experiments.host_bridge import HostBridge
 from agentagon.core.records import AuditError
-from agentagon.experiments import baselines, journeys, preparation
-from agentagon.experiments.budget import BudgetLedger
-from agentagon.experiments.host_bridge import HostBridge
 
 
 def frozen(application, specification):
