@@ -875,15 +875,24 @@ class Application:
                 "measurement_note": "Goal changed during execution. Retained evidence needs an explicit measurement binding.",
             }
         if job["kind"] == "design":
-            saved = self.designs.save(
-                job["project_id"],
-                agent_id,
-                goal_id,
-                {
-                    **result.pop("measurement_design"),
-                    "expected_revision": job["options"]["design_revision"],
-                },
-            )
+            from agentagon.workflows.evaluate.designs import FIELDS
+
+            proposal = result.pop("measurement_design")
+            current = self.designs.get(job["project_id"], agent_id, goal_id)
+            expected_revision = job["options"]["design_revision"]
+            if (
+                current
+                and current["revision"] != expected_revision
+                and all(current.get(key) == proposal.get(key) for key in FIELDS)
+            ):
+                saved = current
+            else:
+                saved = self.designs.save(
+                    job["project_id"],
+                    agent_id,
+                    goal_id,
+                    {**proposal, "expected_revision": expected_revision},
+                )
             return {
                 **result,
                 "design_id": saved["id"],

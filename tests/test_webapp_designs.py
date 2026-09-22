@@ -2,6 +2,7 @@
 
 import copy
 import json
+import threading
 import uuid
 
 import pytest
@@ -12,6 +13,7 @@ from test_webapp_catalog import agent, goal_record
 from test_webapp_jobs import wait_for
 
 from agentagon.core.records import AuditError
+from agentagon.workflows.design.handler import accept as accept_design
 from agentagon.workflows.evaluate.designs import Designs, score_definition, validate
 from agentagon.workflows.service import Application
 
@@ -116,6 +118,38 @@ def test_create_design_can_name_a_future_evaluator_entrypoint(app, tmp_path):
     assert draft["native_plan"]["state"] == "ready"
     assert draft["native_plan"]["entrypoint"] == evaluation["entrypoint"]
     assert draft["native_plan"]["source_files"] == []
+
+
+def test_resumed_design_reuses_a_proposal_saved_by_an_earlier_attempt(app, tmp_path):
+    project_id, agent_id, goal_id = setup(app, tmp_path)
+    draft = app.designs.save(project_id, agent_id, goal_id, proposal())
+    agent_record = app.catalog.agent(project_id, agent_id)
+    goal = app.catalog.goal_record(project_id, agent_id, goal_id)
+    investigation = app.catalog.investigation(
+        project_id, agent_id, goal_id, {"code_scopes": agent_record["code_scopes"]}
+    )
+    job = {
+        "id": "task_" + "d" * 24,
+        "kind": "design",
+        "project_id": project_id,
+        "application_agent_id": agent_id,
+        "goal_id": goal_id,
+        "options": {"design_revision": 0, "investigation_plan": investigation},
+    }
+
+    automatic = app.production.prepare(app.state.workspace(project_id), job, threading.Event())
+    assert automatic is not None
+    state, result, next_action = accept_design(
+        app.state.workspace(project_id), job, json.loads(automatic["text"])
+    )
+    assert state == "completed" and next_action is None
+
+    completed = app.completed_job(app.state.workspace(project_id), job, result)
+
+    assert completed["design_id"] == draft["id"]
+    assert completed["design_revision"] == draft["revision"]
+    assert app.designs.get(project_id, agent_id, goal_id) == draft
+    assert app.catalog.goal_record(project_id, agent_id, goal_id)["revision"] == goal["revision"]
 
 
 def test_stale_writes_scope_and_source_changes_cannot_be_accepted(app, tmp_path):

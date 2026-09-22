@@ -153,6 +153,23 @@ class ProductionRuntime:
         )
 
     def prepare(self, workspace, job, cancelled):
+        if job["kind"] == "design":
+            current = self.app.designs.get(
+                job["project_id"], job["application_agent_id"], job["goal_id"]
+            )
+            if current and current["revision"] != job["options"]["design_revision"]:
+                from agentagon.workflows.evaluate.designs import FIELDS
+
+                return {
+                    "state": "completed",
+                    "text": json.dumps(
+                        {
+                            "summary": "A measurement proposal is already saved and ready for review.",
+                            "measurement_design": {key: current[key] for key in FIELDS},
+                        }
+                    ),
+                }
+            return None
         if job["kind"] not in {"assess", "observe"}:
             return None
         project = job["project_id"]
