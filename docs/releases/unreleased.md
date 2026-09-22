@@ -6,6 +6,6 @@ A run retains its exact goal and measurement revisions, child tasks and shared t
 
 Dashboard and MCP expose the same detection and goal-run operations. Evaluation cases, native evaluator selection, execution profiles and durable drafts remain available. Trace-driven Fix and explicit production monitoring use the shared task runtime.
 
-Obsolete setup components, route aliases, legacy record fallbacks and temporary planning documents have been removed. Fresh application and project state are required; existing private data is not migrated or deleted. Retired public website routes return the branded 404.
+Obsolete setup components, route aliases, legacy record fallbacks and temporary planning documents have been removed. Application metadata now uses version 5 and rejects earlier versions. Fresh application and project state are required; existing private data is not migrated or deleted. Retired public website routes return the branded 404.
 
 Validation results and environment-specific limitations are recorded in the pull request.

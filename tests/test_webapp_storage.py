@@ -84,12 +84,15 @@ def test_fresh_application_database_reuses_built_in_improvement_memory(tmp_path)
     ] == [entry]
 
 
-def test_database_rejects_previous_format_without_migration(registered):
+@pytest.mark.parametrize("previous_version", [1, 2, 3, 4])
+def test_database_rejects_previous_format_without_migration(registered, previous_version):
     state, _ = registered
     with sqlite3.connect(state.path) as connection:
-        connection.execute("PRAGMA user_version = 1")
+        connection.execute(f"PRAGMA user_version = {previous_version}")
+    before = state.path.read_bytes()
     with pytest.raises(AuditError, match="choose a new AGENTAGON_APP_STATE directory"):
         AppState(state.directory)
+    assert state.path.read_bytes() == before
 
 
 def test_concurrent_registration_has_one_opaque_identity(registered):
