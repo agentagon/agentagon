@@ -179,8 +179,7 @@ def test_operation_ids_survive_reload_and_clear_after_confirmed_success():
 
         # Goal Go retains its exact request across reload and rotates after admission.
         goal_url = (
-            "http://agentagon.test/projects/project_alpha/agents/agent_support/"
-            "goals/goal_correctness"
+            "http://127.0.0.1/projects/project_alpha/agents/agent_support/goals/goal_correctness"
         )
         page.goto(goal_url)
         page.get_by_label("Details Optional").fill("Keep retries idempotent.")
@@ -202,7 +201,7 @@ def test_operation_ids_survive_reload_and_clear_after_confirmed_success():
         )
 
         # Assessment: its exact scope and id survive reload, then clear on task receipt.
-        page.goto("http://agentagon.test/projects/project_alpha/onboarding")
+        page.goto("http://127.0.0.1/projects/project_alpha/onboarding")
         page.get_by_text("Analyze code and traces", exact=True).click()
         page.get_by_label("Environment").fill("staging")
         page.get_by_label("Environment").blur()
@@ -227,7 +226,7 @@ def test_operation_ids_survive_reload_and_clear_after_confirmed_success():
         assert _draft(page, "agentagon.operation-draft:project_alpha:assess") is None
 
         # Trace import: edits rotate the payload binding; reload/retry keeps the new id.
-        page.goto("http://agentagon.test/projects/project_alpha/issues")
+        page.goto("http://127.0.0.1/projects/project_alpha/issues")
         trace_input = page.get_by_label("JSON or JSONL")
         trace_input.fill('{"resourceSpans": []}')
         page.wait_for_function(
@@ -267,7 +266,7 @@ def test_trace_preview_response_cannot_reenable_import_after_an_edit():
         page.set_default_timeout(8_000)
         fixture = OperationFixture()
         page.route("**/*", fixture.route)
-        page.goto("http://agentagon.test/projects/project_alpha/issues")
+        page.goto("http://127.0.0.1/projects/project_alpha/issues")
         page.evaluate(
             """() => {
               const nativeFetch = window.fetch.bind(window);
@@ -311,7 +310,7 @@ def test_old_delivery_stays_history_and_does_not_block_current_candidate():
         page.set_default_timeout(8_000)
         fixture = DeliveryFixture()
         page.route("**/*", fixture.route)
-        page.goto("http://agentagon.test/projects/project_alpha/results/optimize/run_choice")
+        page.goto("http://127.0.0.1/projects/project_alpha/results/optimize/run_choice")
 
         page.get_by_role("button", name="Prepare local delivery", exact=True).wait_for()
         assert page.get_by_text("Earlier local packages (1)", exact=True).is_visible()

@@ -648,7 +648,7 @@ def webapp_page():
         page.set_default_timeout(8_000)
         fixture = WorkspaceFixture()
         page.route("**/*", fixture.route)
-        page.goto("http://agentagon.test/")
+        page.goto("http://127.0.0.1/")
         page.get_by_role("heading", name="Support platform").wait_for()
         yield page, fixture
         context.close()
@@ -674,7 +674,7 @@ def test_named_agents_and_project_switch_are_scoped(webapp_page):
 def test_detection_opens_usable_agents_without_an_acceptance_queue(webapp_page):
     page, fixture = webapp_page
     fixture.agents["project_alpha"] = []
-    page.goto("http://agentagon.test/projects/project_alpha/onboarding")
+    page.goto("http://127.0.0.1/projects/project_alpha/onboarding")
     page.get_by_role("heading", name="Find your agents", exact=True).wait_for()
     page.get_by_role("button", name="Detect agents", exact=True).click()
     page.wait_for_url("**/projects/project_alpha/agents")
@@ -693,7 +693,7 @@ def test_detection_opens_usable_agents_without_an_acceptance_queue(webapp_page):
 
 def test_direct_detected_agent_route_opens_its_workspace(webapp_page):
     page, _ = webapp_page
-    page.goto("http://agentagon.test/projects/project_alpha/agents/agent_example/overview")
+    page.goto("http://127.0.0.1/projects/project_alpha/agents/agent_example/overview")
     page.get_by_role("heading", name="Example agent", exact=True).wait_for()
     assert page.get_by_role("button", name="Edit identity", exact=True).is_visible()
     assert page.get_by_role("link", name="Evaluations", exact=True).is_visible()
@@ -722,9 +722,7 @@ def test_go_submits_one_bound_goal_run_and_controls_that_run(webapp_page):
     goal = fixture.goals["agent_support"][0]
     goal["measurement_plan"] = None
     goal["measurement"] = None
-    page.goto(
-        "http://agentagon.test/projects/project_alpha/agents/agent_support/goals/goal_correctness"
-    )
+    page.goto("http://127.0.0.1/projects/project_alpha/agents/agent_support/goals/goal_correctness")
     page.get_by_label("Details Optional").fill("Preserve one ticket per request.")
     page.get_by_role("button", name="Go", exact=True).click()
     page.wait_for_url("**/goals/goal_correctness?run=goalrun_started")
@@ -753,7 +751,7 @@ def test_go_submits_one_bound_goal_run_and_controls_that_run(webapp_page):
 
 def test_task_history_has_stable_urls_and_bound_decisions(webapp_page):
     page, fixture = webapp_page
-    page.goto("http://agentagon.test/projects/project_alpha/tasks/task_decision")
+    page.goto("http://127.0.0.1/projects/project_alpha/tasks/task_decision")
     panel = page.get_by_role("complementary", name="Task details")
     panel.get_by_text("Choose the candidate to prepare for delivery.").wait_for()
     panel.get_by_label("Response").fill("Use the safer verified candidate.")
@@ -801,7 +799,7 @@ def test_task_approvals_send_an_explicit_decision(webapp_page):
         "kind": "approval",
         "text": "Approve the proposed command?",
     }
-    page.goto("http://agentagon.test/projects/project_alpha/tasks/task_decision")
+    page.goto("http://127.0.0.1/projects/project_alpha/tasks/task_decision")
     panel = page.get_by_role("complementary", name="Task details")
     panel.get_by_role("button", name="Approve").click()
     page.wait_for_timeout(50)
@@ -857,12 +855,12 @@ def test_mobile_navigation_and_task_panel_are_full_width(webapp_page):
 
 def test_issue_triage_controls_send_current_revision_and_refresh_projection(webapp_page):
     page, fixture = webapp_page
-    page.goto("http://agentagon.test/projects/project_alpha/issues/issue_missing_citation")
+    page.goto("http://127.0.0.1/projects/project_alpha/issues/issue_missing_citation")
     page.get_by_role("heading", name="Missing citation").wait_for()
 
-    page.get_by_label("Confirmed agent").select_option("agent_support")
-    page.get_by_role("button", name="Assign agent").click()
     triage = page.locator(".issue-triage")
+    triage.get_by_role("combobox").select_option("agent_support")
+    page.get_by_role("button", name="Assign agent").click()
     triage.get_by_text("Support agent", exact=True).wait_for()
 
     triage.get_by_role("textbox", name="Expected behavior").fill(
@@ -909,7 +907,7 @@ def test_new_user_sees_project_onboarding():
         fixture = WorkspaceFixture()
         fixture.projects = []
         page.route("**/*", fixture.route)
-        page.goto("http://agentagon.test/")
+        page.goto("http://127.0.0.1/")
         page.get_by_role("heading", name="Recursive self-improvement for AI agents.").wait_for()
         page.get_by_role("button", name="Open local folder").click()
         page.get_by_role("dialog").get_by_label("Local folder path").fill("/projects/new")

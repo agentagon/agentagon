@@ -198,6 +198,16 @@ class GoalRuns:
             }
         )
 
+    def _bindings_match(self, run):
+        project_id = run["project_id"]
+        if self._binding(project_id, run["agent_id"], run["goal_id"]) != run["intent_binding"]:
+            return False
+        focus = run.get("focus")
+        return (
+            not focus
+            or self._binding(project_id, focus["agent_id"], focus["goal_id"]) == focus["binding"]
+        )
+
     def start(self, project_id, agent_id, goal_id, payload):
         request = _request(payload)
         binding = digest({"agent_id": agent_id, "goal_id": goal_id, "request": request})
@@ -764,10 +774,7 @@ class GoalRuns:
                 self.live.discard((project_id, run["id"]))
                 return
             self._save(run)
-        if self._binding(project_id, run["agent_id"], run["goal_id"]) != run["intent_binding"] or (
-            run.get("focus")
-            and self._binding(project_id, agent_id, goal_id) != run["focus"]["binding"]
-        ):
+        if not self._bindings_match(run):
             self._blocked(
                 run,
                 "The agent scope or goal changed. Start a new run for the changed goal.",
@@ -1046,6 +1053,15 @@ class GoalRuns:
                 else None
             )
             if action == "resume":
+                if not self._bindings_match(run):
+                    run["receipts"][operation] = action
+                    self._blocked(
+                        run,
+                        "The agent scope or goal changed. Start a new run for the changed goal.",
+                        code="goal_changed",
+                        state="failed",
+                    )
+                    return self._public(run)
                 if child and child["recovery"]["resume_allowed"]:
                     if run["state"] == "failed":
                         target = self._target(run)
@@ -1078,21 +1094,28 @@ class GoalRuns:
                         goal_run_id=run_id,
                     )
                 run.update(state="running", summary="Continuing the saved work.", requirements=[])
-                self.live.add((project_id, run_id))
             else:
+                if child:
+                    # Application and task controls share this condition. Reconcile
+                    # the child, then persist the parent before changing its live
+                    # membership; failed controls must leave it available to retry.
+                    child = self.app.runtime.get(project_id, child["id"])
+                    if action in child["available_actions"]:
+                        self.app.runtime.control(
+                            project_id, child["id"], action, {"operation_id": operation}
+                        )
                 run.update(
                     state="paused" if action == "pause" else "cancelled",
                     summary="Paused. Resume when ready."
                     if action == "pause"
                     else "Stopped. Saved evidence is retained.",
                 )
-                self.live.discard((project_id, run_id))
-                if child and action in child["available_actions"]:
-                    self.app.runtime.control(
-                        project_id, child["id"], action, {"operation_id": operation}
-                    )
             run["receipts"][operation] = action
             self._save(run)
+            if action == "resume":
+                self.live.add((project_id, run_id))
+            else:
+                self.live.discard((project_id, run_id))
             self.app.lock.notify_all()
             return self._public(run)
 
