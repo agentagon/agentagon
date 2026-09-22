@@ -128,13 +128,21 @@ def test_assessment_is_idempotent_async_and_retains_partial_progress(app):
     assert instance.production.onboarding(project)["state"] == "complete"
     assert saved["result"]["limitations"]
     assert [candidate["name"] for candidate in saved["result"]["candidates"]] == ["Research"]
-    suggestion = instance.project_agents(project)["suggestions"][0]
-    assert suggestion["name"] == "Research"
-    assert suggestion["responsibility_inference"]["state"] == "pending"
+    discovered = next(
+        agent for agent in instance.project_agents(project)["agents"] if agent["name"] == "Research"
+    )
+    assert discovered["status"] == "confirmed"
+    assert discovered["code_scopes"] == ["research.py"]
+    assert discovered["responsibility_inference"]["state"] == "not_inferred"
     assert "retained" in saved["result"]["summary"].lower()
     assert instance.submit_task(project, payload)["task_id"] == task["task_id"]
     assert all(t["kind"] == "assess" for t in instance.runtime.list(project))
-    assert any(r["basis"] == "not_measured" for r in instance.production.recommendations(project))
+    assert instance.production.recommendations(project) == []
+    assert {item["category"] for item in instance.production.action_templates()} == {
+        "latency",
+        "reliability",
+        "cost",
+    }
 
 
 def test_assessment_starts_after_local_application_state_is_recreated(tmp_path):
@@ -217,11 +225,39 @@ def test_assessment_blocks_an_unavailable_selected_trace_connection_but_allows_c
 
 def test_recommendation_disposition_applies_only_to_the_reviewed_evidence(app):
     instance, project, agent = app
+    assert instance.production.recommendations(project) == []
+    observation = {
+        "id": "observation_" + "d" * 24,
+        "agent_id": agent["id"],
+        "monitor_id": "monitor_" + "e" * 24,
+        "window": {"from": "2026-09-20T00:00:00Z", "to": "2026-09-21T00:00:00Z"},
+        "evidence": instance.state.workspace(project).artifact({"trace_ids": ["a" * 32]}),
+        "metrics": [
+            {
+                "name": "latency_ms",
+                "definition": {"metric": "latency_ms", "accepted": True},
+                "status": "insufficient_evidence",
+                "current": 250,
+                "count": 12,
+                "coverage": 0.8,
+            }
+        ],
+    }
+    observation = instance.state.db.put_record(
+        project, "observations", observation["id"], observation
+    )
+    assert instance.production.recommendations(project) == []
+    observation["metrics"][0]["status"] = "regressed"
+    observation = instance.state.db.put_record(
+        project, "observations", observation["id"], observation
+    )
     recommendation = next(
         item
         for item in instance.production.recommendations(project)
         if item.get("agent_id") == agent["id"] and item.get("category") == "latency"
     )
+    assert recommendation["basis"] == "production_regression"
+    assert recommendation["evidence"] == [observation["evidence"], observation["id"]]
 
     saved = instance.production.disposition_recommendation(
         project,
@@ -246,34 +282,11 @@ def test_recommendation_disposition_applies_only_to_the_reviewed_evidence(app):
         "revision": 1,
     }
 
-    instance.production.save_onboarding(
-        project,
-        {
-            "state": "ready",
-            "scope": {},
-        },
-    )
-    setup = instance.production.onboarding(project)
-    instance.state.db.put_record(
-        project,
-        "onboarding",
-        "setup",
-        {
-            **setup,
-            "agent_measurements": {
-                agent["id"]: [
-                    {
-                        "metric": "latency_ms",
-                        "value": 250,
-                        "count": 12,
-                        "coverage": 0.8,
-                        "source": "assessment:new-evidence",
-                    }
-                ]
-            },
-        },
-        expected_revision=setup["revision"],
-    )
+    observation["id"] = "observation_" + "f" * 24
+    observation.pop("revision")
+    observation.pop("created_at")
+    observation["metrics"][0].update(current=300, count=20)
+    instance.state.db.put_record(project, "observations", observation["id"], observation)
     refreshed = next(
         item
         for item in instance.production.recommendations(project)
@@ -656,12 +669,11 @@ def test_real_browser_onboarding_and_monitor_controls(app):
         page.on("pageerror", lambda error: errors.append(str(error)))
         origin = f"http://127.0.0.1:{server.server_port}"
         page.goto(f"{origin}/projects/{project}/onboarding")
-        page.get_by_role("heading", name="Start with repo", exact=True).wait_for()
-        page.get_by_role("button", name="Analyze project", exact=True).click()
-        page.wait_for_url("**/tasks/task_*")
-        page.get_by_text(
-            "Configure and authenticate the coding backend", exact=False
-        ).first.wait_for()
+        page.get_by_role("heading", name="Find your agents", exact=True).wait_for()
+        page.get_by_role("button", name="Detect agents", exact=True).click()
+        page.wait_for_url("**/agents")
+        page.get_by_role("heading", name="Agents", exact=True).wait_for()
+        assert instance.runtime.list(project) == []
         page.goto(f"{origin}/projects/{project}/agents/{agent['id']}/production")
         page.get_by_role("button", name="Enable monitoring", exact=True).click()
         page.get_by_label("Diagnose new evidence at most daily", exact=False).uncheck()
@@ -1025,7 +1037,7 @@ def test_recurrence_requires_explicit_review_and_invalidates_changed_evidence(ap
     assert third["count"] == 0 and third["status"] == "insufficient_evidence"
 
 
-def test_assessment_routes_issues_using_unique_trace_identity_without_confirming_ownership(
+def test_assessment_routes_issues_to_active_trace_identity_without_inventing_code_ownership(
     app, monkeypatch
 ):
     instance, project, agent = app
@@ -1084,7 +1096,8 @@ def test_assessment_routes_issues_using_unique_trace_identity_without_confirming
     assert result["state"] == "completed", result
     issue = instance.state.db.list_records(project, "issues")[0]
     owner = instance.catalog.agent(project, issue["agent_id"])
-    assert owner["status"] == "suggested" and not owner["code_scopes"]
+    assert owner["status"] == "confirmed" and not owner["code_scopes"]
+    assert instance.catalog.agent(project, agent["id"])["status"] == "archived"
     assert instance.production.recommendations(project)[0]["agent_id"] == owner["id"]
     assert all(task["kind"] == "assess" for task in instance.runtime.list(project))
 

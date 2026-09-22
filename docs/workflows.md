@@ -10,4 +10,4 @@ The runtime owns one task contract and durable lifecycle for every workflow. Man
 
 ## Production feedback
 
-**Assess project** scans bounded code and selected traces, proposes agent bindings, discovers issues, and recommends next actions. **Observe production** acquires a saved monitor window, measures accepted criteria, and optionally diagnoses new evidence. Both use ordinary tasks; neither starts repairs. See the [production guide](production.md) for limits, comparison rules and scheduling.
+**Assess project** scans bounded code and selected traces, activates detected agent bindings, discovers issues, and recommends next actions. **Observe production** acquires a saved monitor window, measures accepted criteria, and optionally diagnoses new evidence. Both use ordinary tasks; neither starts repairs. See the [production guide](production.md) for limits, comparison rules and scheduling.

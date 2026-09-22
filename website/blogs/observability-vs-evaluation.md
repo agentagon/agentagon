@@ -4,7 +4,6 @@ description: Traces record what happened. Evaluations test expectations. Improvi
 author: Gursharan Singh
 published_at: 2026-08-31
 updated_at: 2026-09-10
-original_url: /guides/observability-vs-evaluation/
 ---
 
 Observability and evaluation answer different questions. Observability records what happened in a running system. Evaluation tests whether a defined expectation was met on a selected case or sample.

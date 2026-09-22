@@ -309,10 +309,6 @@ def _project_monitor(application, project, monitor, observations, at):
     latest_coverage = _coverage_summary(latest, monitor)
     task = _task_evidence(application, project, monitor)
     projected = copy.deepcopy(monitor)
-    # Keep this legacy boolean for existing consumers.  The richer public state
-    # uses an overdue grace period and does not equate missing evidence with health.
-    due = _time(monitor.get("next_due"))
-    projected["stale"] = not monitor.get("last_checked") or (due is None or (_time(at) or -1) > due)
     projected.update(
         public_state=_public_state(monitor, task, coverage, at),
         current_check=task,

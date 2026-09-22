@@ -106,26 +106,10 @@ def create_mcp(client=None):
         return request("GET", path(project_id, "agents"))
 
     @server.tool()
-    def discover_agents(project_id: str, operation_id: str) -> dict:
-        """Suggest application agents from project code and configured traces."""
-        return request(
-            "POST", path(project_id, "agents", "discover"), {"operation_id": operation_id}
-        )
-
-    @server.tool()
     def save_agent(project_id: str, binding: dict, agent_id: str | None = None) -> dict:
         """Confirm or update an explicit application-agent code/trace binding."""
         return request(
             "POST", path(project_id, "agents", *([agent_id] if agent_id else [])), binding
-        )
-
-    @server.tool()
-    def confirm_suggested_agent(project_id: str, agent_id: str, expected_revision: int) -> dict:
-        """Confirm the exact retained scope of a displayed suggested identity."""
-        return request(
-            "POST",
-            path(project_id, "agents", agent_id, "confirm"),
-            {"expected_revision": expected_revision},
         )
 
     @server.tool()
@@ -152,6 +136,78 @@ def create_mcp(client=None):
     def list_workflows() -> dict:
         """List built-in workflow definitions and requirements."""
         return request("GET", "/api/workflows")
+
+    @server.tool()
+    def inspect_execution_profiles(project_id: str) -> dict:
+        """Inspect effective execution profiles and their settings revision without connecting."""
+        return request("GET", path(project_id, "settings"))
+
+    @server.tool()
+    def save_execution_profile(
+        project_id: str, name: str, profile: dict, expected_revision: str
+    ) -> dict:
+        """Validate and save a project runner profile. Does not execute commands or connect.
+
+        Profile credentials are environment-variable references only. Existing runs
+        retain their frozen configuration. Use the displayed settings revision.
+        """
+        return request(
+            "POST",
+            path(project_id, "settings"),
+            {
+                "scope": "project",
+                "profile_name": name,
+                "profile": profile,
+                "expected_revision": expected_revision,
+            },
+        )
+
+    @server.tool()
+    def inspect_evaluation_design(project_id: str, agent_id: str, goal_id: str) -> dict:
+        """Inspect a draft, discovered native evaluators, frozen evaluators and datasets.
+
+        Source inspection does not import application code or execute evaluators.
+        """
+        return request("GET", path(project_id, "agents", agent_id, "goals", goal_id, "design"))
+
+    @server.tool()
+    def save_evaluation_design(project_id: str, agent_id: str, goal_id: str, draft: dict) -> dict:
+        """Save a revision-bound evaluation draft without accepting or running it.
+
+        Preserve required behaviors and scoring. Frozen reuse cannot substitute
+        another dataset, command or scorer; those changes require a new evaluator.
+        """
+        return request(
+            "POST", path(project_id, "agents", agent_id, "goals", goal_id, "design"), draft
+        )
+
+    @server.tool()
+    def attach_evaluation_cases(
+        project_id: str,
+        agent_id: str,
+        goal_id: str,
+        dataset_snapshot_id: str,
+        operation_id: str,
+        expected_revision: int,
+        expected_cases_revision: int,
+    ) -> dict:
+        """Attach saved reviewed cases to a goal without accepting or running an evaluation.
+
+        Inspect the evaluation design first for draft and attached_cases revisions,
+        using zero when absent. Repeat an identical operation ID to retrieve its
+        receipt. Existing cases are retained; frozen reuse becomes a new draft.
+        A goal without a draft retains its cases for the later measurement design.
+        """
+        return request(
+            "POST",
+            path(project_id, "agents", agent_id, "goals", goal_id, "design", "cases"),
+            {
+                "dataset_snapshot_id": dataset_snapshot_id,
+                "operation_id": operation_id,
+                "expected_revision": expected_revision,
+                "expected_cases_revision": expected_cases_revision,
+            },
+        )
 
     @server.tool()
     def list_goals(project_id: str, agent_id: str) -> dict:
@@ -215,6 +271,88 @@ def create_mcp(client=None):
             "POST",
             path(project_id, "traces", snapshot_id, "select"),
             {"trace_id": trace_id},
+        )
+
+    @server.tool()
+    def detect_agents(
+        project_id: str, operation_id: str, snapshot_ids: list[str] | None = None
+    ) -> dict:
+        """Discover and activate named local agents without model or provider calls. Optional snapshot_ids must name already retained evidence."""
+        return request(
+            "POST",
+            path(project_id, "agents", "detect"),
+            {
+                "operation_id": operation_id,
+                "snapshot_ids": snapshot_ids or [],
+            },
+        )
+
+    @server.tool()
+    def start_goal_run(
+        project_id: str,
+        agent_id: str,
+        goal_id: str,
+        operation_id: str,
+        details: str = "",
+        profile: str | None = None,
+        max_elapsed_seconds: int | None = None,
+        max_trials: int | None = None,
+    ) -> dict:
+        """Go: automatically design/accept measurements, prepare evaluation, baseline and optimize. Reuses valid evidence and the active goal run. Defaults are 30 minutes/30 trials, bounded by configured settings. Authorizes inferred-plan acceptance and local execution defaults, never publishing or deployment. Ask only for genuinely missing input; inspect active_task_id for shared questions. Retry the same operation and inputs."""
+        body = {"operation_id": operation_id, "details": details}
+        body.update(
+            {
+                key: value
+                for key, value in {
+                    "profile": profile,
+                    "max_elapsed_seconds": max_elapsed_seconds,
+                    "max_trials": max_trials,
+                }.items()
+                if value is not None
+            }
+        )
+        return request("POST", path(project_id, "agents", agent_id, "goals", goal_id, "runs"), body)
+
+    @server.tool()
+    def list_goal_runs(project_id: str, agent_id: str, goal_id: str) -> dict:
+        """Read saved goal progress; does not start work or reconnect execution."""
+        return request("GET", path(project_id, "agents", agent_id, "goals", goal_id, "runs"))
+
+    @server.tool()
+    def inspect_goal_run(project_id: str, run_id: str) -> dict:
+        """Read goal state, active task, required inputs, allowance and verified outcome reference."""
+        return request("GET", path(project_id, "goal-runs", run_id))
+
+    @server.tool()
+    def control_goal_run(project_id: str, run_id: str, action: str, operation_id: str) -> dict:
+        """Pause, resume or cancel the same goal run. Resume preserves uncertain child identities and the overall allowance."""
+        if action not in {"pause", "resume", "cancel"}:
+            raise AuditError("choose pause, resume or cancel")
+        return request(
+            "POST", path(project_id, "goal-runs", run_id, action), {"operation_id": operation_id}
+        )
+
+    @server.tool()
+    def inspect_workflow_draft(project_id: str, key: str) -> dict:
+        """Read a private workflow form draft and revision; no preparation or execution."""
+        return request("GET", path(project_id, "drafts", key))
+
+    @server.tool()
+    def save_workflow_draft(project_id: str, key: str, expected_revision: int, draft: dict) -> dict:
+        """Save a <=16KB local draft. key is the dashboard's draft-key operation binding (length:hex:hex). draft requires workflow, operationId UUID and operationBinding; optional fields are agentId, goalId, problem, expected, helpDefine, traceId (snapshot reference), profile. Incomplete forms are allowed. Any changed content needs a fresh operationId. Start at revision 0; stale saves conflict. Do not include raw traces or credentials; text fields are stored as entered."""
+        return request(
+            "POST",
+            path(project_id, "drafts", key),
+            {"expected_revision": expected_revision, "draft": draft},
+        )
+
+    @server.tool()
+    def clear_workflow_draft(project_id: str, key: str, expected_revision: int) -> dict:
+        """Clear an accepted or discarded form at its displayed revision; preserve concurrent edits."""
+        return request(
+            "POST",
+            path(project_id, "drafts", key, "clear"),
+            {"expected_revision": expected_revision},
         )
 
     @server.tool()
@@ -326,6 +464,25 @@ def create_mcp(client=None):
         return request("GET", path(project_id, "tasks", task_id))
 
     @server.tool()
+    def continue_assessment(
+        project_id: str, task_id: str, operation_id: str, max_elapsed_seconds: int
+    ) -> dict:
+        """Start a linked assessment attempt with explicit new seconds after inspecting recovery.
+
+        operation_id must be a UUID. Retry an uncertain request with exactly the same
+        UUID and payload. Original consumption and retained evidence remain unchanged;
+        current source/scope readiness is checked before starting the new attempt.
+        """
+        return request(
+            "POST",
+            path(project_id, "tasks", task_id, "continue"),
+            {
+                "operation_id": operation_id,
+                "max_elapsed_seconds": max_elapsed_seconds,
+            },
+        )
+
+    @server.tool()
     def inspect_result(project_id: str, workflow: str, result_id: str) -> dict:
         """Inspect a typed workflow result, its evidence-backed alternatives, and permitted actions."""
         return request("GET", path(project_id, "results", workflow, result_id))
@@ -379,9 +536,9 @@ def create_mcp(client=None):
 
     @server.tool()
     def control_task(project_id: str, task_id: str, action: str, response: dict) -> dict:
-        """Answer, pause, cancel, resume, or retry failed lesson recording. Supply an operation_id and the inspected question_id for answers."""
-        if action not in {"answer", "pause", "cancel", "resume", "retry-memory"}:
-            raise AuditError("choose answer, pause, cancel, resume, or retry-memory")
+        """Answer, pause, cancel, resume, send guidance, or retry failed lesson recording. Supply operation_id; answers also need the inspected question_id, and message needs a message string."""
+        if action not in {"answer", "pause", "cancel", "resume", "message", "retry-memory"}:
+            raise AuditError("choose answer, pause, cancel, resume, message, or retry-memory")
         return request("POST", path(project_id, "tasks", task_id, action), response)
 
     @server.tool()

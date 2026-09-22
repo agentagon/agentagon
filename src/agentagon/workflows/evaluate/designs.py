@@ -25,11 +25,8 @@ def _strings(value, label):
 
 
 def _background(value):
-    """Normalize legacy text while storing new measurement context as observations."""
-    if isinstance(value, str):
-        observations = [value] if value.strip() else []
-    else:
-        observations = _strings(value, "background")
+    """Validate measurement context as bounded observations."""
+    observations = _strings(value, "background")
     if len(json.dumps(observations, ensure_ascii=False).encode()) > 64_000:
         raise AuditError("background must be within 64 KB")
     return observations
@@ -135,6 +132,10 @@ class Designs:
         key = self._identity(project_id, agent_id, goal_id)
         return self.state.db.get_record(project_id, "measurement_designs", key)
 
+    def attached_cases(self, project_id, agent_id, goal_id):
+        key = self._identity(project_id, agent_id, goal_id)
+        return self.state.db.get_record(project_id, "measurement_cases", key)
+
     def accepted(self, project_id, agent_id, goal_id):
         goal_record = self.catalog.goal_record(project_id, agent_id, goal_id)
         key = goal_record.get("accepted_design_id")
@@ -154,8 +155,24 @@ class Designs:
         if type(revision) is not int or revision < 0:
             raise AuditError("provide the measurement design revision")
         value = validate({k: v for k, v in payload.items() if k != "expected_revision"})
+        cases = self.attached_cases(project_id, agent_id, goal_id)
+        record = self._prepare(project_id, agent_id, goal_id, value, cases)
+        with self.state.db.transaction() as tx:
+            current = tx.get_record(project_id, "measurement_cases", key)
+            if (current or {}).get("revision", 0) != (cases or {}).get("revision", 0):
+                raise AuditError("Attached cases changed. Reload before saving the design.")
+            return tx.put_record(
+                project_id, "measurement_designs", key, record, expected_revision=revision
+            )
+
+    def _prepare(self, project_id, agent_id, goal_id, value, cases):
+        key = self._identity(project_id, agent_id, goal_id)
+        value = copy.deepcopy(value)
         workspace = self.state.workspace(project_id)
         evaluation = value["evaluation"]
+        if cases and not evaluation.get("evaluation_id"):
+            evaluation.setdefault("dataset_snapshot_id", cases["dataset_snapshot_id"])
+            self._contains_cases(workspace, evaluation["dataset_snapshot_id"], cases)
         if evaluation.get("dataset_snapshot_id"):
             from agentagon.capabilities.evaluation.datasets import assert_development
 
@@ -175,6 +192,8 @@ class Designs:
             record = preparation.load(workspace, evaluation["evaluation_id"])
             if record["state"] != "frozen":
                 raise AuditError("select a frozen evaluator or create an evaluation")
+            if cases:
+                self._frozen_contains_cases(workspace, record, cases["dataset_snapshot_id"])
             spec = record["package"]["spec"]
             expected = {k: spec.get("scoring", {}).get(k) for k in score_definition(value)}
             if expected != score_definition(value):
@@ -200,10 +219,221 @@ class Designs:
             "state": "draft",
             "binding_digest": agent["binding_digest"],
             "native_plan": native_plan,
+            "required_frozen_evaluations": (cases or {}).get("required_frozen_evaluations", []),
+            "required_case_snapshot_id": (cases or {}).get("dataset_snapshot_id"),
         }
-        return self.state.db.put_record(
-            project_id, "measurement_designs", key, record, expected_revision=revision
+        if cases and evaluation.get("evaluation_id"):
+            self.validate_evaluator(workspace, record, evaluation["evaluation_id"])
+        return record
+
+    @staticmethod
+    def _contains_cases(workspace, snapshot_id, cases):
+        from agentagon.capabilities.evaluation.datasets import assert_development
+
+        required = snapshots.load(workspace, cases["dataset_snapshot_id"])
+        assert_development(workspace, required)
+        selected = snapshots.load(workspace, snapshot_id)
+        rows = {item["id"]: digest(item) for item in selected["items"]}
+        if any(rows.get(item["id"]) != digest(item) for item in required["items"]):
+            raise AuditError(
+                "The selected dataset drops or changes attached cases. Use the attached "
+                "dataset or a combined dataset that retains every reviewed case."
+            )
+
+    @staticmethod
+    def _frozen_contains_cases(workspace, record, snapshot_id):
+        """Reuse is possible only when a frozen private input already contains the cases."""
+        from agentagon.capabilities.evaluation.datasets import assert_development
+
+        required = snapshots.load(workspace, snapshot_id)
+        assert_development(workspace, required)
+        required_rows = {item["id"]: digest(item) for item in required["items"]}
+        package = record["package"]
+        for entry in package["files"]:
+            if (
+                entry["kind"] != "inputs"
+                or entry.get("deleted")
+                or not re.fullmatch(r"agentagon-private/snapshot_[a-f0-9]{24}\.json", entry["path"])
+                or {"path": entry["path"], "source": entry["artifact"]}
+                not in package["spec"]["inputs"]
+            ):
+                continue
+            content = workspace.read_blob(entry["artifact"])
+            if hashlib.sha256(content).hexdigest() != entry["digest"]:
+                raise AuditError("Frozen dataset input checksum changed.")
+            selected = snapshots.load(workspace, entry["path"].rsplit("/", 1)[1][:-5])
+            assert_development(workspace, selected)
+            try:
+                payload = json.loads(content)
+            except (ValueError, UnicodeError):
+                raise AuditError("Frozen dataset input is not a reviewed snapshot.") from None
+            if digest(payload) != digest(snapshots.input_payload(selected)):
+                raise AuditError("Frozen dataset input differs from its reviewed snapshot.")
+            selected_rows = {item["id"]: digest(item) for item in selected["items"]}
+            if all(selected_rows.get(key) == value for key, value in required_rows.items()):
+                return
+        raise AuditError(
+            "This frozen evaluator does not contain every attached case. Choose Create "
+            "evaluation, or select a frozen evaluator that retains the reviewed cases."
         )
+
+    @staticmethod
+    def _combine_cases(workspace, records):
+        from agentagon.capabilities.evaluation.datasets import assert_development
+
+        sources, rows = {}, {}
+        for record in records:
+            assert_development(workspace, record)
+            sources[record["id"]] = {"id": record["id"], "digest": record["digest"]}
+            for item in record["items"]:
+                if item["id"] in rows and digest(rows[item["id"]]) != digest(item):
+                    raise AuditError("Datasets contain conflicting case IDs; review them first.")
+                rows[item["id"]] = item
+        if len(sources) == 1:
+            return records[0]
+        return snapshots.save(
+            workspace,
+            workspace.project_id,
+            {
+                "kind": "dataset",
+                "connection_id": None,
+                "selection": {"dataset_id": "Evaluation cases"},
+                "items": [rows[key] for key in sorted(rows)],
+                "provenance": {
+                    "derivation": "attached_evaluation_cases",
+                    "source_datasets": [sources[key] for key in sorted(sources)],
+                    "dataset_partition": "development",
+                    "observed_outputs_are_expectations": False,
+                },
+                "completeness": {"complete": True, "limitations": []},
+            },
+        )
+
+    def attach_cases(self, project_id, agent_id, goal_id, payload):
+        """Retain reviewed cases atomically without accepting or running an evaluation."""
+        from agentagon.capabilities.evaluation.datasets import assert_development_evaluator
+        from agentagon.capabilities.experiments import preparation
+        from agentagon.workflows.runtime import operation_id
+
+        if not isinstance(payload, dict) or set(payload) != {
+            "dataset_snapshot_id",
+            "operation_id",
+            "expected_revision",
+            "expected_cases_revision",
+        }:
+            raise AuditError("Provide the case dataset, operation ID and both current revisions.")
+        for field in ("expected_revision", "expected_cases_revision"):
+            if type(payload[field]) is not int or payload[field] < 0:
+                raise AuditError("Provide nonnegative design and attached-case revisions.")
+        key = self._identity(project_id, agent_id, goal_id)
+        op = operation_id(payload["operation_id"])
+        receipt_id = "caseattachment_" + digest({"operation_id": op})[:24]
+        request_digest = digest({"agent_id": agent_id, "goal_id": goal_id, **payload})
+        prior = self.state.db.get_record(project_id, "case_attachments", receipt_id)
+        if prior:
+            if prior["request_digest"] != request_digest:
+                raise AuditError("operation_id already belongs to another case attachment")
+            return prior["result"]
+        workspace = self.state.workspace(project_id)
+        source = snapshots.load(workspace, payload["dataset_snapshot_id"])
+        if (
+            source["kind"] != "dataset"
+            or source["provenance"].get("expectation_status") != "reviewed"
+            or not source["items"]
+            or snapshots.summary(source)["missing_expectations"]
+        ):
+            raise AuditError("Select a saved case with a reviewed expected behavior.")
+        draft = self.get(project_id, agent_id, goal_id)
+        cases = self.attached_cases(project_id, agent_id, goal_id)
+        if (draft or {}).get("revision", 0) != payload["expected_revision"] or (cases or {}).get(
+            "revision", 0
+        ) != payload["expected_cases_revision"]:
+            raise AuditError("Evaluation or attached cases changed. Reload before attaching.")
+        records = [source]
+        if cases:
+            records.append(snapshots.load(workspace, cases["dataset_snapshot_id"]))
+        parents = copy.deepcopy((cases or {}).get("required_frozen_evaluations", []))
+        limitations = []
+        value = {field: copy.deepcopy(draft[field]) for field in FIELDS} if draft else None
+        if value:
+            evaluation = value["evaluation"]
+            if evaluation.get("dataset_snapshot_id"):
+                records.append(snapshots.load(workspace, evaluation["dataset_snapshot_id"]))
+            if evaluation.get("evaluation_id"):
+                evaluation_id = evaluation["evaluation_id"]
+                assert_development_evaluator(workspace, evaluation_id)
+                frozen = preparation.load(workspace, evaluation_id)
+                if frozen["state"] != "frozen":
+                    raise AuditError("The source evaluator is no longer frozen.")
+                parent = {
+                    "evaluation_id": evaluation_id,
+                    "evaluator_digest": preparation.evaluator_identity(workspace, evaluation_id),
+                }
+                if parent not in parents:
+                    parents.append(parent)
+                # Unknown native input formats cannot be safely rewritten. Preserve every
+                # frozen input in the next evaluator and supply reviewed cases separately.
+                value["evaluation"] = {"mode": "create", "framework": "custom"}
+                limitations.append(
+                    "Create a new evaluator that retains all inputs from "
+                    + evaluation_id
+                    + " and includes the attached cases. Review its command and scorer."
+                )
+        combined = self._combine_cases(workspace, records)
+        seed = {
+            "id": key,
+            "agent_id": agent_id,
+            "goal_id": goal_id,
+            "dataset_snapshot_id": combined["id"],
+            "dataset_digest": combined["digest"],
+            "case_count": len(combined["items"]),
+            "required_frozen_evaluations": parents,
+            "limitations": list(dict.fromkeys((cases or {}).get("limitations", []) + limitations)),
+        }
+        updated = None
+        if value:
+            value["evaluation"]["dataset_snapshot_id"] = combined["id"]
+            value["limitations"] = list(dict.fromkeys(value["limitations"] + limitations))
+            updated = self._prepare(project_id, agent_id, goal_id, validate(value), seed)
+            updated["previous_design_revision"] = draft["revision"]
+        with self.state.db.transaction() as tx:
+            receipt = tx.get_record(project_id, "case_attachments", receipt_id)
+            if receipt:
+                if receipt["request_digest"] != request_digest:
+                    raise AuditError("operation_id already belongs to another case attachment")
+                return receipt["result"]
+            current = tx.get_record(project_id, "measurement_designs", key)
+            if (current or {}).get("revision", 0) != payload["expected_revision"]:
+                raise AuditError("Evaluation changed. Reload before attaching cases.")
+            saved = tx.put_record(
+                project_id,
+                "measurement_cases",
+                key,
+                seed,
+                expected_revision=payload["expected_cases_revision"],
+            )
+            if updated:
+                updated = tx.put_record(
+                    project_id,
+                    "measurement_designs",
+                    key,
+                    updated,
+                    expected_revision=payload["expected_revision"],
+                )
+            result = {
+                **saved,
+                "design_revision": (updated or {}).get("revision", 0),
+                "state": "draft_updated" if updated else "cases_saved",
+                "operation_id": op,
+            }
+            tx.put_record(
+                project_id,
+                "case_attachments",
+                receipt_id,
+                {"id": receipt_id, "request_digest": request_digest, "result": result},
+                expected_revision=0,
+            )
+            return result
 
     def accept(self, project_id, agent_id, goal_id, payload):
         if (
@@ -276,9 +506,40 @@ class Designs:
             raise AuditError("The accepted measurement requires a reviewed frozen evaluator.")
         package = record["package"]
         spec = package["spec"]
+        if accepted.get("required_case_snapshot_id"):
+            Designs._frozen_contains_cases(workspace, record, accepted["required_case_snapshot_id"])
         expected = score_definition(accepted)
         if any(spec.get("scoring", {}).get(key) != value for key, value in expected.items()):
             raise AuditError("Evaluator scoring differs from the accepted measurement design.")
+        for parent in accepted.get("required_frozen_evaluations", []):
+            from agentagon.capabilities.evaluation.datasets import assert_development_evaluator
+
+            assert_development_evaluator(workspace, parent["evaluation_id"])
+            if (
+                preparation.evaluator_identity(workspace, parent["evaluation_id"])
+                != parent["evaluator_digest"]
+            ):
+                raise AuditError("The source frozen evaluator identity changed.")
+            original = preparation.load(workspace, parent["evaluation_id"])
+            inputs = {
+                item["path"]: item
+                for item in package["files"]
+                if item["kind"] == "inputs" and not item.get("deleted")
+            }
+            for item in original["package"]["files"]:
+                if item["kind"] != "inputs" or item.get("deleted"):
+                    continue
+                retained = inputs.get(item["path"])
+                if (
+                    not retained
+                    or retained["digest"] != item["digest"]
+                    or {"path": item["path"], "source": retained["artifact"]} not in spec["inputs"]
+                    or hashlib.sha256(workspace.read_blob(retained["artifact"])).hexdigest()
+                    != item["digest"]
+                ):
+                    raise AuditError(
+                        "The new evaluator must retain every original frozen input: " + item["path"]
+                    )
         plan = accepted["native_plan"]
         if not plan.get("evaluation_id") and record["created_at"] < accepted["accepted_at"]:
             raise AuditError(
@@ -331,6 +592,7 @@ class Designs:
                 "scoring": score_definition(accepted),
                 "evidence": accepted["evidence"],
                 "limitations": accepted["limitations"],
+                "required_frozen_evaluations": accepted.get("required_frozen_evaluations", []),
                 "context": "\n\n".join(accepted["background"]),
             },
             ensure_ascii=False,

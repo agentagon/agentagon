@@ -15,6 +15,7 @@ import pytest
 from agentagon.capabilities.experiments import optimize_run
 from agentagon.core.records import AuditError, digest, load_json, now
 from agentagon.domain.projections import task_detail
+from agentagon.domain.tasks import message
 from agentagon.storage.config import Config
 from agentagon.storage.state import AppState
 from agentagon.workflows import procedures as workflows
@@ -68,6 +69,79 @@ def manifest(request):
     return load_json(max(records, key=lambda path: path.stat().st_mtime_ns))
 
 
+def test_http_detect_goal_and_go_are_idempotent_and_project_scoped(tmp_path):
+    from test_webapp import running
+
+    from agentagon.workflows.service import Application
+
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "agent.py").write_text('from agents import Agent\nagent = Agent(name="Support")\n')
+    application = Application(
+        tmp_path / "application",
+        execute=lambda *_: pytest.fail("HTTP contract must not run a host"),
+    )
+    application.scheduler.close()
+    application.goal_runs.close()
+    project = application.register(str(root))["id"]
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    other = application.register(str(other_root))["id"]
+    try:
+        with running(application) as (client, _server):
+            prefix = f"/api/projects/{project}"
+            detection = {"operation_id": str(uuid.uuid4())}
+            detected = client.post(f"{prefix}/agents/detect", json=detection)
+            assert detected.status_code == 200, detected.text
+            assert detected.json()["count"] == 1
+            agent = detected.json()["agents"][0]
+            assert agent["status"] == "confirmed"
+            assert agent["code_scopes"] == ["agent.py"]
+            assert client.post(f"{prefix}/agents/detect", json=detection).json() == detected.json()
+            goals = f"{prefix}/agents/{agent['id']}/goals"
+            definition = {
+                "operation_id": str(uuid.uuid4()),
+                "name": "Reliable support",
+                "category": "reliability",
+                "objective": "Preserve correct answers while making tool use reliable.",
+            }
+            goal = client.post(goals, json=definition).json()
+            assert client.post(goals, json=definition).json()["id"] == goal["id"]
+            assert len(client.get(goals).json()["goals"]) == 1
+            runs = f"{goals}/{goal['id']}/runs"
+            command = {"operation_id": str(uuid.uuid4()), "details": "Keep retries idempotent."}
+            started = client.post(runs, json=command)
+            assert started.status_code == 200, started.text
+            run = started.json()
+            assert run["agent_id"] == agent["id"] and run["goal_id"] == goal["id"]
+            assert run["details"] == command["details"]
+            assert client.post(runs, json=command).json()["id"] == run["id"]
+            conflict = client.post(
+                runs, json={"operation_id": str(uuid.uuid4()), "details": "Changed expectation"}
+            )
+            assert conflict.status_code == 409
+            assert len(client.get(runs).json()["runs"]) == 1
+            detail = f"{prefix}/goal-runs/{run['id']}"
+            before = client.get(detail).json()
+            assert client.get(detail).json()["revision"] == before["revision"]
+            assert client.get(f"/api/projects/{other}/goal-runs/{run['id']}").status_code >= 400
+            for action, state in (
+                ("pause", "paused"),
+                ("resume", "running"),
+                ("cancel", "cancelled"),
+            ):
+                control = {"operation_id": str(uuid.uuid4())}
+                response = client.post(f"{detail}/{action}", json=control)
+                assert response.status_code == 200, response.text
+                assert response.json()["state"] == state
+                replay = client.post(f"{detail}/{action}", json=control)
+                assert replay.json()["revision"] == response.json()["revision"]
+            assert client.get(detail).json()["available_actions"] == []
+            assert application.runtime.list(project) == []
+    finally:
+        application.close()
+
+
 def test_task_projection_hides_host_activity_and_preserves_workflow_progress():
     detail = task_detail(
         {
@@ -82,8 +156,16 @@ def test_task_projection_hides_host_activity_and_preserves_workflow_progress():
             "events": [
                 {"type": "session", "session_id": "session-one"},
                 {"type": "message", "text": "I'll inspect the repository."},
-                {"type": "progress", "text": "Running commandExecution"},
-                {"type": "progress", "text": "Completed commandExecution"},
+                {
+                    "type": "progress",
+                    "text": "Running commandExecution",
+                    "visibility": "diagnostic",
+                },
+                {
+                    "type": "progress",
+                    "text": "Completed commandExecution",
+                    "visibility": "diagnostic",
+                },
                 {
                     "type": "tool_activity",
                     "tool": "commandExecution",
@@ -156,12 +238,13 @@ def test_two_managers_share_atomic_job_idempotency_and_reject_stale_writes(manag
         assert len(manager.list(project)) == 1
         first = manager._read(project, one.result()["id"])
         stale = other._read(project, first["id"])
-        first["messages"].append("Preserve this guidance")
+        guidance = message("Preserve this guidance", role="user", kind="guidance")
+        first["messages"].append(guidance)
         manager._write(first)
-        stale["messages"].append("Must not overwrite another update")
+        stale["messages"].append(message("Must not overwrite another update", role="user"))
         with pytest.raises(AuditError, match="changed"):
             other._write(stale)
-        assert manager._read(project, first["id"])["messages"] == ["Preserve this guidance"]
+        assert manager._read(project, first["id"])["messages"] == [guidance]
     finally:
         other.close()
 
@@ -175,7 +258,10 @@ def test_failed_answer_commit_never_releases_host_and_success_is_durable(
     manager.stopping = True
     submitted = manager.submit(project, payload())
     job = manager._read(project, submitted["id"])
-    job.update(state="needs_input", question={"id": "question-one", "kind": "approval"})
+    job.update(
+        state="needs_input",
+        question={"id": "question-one", "kind": "approval", "text": "Approve this command?"},
+    )
     manager._write(job)
     key = (project, job["id"])
     manager.active[key] = threading.Event()
@@ -282,8 +368,15 @@ def test_raw_request_replay_preserves_original_frozen_context(manager_factory):
     first = manager.submit(project, prepared, request_binding=binding)
     changed_context = {**original, "options": {"investigation_plan": {"goal_version": 2}}}
     replay = manager.submit(project, changed_context, request_binding=binding)
-    assert replay == first
-    assert manager.existing_submission(project, original["operation_id"], binding) == first
+    existing = manager.existing_submission(project, original["operation_id"], binding)
+    for observed in (replay, existing):
+        assert {key: value for key, value in observed.items() if key != "accounting"} == {
+            key: value for key, value in first.items() if key != "accounting"
+        }
+        assert observed["accounting"]["queued_seconds"] >= first["accounting"]["queued_seconds"]
+        assert {
+            key: value for key, value in observed["accounting"].items() if key != "queued_seconds"
+        } == {key: value for key, value in first["accounting"].items() if key != "queued_seconds"}
     assert replay["options"]["investigation_plan"]["goal_version"] == 1
     with pytest.raises(AuditError, match="different task settings"):
         manager.existing_submission(
@@ -423,7 +516,7 @@ def test_audit_request_recovers_crash_after_creation(workspace):
         operations.start(workspace, **{**options, "goal": "Other work"})
 
 
-def test_questions_show_actual_text_and_expire_without_late_resurrection(manager_factory):
+def test_questions_do_not_spend_active_budget_and_cancel_rejects_late_answers(manager_factory):
     def waiting(request, emit, ask, cancelled):
         emit({"type": "session", "session_id": "waiting", "model": "actual-model"})
         ask(
@@ -438,8 +531,13 @@ def test_questions_show_actual_text_and_expire_without_late_resurrection(manager
     job = manager.submit(project, payload(options={"max_elapsed_seconds": 1}))
     blocked = wait_for(manager, project, job["id"], lambda record: record["state"] == "needs_input")
     assert blocked["question"]["text"] == "Which answer is correct?"
+    time.sleep(1.1)
+    assert manager.get(project, job["id"])["state"] == "needs_input"
+    manager.control(project, job["id"], "cancel", {"operation_id": str(uuid.uuid4())})
     result = wait_for(manager, project, job["id"])
-    assert result["state"] == "failed"
+    assert result["state"] == "cancelled"
+    assert result["accounting"]["waiting_seconds"] >= 1.1
+    assert result["elapsed_seconds"] < 1
     with pytest.raises(AuditError, match="no live unanswered"):
         manager.control(
             project,
@@ -451,7 +549,7 @@ def test_questions_show_actual_text_and_expire_without_late_resurrection(manager
                 "answer": {"text": "A"},
             },
         )
-    assert manager.get(project, job["id"])["state"] == "failed"
+    assert manager.get(project, job["id"])["state"] == "cancelled"
 
 
 def test_pause_resume_preserves_session_and_audit(manager_factory):
@@ -519,7 +617,7 @@ def test_shared_capacity_project_serialization_and_cross_project_rejection(
     assert manager.get(second, three["id"])["state"] == "needs_input"
 
 
-def test_restart_charges_elapsed_and_requires_explicit_resume(manager_factory):
+def test_restart_discloses_unknown_time_and_requires_explicit_resume(manager_factory):
     calls = []
     manager, state, project = manager_factory(lambda *args: calls.append(args))
     manager.stopping = True
@@ -531,15 +629,35 @@ def test_restart_charges_elapsed_and_requires_explicit_resume(manager_factory):
         attempt_started_at=(datetime.now(UTC) - timedelta(seconds=3)).isoformat(),
     )
     manager._write(saved)
+    saved["accounting"].update(phase="active", checkpoint_at=saved["attempt_started_at"])
+    state.db.put_record(project, "tasks", saved["id"], saved)
     restarted = TaskRuntime(state, manager.credentials, execute=lambda *args: calls.append(args))
     try:
         recovered = restarted.get(project, job["id"])
         assert recovered["state"] == "interrupted"
         assert recovered["session_id"] == "saved-before-crash"
-        assert recovered["elapsed_seconds"] >= 3
+        assert recovered["elapsed_seconds"] == 0
+        assert recovered["accounting"]["offline_seconds"] >= 3
+        assert recovered["accounting"]["unknown_seconds"] >= 3
         assert not calls
     finally:
         restarted.close()
+
+
+def test_exhausted_resume_is_rejected_before_queueing(manager_factory):
+    from agentagon.domain.tasks import TaskControlError
+
+    manager, _, project = manager_factory(lambda *args: None)
+    manager.stopping = True
+    submitted = manager.submit(project, payload(options={"max_elapsed_seconds": 1}))
+    record = manager._read(project, submitted["id"])
+    record.update(state="failed", elapsed_seconds=1)
+    manager._write(record)
+    assert "resume" not in task_detail(manager.get(project, record["id"]))["available_actions"]
+    with pytest.raises(TaskControlError) as failure:
+        manager.control(project, record["id"], "resume", {"operation_id": str(uuid.uuid4())})
+    assert failure.value.details["code"] == "budget_exhausted"
+    assert manager.get(project, record["id"])["state"] == "failed"
 
 
 @pytest.mark.parametrize(
@@ -1058,8 +1176,19 @@ def test_evaluation_requires_actual_separate_review_session(
         else:
             assert "response" not in task
             assert task["session_id"] == "reviewer-session"
+            assert "resume" not in job["available_actions"]
+            assert "answer" in job["available_actions"]
             missing_evidence = False
-            manager.control(project, job["id"], "resume", {"operation_id": str(uuid.uuid4())})
+            manager.control(
+                project,
+                job["id"],
+                "answer",
+                {
+                    "operation_id": str(uuid.uuid4()),
+                    "question_id": job["question"]["id"],
+                    "answer": {"text": "Use the retained coverage evidence."},
+                },
+            )
             resumed = wait_for(manager, project, job["id"], timeout=20)
             assert resumed["state"] == "completed", resumed.get("next_action")
             assert review_requests == [None, "reviewer-session"]

@@ -1,11 +1,11 @@
 """Small app-facing projections for the improvement workspace."""
 
 import copy
-import re
 
 from agentagon.capabilities.traces.providers import DEFAULT_ENDPOINTS
+from agentagon.domain import tasks as task_facts
 from agentagon.workflows import procedures as workflows
-from agentagon.workflows.runtime import ACTIVE, public_task
+from agentagon.workflows.runtime import public_task
 
 CONNECTOR_TYPES = {
     "braintrust": {
@@ -25,8 +25,6 @@ CONNECTOR_TYPES = {
     },
 }
 
-_LEGACY_HOST_PROGRESS = re.compile(r"^(?:Running|Completed) [^\s.]+$")
-
 
 def _display_events(events):
     """Keep host protocol noise out of dashboard and MCP task projections."""
@@ -37,11 +35,6 @@ def _display_events(events):
         if event.get("type") in {"message", "session", "reflection_session", "tool_activity"}:
             continue
         text = event.get("text")
-        if event.get("type") == "progress" and isinstance(text, str):
-            # Tasks created before diagnostic visibility was introduced stored these
-            # exact adapter messages as ordinary progress events.
-            if _LEGACY_HOST_PROGRESS.fullmatch(text):
-                continue
         if not isinstance(text, str) or not text.strip():
             continue
         visible.append(copy.deepcopy(event))
@@ -70,7 +63,19 @@ def agent_projection(agent):
             "state": "unavailable",
             "reason": "No retained responsibility inference is available for this saved identity.",
         }
+    evidence_kinds = {
+        item.get("kind") for item in agent.get("evidence", []) if isinstance(item, dict)
+    }
+    origin = (
+        "code"
+        if "code" in evidence_kinds
+        else "traces"
+        if evidence_kinds & {"traces", "trace_metadata"}
+        else "manual"
+    )
     return {key: copy.deepcopy(value) for key, value in agent.items() if key != "description"} | {
+        "origin": origin,
+        "role": agent.get("role", "unknown"),
         "responsibility": agent.get("description", ""),
         "responsibility_inference": inference,
     }
@@ -101,6 +106,9 @@ def task_summary(job, agents=None, goals=None):
     state = job.get("state", "unknown")
     agent_id = job.get("application_agent_id")
     goal_id = job.get("goal_id")
+    host_active = bool(job.get("attempt_started_at"))
+    workflow_name = workflows.REGISTRY.get(job.get("kind"), {}).get("name")
+    title = workflow_name if job.get("goal_run_id") else job.get("goal") or workflow_name
     return {
         "id": job["id"],
         "project_id": job["project_id"],
@@ -109,28 +117,29 @@ def task_summary(job, agents=None, goals=None):
         "agent_id": agent_id,
         "agent_name": agents.get(agent_id, {}).get("name"),
         "goal_id": goal_id,
+        "goal_run_id": job.get("goal_run_id"),
         "goal_name": goals.get(goal_id, {}).get("name"),
-        "title": job.get("goal") or workflows.REGISTRY.get(job.get("kind"), {}).get("name"),
+        "title": title,
         "state": state,
         "needs_attention": state in {"needs_input", "interrupted", "failed"}
         or bool(job.get("question"))
         or (bool(job.get("memory_note")) and int(job.get("memory_retry_count", 0)) >= 3),
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at"),
+        "recovery": copy.deepcopy(job.get("recovery"))
+        or task_facts.recovery(job, host_active=host_active),
+        "available_actions": copy.deepcopy(job.get("available_actions"))
+        if "available_actions" in job
+        else task_facts.available_actions(job, host_active=host_active),
+        "accounting": task_facts.accounting(job),
     }
 
 
 def task_detail(job, agents=None, goals=None):
     result = task_summary(job, agents, goals)
-    public = public_task(job)
-    messages = [
-        copy.deepcopy(message)
-        if isinstance(message, dict)
-        else {"role": "assistant", "text": str(message)}
-        for message in public.get("messages", [])
-    ]
+    public = job if "recovery" in job else public_task(job)
     result.update(
-        conversation=messages,
+        conversation=copy.deepcopy(public.get("messages", [])),
         events=_display_events(public.get("events", [])),
         question=copy.deepcopy(public.get("question")),
         progress=copy.deepcopy(public.get("progress")),
@@ -142,8 +151,10 @@ def task_detail(job, agents=None, goals=None):
             and isinstance(value, str)
         },
         next_action=public.get("next_action"),
-        can_resume=public.get("state") in {"paused", "interrupted", "failed"},
-        can_cancel=public.get("state") in ACTIVE | {"interrupted"},
+        recovery=public["recovery"],
+        accounting=public["accounting"],
+        available_actions=public["available_actions"],
+        continuation_of=public.get("continuation_of"),
         revision=public.get("revision"),
         memory_recording=(
             {

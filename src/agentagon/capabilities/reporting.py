@@ -424,7 +424,7 @@ def _non_scoring_frontier(data: dict) -> list[str]:
     """Return a Pareto frontier without assuming a complete persisted run.
 
     Normal engine records satisfy ``evaluation.frontier``'s strict contract, but
-    report readers also handle interrupted and older partial records.  Missing
+    report readers also handle interrupted and partial records. Missing
     candidate state or measurements make that candidate ineligible rather than
     making the whole report unreadable.
     """

@@ -21,20 +21,6 @@ SOURCE = ROOT / "website"
 OUTPUT = ROOT / "site"
 ORIGIN = "https://agentagon.ai"
 SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
-RETIRED_PREFIXES = (
-    "/auth",
-    "/verify-email",
-    "/request-access",
-    "/onboarding",
-    "/app",
-    "/demo",
-    "/login",
-    "/signup",
-    "/dashboard",
-    "/providers",
-    "/settings",
-    "/schema-review",
-)
 
 
 def load_posts():
@@ -42,7 +28,7 @@ def load_posts():
     for source in sorted((SOURCE / "blogs").glob("*.md")):
         _, frontmatter, body = source.read_text().split("---", 2)
         post = yaml.safe_load(frontmatter)
-        for key in ("title", "description", "author", "original_url"):
+        for key in ("title", "description", "author"):
             if not isinstance(post.get(key), str) or not post[key].strip():
                 raise ValueError(f"{source.name}: missing {key}")
         for key in ("published_at", "updated_at"):
@@ -66,17 +52,7 @@ def load_posts():
     return sorted(posts, key=lambda post: post["published_at"], reverse=True)
 
 
-def hosting_config(posts, *, preview):
-    redirects = {"/resources/": "/blogs/", "/privacy/": "/docs/privacy/"}
-    redirects.update({post["original_url"]: post["path"] for post in posts})
-    routes = []
-    for old, new in redirects.items():
-        # Azure normalizes trailing slashes when checking route uniqueness.
-        routes.append({"route": old, "redirect": new, "statusCode": 301})
-    for prefix in RETIRED_PREFIXES:
-        for route in (prefix, prefix + "/*"):
-            routes.append({"route": route, "redirect": "/welcome/", "statusCode": 301})
-    routes.append({"route": "/welcome/*", "headers": {"X-Robots-Tag": "noindex"}})
+def hosting_config(*, preview):
     headers = {
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "strict-origin-when-cross-origin",
@@ -85,7 +61,6 @@ def hosting_config(posts, *, preview):
         headers["X-Robots-Tag"] = "noindex"
     return {
         "trailingSlash": "auto",
-        "routes": routes,
         "responseOverrides": {"404": {"rewrite": "/404.html", "statusCode": 404}},
         "globalHeaders": headers,
     }
@@ -112,7 +87,7 @@ def assemble(destination, *, preview=False):
                 title=title,
                 description=description,
                 article=context.pop("article", None),
-                noindex=preview or path in ("/welcome/", "/404.html"),
+                noindex=preview or path == "/404.html",
                 posts=posts,
                 **context,
             )
@@ -142,17 +117,6 @@ def assemble(destination, *, preview=False):
         )
     render(
         "message.html",
-        "/welcome/",
-        "A new way to use Agentagon",
-        "Start Agentagon through its dashboard or local MCP interface.",
-        label="A new way to use Agentagon",
-        heading="Bring Agentagon to your coding agent.",
-        message="The previous web workspace and demo are retired. "
-        "Install Agentagon, open its dashboard in your agent’s project, "
-        "then discover issues, fix a trace, or optimize a goal. Core workflows need no Agentagon account.",
-    )
-    render(
-        "message.html",
         "/404.html",
         "Page not found | Agentagon",
         "Find Agentagon documentation, articles, and installation instructions.",
@@ -164,7 +128,7 @@ def assemble(destination, *, preview=False):
     config = load_config(config_file=str(ROOT / "mkdocs.yml"), site_dir=str(destination / "docs"))
     build_docs(config)
     (destination / "staticwebapp.config.json").write_text(
-        json.dumps(hosting_config(posts, preview=preview), indent=2) + "\n"
+        json.dumps(hosting_config(preview=preview), indent=2) + "\n"
     )
     ET.register_namespace("", SITEMAP_NS)
     sitemap = ET.parse(destination / "docs" / "sitemap.xml").getroot()
@@ -177,7 +141,7 @@ def assemble(destination, *, preview=False):
     robots = (
         "User-agent: *\nDisallow: /\n"
         if preview
-        else (f"User-agent: *\nAllow: /\nDisallow: /welcome/\nSitemap: {ORIGIN}/sitemap.xml\n")
+        else (f"User-agent: *\nAllow: /\nSitemap: {ORIGIN}/sitemap.xml\n")
     )
     (destination / "robots.txt").write_text(robots)
     check_site(destination)

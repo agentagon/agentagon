@@ -22,8 +22,7 @@ class OperationFixture(WorkspaceFixture):
                     "conversation": [],
                     "events": [],
                     "question": None,
-                    "can_resume": False,
-                    "can_cancel": True,
+                    "available_actions": ["pause", "cancel", "message"],
                 }
                 self.tasks[project_id] = [
                     item for item in self.tasks[project_id] if item["id"] != task["id"]
@@ -178,36 +177,33 @@ def test_operation_ids_survive_reload_and_clear_after_confirmed_success():
         fixture = OperationFixture()
         page.route("**/*", fixture.route)
 
-        # Workflow start: the prepared request and start share the draft's durable id.
+        # Goal Go retains its exact request across reload and rotates after admission.
         goal_url = (
             "http://agentagon.test/projects/project_alpha/agents/agent_support/"
             "goals/goal_correctness"
         )
-        fixture.goals["agent_support"][0]["measurement_plan"] = None
-        fixture.goals["agent_support"][0]["measurement"] = None
         page.goto(goal_url)
-        page.get_by_role("button", name="Design measurements").click()
-        dialog = page.get_by_role("dialog")
-        dialog.get_by_role("button", name="Create evaluation proposal").wait_for(state="visible")
+        page.get_by_label("Details Optional").fill("Keep retries idempotent.")
+        goal_key = "agentagon.goal-run:project_alpha:agent_support:goal_correctness"
         page.wait_for_function(
-            "() => Object.keys(sessionStorage).some(key => key.startsWith('agentagon.workflow-draft:project_alpha:design:'))"
+            "key => JSON.parse(sessionStorage.getItem(key) || '{}').details === 'Keep retries idempotent.'",
+            arg=goal_key,
         )
-        workflow_draft = _draft(page, "agentagon.workflow-draft:project_alpha:design:")
+        goal_draft = _draft(page, goal_key)
         page.reload()
-        page.get_by_role("button", name="Design measurements").click()
-        page.get_by_role("dialog").get_by_role("button", name="Create evaluation proposal").click()
-        page.wait_for_url("**/tasks/task_started")
-        workflow_start = next(
-            item
-            for item in fixture.mutations
-            if item["path"] == "/api/projects/project_alpha/tasks"
-            and item["payload"]["workflow"] == "design"
+        assert page.get_by_label("Details Optional").input_value() == "Keep retries idempotent."
+        page.get_by_role("button", name="Go", exact=True).click()
+        page.wait_for_url("**/goals/goal_correctness?run=goalrun_started")
+        goal_start = next(item for item in fixture.mutations if item["path"].endswith("/runs"))
+        assert goal_start["payload"]["operation_id"] == goal_draft["value"]["operationId"]
+        page.wait_for_function(
+            "({ key, prior }) => JSON.parse(sessionStorage.getItem(key) || '{}').operationId !== prior",
+            arg={"key": goal_key, "prior": goal_draft["value"]["operationId"]},
         )
-        assert workflow_start["payload"]["operation_id"] == workflow_draft["value"]["operationId"]
-        assert _draft(page, "agentagon.workflow-draft:project_alpha:design:") is None
 
         # Assessment: its exact scope and id survive reload, then clear on task receipt.
         page.goto("http://agentagon.test/projects/project_alpha/onboarding")
+        page.get_by_text("Analyze code and traces", exact=True).click()
         page.get_by_label("Environment").fill("staging")
         page.get_by_label("Environment").blur()
         page.wait_for_function(
@@ -215,9 +211,10 @@ def test_operation_ids_survive_reload_and_clear_after_confirmed_success():
         )
         assessment_draft = _draft(page, "agentagon.operation-draft:project_alpha:assess")
         page.reload()
+        page.get_by_text("Analyze code and traces", exact=True).click()
         assert page.get_by_label("Environment").input_value() == "staging"
-        page.get_by_role("button", name="Analyze again").click()
-        page.wait_for_url("**/tasks/task_started")
+        page.get_by_role("button", name="Analyze project").click()
+        page.wait_for_url("**/tasks/task_started?view=running")
         assessment_start = next(
             item
             for item in reversed(fixture.mutations)

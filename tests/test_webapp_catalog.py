@@ -119,7 +119,7 @@ def test_discovery_is_explicit_bounded_and_preserves_confirmed_identity(app, tmp
     (root / "app.py").write_text(
         'from agents import Agent\nsupport = Agent(name="Support")\nresearch = Agent(name="Research")\nraise RuntimeError("never execute discovery")\n'
     )
-    assert app.application_agents(saved["id"]) == {"agents": []}
+    assert app.project_agents(saved["id"])["agents"] == []
     discovered = app.catalog.discover(saved["id"])
     assert len(discovered["agents"]) == 2
     suggested = discovered["agents"][0]
@@ -154,7 +154,10 @@ def test_identity_review_retains_source_and_exclusion_across_rescans(app, tmp_pa
     excluded = app.exclude_application_agent(
         saved["id"],
         discovered["id"],
-        {"reason": "This is a test harness, not a deployed agent.", "expected_revision": 1},
+        {
+            "reason": "This is a test harness, not a deployed agent.",
+            "expected_revision": discovered["revision"],
+        },
     )
     assert excluded["status"] == "archived"
     assert app.catalog.discover(saved["id"])["agents"] == []
@@ -167,11 +170,11 @@ def test_identity_review_retains_source_and_exclusion_across_rescans(app, tmp_pa
     restored = app.restore_application_agent(
         saved["id"], discovered["id"], {"expected_revision": excluded["revision"]}
     )
-    assert restored["status"] == "suggested"
+    assert restored["status"] == "confirmed"
     assert app.catalog.discover(saved["id"])["agents"][0]["id"] == discovered["id"]
 
 
-def test_suggestion_confirmation_uses_the_exact_displayed_revision(app, tmp_path):
+def test_agent_edits_use_the_exact_displayed_revision(app, tmp_path):
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root
     root.joinpath("app.py").write_text(
@@ -188,12 +191,16 @@ def test_suggestion_confirmation_uses_the_exact_displayed_revision(app, tmp_path
     )
 
     with pytest.raises(AuditError, match="changed; reload"):
-        app.confirm_application_agent(
-            saved["id"], suggestion["id"], {"expected_revision": suggestion["revision"]}
+        app.save_application_agent(
+            saved["id"],
+            {"name": "Updated support", "expected_revision": suggestion["revision"]},
+            suggestion["id"],
         )
 
-    confirmed = app.confirm_application_agent(
-        saved["id"], suggestion["id"], {"expected_revision": enriched["revision"]}
+    confirmed = app.save_application_agent(
+        saved["id"],
+        {"name": "Updated support", "expected_revision": enriched["revision"]},
+        suggestion["id"],
     )
     assert confirmed["status"] == "confirmed"
     assert confirmed["code_scopes"] == enriched["code_scopes"]
@@ -291,22 +298,34 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
     from test_webapp_jobs import wait_for
 
     operation = str(uuid.uuid4())
-    task = app.discover_application_agents(saved["id"], {"operation_id": operation})
+    task = app.submit_task(
+        saved["id"],
+        {
+            "workflow": "assess",
+            "operation_id": operation,
+            "input": {"type": "project", "id": saved["id"]},
+        },
+    )
     completed = wait_for(app.runtime, saved["id"], task["task_id"])
     assert completed["state"] == "completed", completed
-    assert [a["name"] for a in app.catalog.agents(saved["id"])] == ["Customer support", "Research"]
-    assert [a["description"] for a in app.catalog.agents(saved["id"])] == [
+    inventory = app.project_agents(saved["id"])
+    assert inventory["suggestions"] == []
+    assert [a["name"] for a in inventory["confirmed"]] == ["Customer support", "Helper", "Research"]
+    assert [a["responsibility"] for a in inventory["confirmed"]] == [
         "Answers customer questions using the configured support tools.",
-        "Researches customer questions and prepares evidence.",
-    ]
-    assert [a["responsibility"] for a in app.project_agents(saved["id"])["suggestions"]] == [
-        "Answers customer questions using the configured support tools.",
+        "",
         "Researches customer questions and prepares evidence.",
     ]
     assert all(
-        agent["responsibility_inference"]["state"] == "inferred"
-        and agent["responsibility_inference"]["task_id"] == task["task_id"]
-        for agent in app.project_agents(saved["id"])["suggestions"]
+        a["responsibility_inference"]["task_id"] == task["task_id"] for a in inventory["confirmed"]
+    )
+    helper = next(a for a in inventory["confirmed"] if a["name"] == "Helper")
+    assert helper["responsibility_inference"]["state"] == "limited"
+    assert helper["evidence"][-1]["decision"] == "exclusion_suggested"
+    assert all(
+        a["responsibility_inference"]["state"] == "inferred"
+        for a in inventory["confirmed"]
+        if a["id"] != helper["id"]
     )
     from test_webapp_jobs import manifest
 
@@ -316,19 +335,26 @@ def test_first_discovery_saves_choices_and_applies_read_only_coding_review(
     assert all("Agent(name=" in candidate["context"]["source"] for candidate in prepared)
     assert calls[0]["sandbox"] == "read-only"
     assert (
-        app.discover_application_agents(saved["id"], {"operation_id": operation})["task_id"]
+        app.submit_task(
+            saved["id"],
+            {
+                "workflow": "assess",
+                "operation_id": operation,
+                "input": {"type": "project", "id": saved["id"]},
+            },
+        )["task_id"]
         == task["task_id"]
     )
 
 
-def test_responsibility_retry_reviews_only_the_selected_suggestion(app, tmp_path, monkeypatch):
+def test_assessment_reviews_only_the_selected_pending_identity(app, tmp_path, monkeypatch):
     saved = project(app, tmp_path)
     root = app.state.workspace(saved["id"]).root
     (root / "app.py").write_text(
         'from agents import Agent\nsupport = Agent(name="Support")\n'
         'research = Agent(name="Research")\n'
     )
-    app.catalog.discover(saved["id"], snapshot_ids=[])
+    app.catalog.discover(saved["id"], snapshot_ids=[], activate=False)
     suggestions = app.project_agents(saved["id"])["suggestions"]
     target = next(item for item in suggestions if item["name"] == "Support")
     calls = []
@@ -369,8 +395,15 @@ def test_responsibility_retry_reviews_only_the_selected_suggestion(app, tmp_path
     )
     from test_webapp_jobs import wait_for
 
-    task = app.infer_application_agent_responsibility(
-        saved["id"], target["id"], {"operation_id": str(uuid.uuid4())}
+    task = app.submit_task(
+        saved["id"],
+        {
+            "workflow": "assess",
+            "operation_id": str(uuid.uuid4()),
+            "agent_id": target["id"],
+            "input": {"type": "project", "id": saved["id"]},
+            "options": {"assessment": {}},
+        },
     )
     completed = wait_for(app.runtime, saved["id"], task["task_id"])
     assert completed["state"] == "completed", completed
@@ -381,7 +414,7 @@ def test_responsibility_retry_reviews_only_the_selected_suggestion(app, tmp_path
     assert inferred["responsibility"] == "Answers customer support questions."
     assert inferred["responsibility_inference"]["task_id"] == task["task_id"]
     assert untouched["responsibility"] == ""
-    assert untouched["responsibility_inference"]["state"] == "pending"
+    assert untouched["responsibility_inference"]["state"] == "not_inferred"
     assert app.production.onboarding(saved["id"])["state"] == "configure"
 
 
@@ -415,7 +448,7 @@ def test_coding_review_does_not_replace_a_manual_responsibility(app, tmp_path):
     )
 
     retained = app.catalog.agent(saved["id"], edited["id"])
-    assert retained["status"] == "suggested"
+    assert retained["status"] == "confirmed"
     assert retained["name"] == "Support"
     assert retained["description"] == "Routes customer requests to the right support workflow."
     assert retained["responsibility_inference"]["state"] == "edited"
@@ -903,7 +936,9 @@ def test_discovery_excludes_non_application_paths_at_any_depth_and_saved_suggest
     assert {item["id"] for item in result["agents"]} == {manual["id"], confirmed["id"]}
     assert result["discovered"] == 0
     assert app.catalog.agent(saved["id"], automatic["id"])["status"] == "suggested"
-    assert "skipped" in " ".join(result["limitations"])
+    assert (
+        result["coverage"]["policy_excluded_files"] + result["coverage"]["excluded_directories"] > 0
+    )
 
 
 def test_discovery_is_bounded_and_skips_generated_symlink_and_local_framework_shadow(

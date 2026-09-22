@@ -212,7 +212,11 @@ class Catalog:
         suggestions = {
             agent["id"]: agent
             for agent in self.agents(project_id)
-            if agent["status"] == "suggested" and len(agent.get("code_scopes", [])) == 1
+            if (
+                agent["status"] == "suggested"
+                or (agent.get("identity_review") or {}).get("source") == "discovery"
+            )
+            and len(agent.get("code_scopes", [])) == 1
         }
         updates = []
         seen = set()
@@ -248,6 +252,8 @@ class Catalog:
             manually_edited = (record.get("responsibility_inference") or {}).get(
                 "state"
             ) == "edited" and bool(record.get("description", "").strip())
+            active = record["status"] == "confirmed"
+            edited_fields = set(record.get("user_edited_fields", []))
             evidence = [
                 item
                 for item in record.get("evidence", [])
@@ -260,6 +266,8 @@ class Catalog:
                     if manually_edited
                     else "keep"
                     if review["keep"]
+                    else "exclusion_suggested"
+                    if active
                     else "exclude",
                     "task_id": task_id,
                 }
@@ -267,19 +275,27 @@ class Catalog:
             updates.append(
                 {
                     **record,
-                    "name": record["name"] if manually_edited else name,
+                    "name": record["name"] if manually_edited or "name" in edited_fields else name,
                     "description": (
                         record["description"]
-                        if manually_edited or not review["keep"]
+                        if manually_edited or "description" in edited_fields or not review["keep"]
                         else responsibility
                     ),
-                    "status": "suggested" if manually_edited or review["keep"] else "archived",
+                    "status": "confirmed"
+                    if active
+                    else "suggested"
+                    if manually_edited or review["keep"]
+                    else "archived",
                     "evidence": evidence,
                     "responsibility_inference": (
                         record["responsibility_inference"]
                         if manually_edited
                         else {
-                            "state": "inferred" if review["keep"] else "excluded",
+                            "state": "inferred"
+                            if review["keep"]
+                            else "limited"
+                            if active
+                            else "excluded",
                             **(
                                 {}
                                 if review["keep"]
@@ -297,7 +313,7 @@ class Catalog:
                     ),
                     "identity_review": (
                         record.get("identity_review", {})
-                        if manually_edited
+                        if manually_edited or active
                         else {
                             "state": "suggested" if review["keep"] else "excluded",
                             **(
@@ -327,7 +343,7 @@ class Catalog:
                         record,
                         expected_revision=record["revision"],
                     )
-        return {"reviewed": len(updates), "kept": sum(r["status"] == "suggested" for r in updates)}
+        return {"reviewed": len(updates), "kept": sum(r["status"] != "archived" for r in updates)}
 
     def apply_trace_metadata(self, project_id, connection, traces):
         if not isinstance(traces, list) or len(traces) > 100:
@@ -343,7 +359,7 @@ class Catalog:
         updates = []
         used = set()
         for agent in self.agents(project_id):
-            if agent["status"] != "suggested" or not agent.get("code_scopes"):
+            if agent["status"] == "archived" or not agent.get("code_scopes"):
                 continue
             terms = _agent_terms(agent)
             scored = []
@@ -404,14 +420,44 @@ class Catalog:
             "trace_selector",
             "status",
             "expected_revision",
+            "role",
         }:
             raise AuditError("unsupported application-agent fields")
-        previous = self.agent(project_id, agent_id) if agent_id else {}
+        previous = (
+            (self.state.db.get_record(project_id, "application_agents", agent_id) or {})
+            if agent_id and suggestion
+            else self.agent(project_id, agent_id)
+            if agent_id
+            else {}
+        )
         record = {**previous, "id": agent_id or _id("agent"), "project_id": project_id}
         record["name"] = _text(payload.get("name", previous.get("name")), "agent name", 160)
         record["description"] = _text(
             payload.get("description", previous.get("description", "")), "description", empty=True
         )
+        record["role"] = payload.get("role", previous.get("role", "unknown"))
+        if not isinstance(record["role"], str) or record["role"] not in discovery.AGENT_ROLES:
+            raise AuditError(
+                "choose serving, background, evaluation, development_utility or unknown"
+            )
+        if "role" in payload:
+            record["role_source"] = "user"
+        if previous and suggestion is None:
+            record["user_edited_fields"] = sorted(
+                set(previous.get("user_edited_fields", []))
+                | {
+                    key
+                    for key in (
+                        "name",
+                        "description",
+                        "code_scopes",
+                        "shared_dependencies",
+                        "trace_selector",
+                        "role",
+                    )
+                    if key in payload and payload[key] != previous.get(key)
+                }
+            )
         if (
             previous
             and "description" in payload
@@ -460,39 +506,12 @@ class Catalog:
             )
         return saved
 
-    def confirm_suggestion(self, project_id, agent_id, expected_revision):
-        """Confirm the exact retained suggestion shown to the user."""
-
-        agent = self.agent(project_id, agent_id)
-        if agent["status"] != "suggested":
-            raise AuditError("only a suggested identity can be confirmed")
-        if type(expected_revision) is not int or expected_revision != agent["revision"]:
-            raise AuditError("application record changed; reload before updating")
-        if not agent.get("description", "").strip():
-            raise AuditError("resolve the agent responsibility before confirming this identity")
-        evidence = [*agent.get("evidence", [])]
-        evidence.append({"kind": "identity_review", "decision": "confirm", "at": now()})
-        return self.save_agent(
-            project_id,
-            {"status": "confirmed", "expected_revision": expected_revision},
-            agent_id,
-            suggestion={
-                "evidence": evidence,
-                "identity_review": {
-                    "state": "confirmed",
-                    "at": now(),
-                    "source": "user",
-                    "discovery_key": agent.get("discovery_key"),
-                },
-            },
-        )
-
     def exclude_suggestion(self, project_id, agent_id, reason, expected_revision):
-        """Exclude one suggestion while retaining its stable discovery identity."""
+        """Exclude a discovered agent while retaining its stable identity."""
 
         agent = self.agent(project_id, agent_id)
-        if agent["status"] != "suggested" or not agent.get("discovery_key"):
-            raise AuditError("only a discovered suggested identity can be excluded")
+        if agent["status"] == "archived" or not agent.get("discovery_key"):
+            raise AuditError("only an active discovered identity can be excluded")
         reason = _text(reason, "exclusion reason", 500)
         if type(expected_revision) is not int or expected_revision != agent["revision"]:
             raise AuditError("application record changed; reload before updating")
@@ -522,7 +541,7 @@ class Catalog:
         )
 
     def restore_suggestion(self, project_id, agent_id, expected_revision):
-        """Return one excluded discovery identity to the review queue."""
+        """Explicitly restore an excluded identity directly to the usable inventory."""
 
         agent = self.agent(project_id, agent_id)
         if agent["status"] != "archived" or not agent.get("discovery_key"):
@@ -543,24 +562,135 @@ class Catalog:
         evidence.append({"kind": "identity_review", "decision": "restore", "at": reviewed_at})
         record = {
             **agent,
-            "status": "suggested",
+            "status": "confirmed",
             "evidence": evidence,
             "identity_review": {
-                "state": "suggested",
+                "state": "confirmed",
                 "at": reviewed_at,
                 "source": "user",
                 "discovery_key": agent["discovery_key"],
             },
         }
-        return self.state.db.put_record(
+        return self.save_agent(
             project_id,
-            "application_agents",
+            {"status": "confirmed", "expected_revision": expected_revision},
             agent_id,
-            record,
-            expected_revision=expected_revision,
+            suggestion={
+                "evidence": record["evidence"],
+                "identity_review": record["identity_review"],
+            },
         )
 
-    def discover(self, project_id, snapshot_ids=None):
+    def activate_discovered(self, project_id):
+        """An explicit detection adopts validated bindings without claiming human review."""
+        activated, failures = [], []
+        for agent in self.agents(project_id):
+            if agent["status"] != "suggested" or not agent.get("discovery_key"):
+                continue
+            activated_at = now()
+            inference = agent.get("responsibility_inference", {})
+            if inference.get("state") == "pending":
+                inference = {
+                    **inference,
+                    "state": "not_inferred",
+                    "reason": "Agent detected. Responsibility can be described or assessed later.",
+                }
+            try:
+                saved = self.save_agent(
+                    project_id,
+                    {"status": "confirmed", "expected_revision": agent["revision"]},
+                    agent["id"],
+                    suggestion={
+                        "responsibility_inference": inference,
+                        "evidence": [
+                            *agent.get("evidence", []),
+                            {
+                                "kind": "identity_activation",
+                                "decision": "automatic_activation",
+                                "source": "discovery",
+                                "at": activated_at,
+                            },
+                        ],
+                        "identity_review": {
+                            "state": "confirmed",
+                            "decision": "automatic_activation",
+                            "source": "discovery",
+                            "at": activated_at,
+                            "discovery_key": agent["discovery_key"],
+                        },
+                    },
+                )
+                activated.append(saved["id"])
+            except AuditError as exc:
+                failures.append(
+                    {"agent_id": agent["id"], "name": agent["name"], "reason": str(exc)}
+                )
+        return {
+            "activated": len(activated),
+            "activated_ids": activated,
+            "activation_failures": failures,
+        }
+
+    def detect(self, project_id, payload):
+        """Run bounded local detection once per explicit user operation, without a model."""
+        if not isinstance(payload, dict) or set(payload) - {"operation_id", "snapshot_ids"}:
+            raise AuditError("use a detection operation_id and optional retained snapshot_ids")
+        try:
+            operation = str(uuid.UUID(payload.get("operation_id")))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise AuditError("operation_id must be a UUID") from exc
+        snapshot_ids = payload.get("snapshot_ids", [])
+        if not isinstance(snapshot_ids, list) or len(snapshot_ids) > 100:
+            raise AuditError("choose at most 100 retained trace snapshots")
+        for snapshot_id in snapshot_ids:
+            identifier(snapshot_id, "snapshot")
+        request_digest = digest({"snapshot_ids": snapshot_ids})
+        key = "detection_" + digest({"operation_id": operation})[:24]
+        previous = self.state.db.get_record(project_id, "agent_detections", key)
+        if previous:
+            if previous["request_digest"] != request_digest:
+                raise AuditError("operation_id already belongs to another detection request")
+            return previous["result"]
+        workspace = self.state.workspace(project_id)
+        for snapshot_id in snapshot_ids:
+            if snapshots.load(workspace, snapshot_id)["kind"] != "traces":
+                raise AuditError("agent detection accepts retained trace snapshots")
+        result = {**self.discover(project_id, snapshot_ids=snapshot_ids), "operation_id": operation}
+        result["count"] = sum(agent["status"] == "confirmed" for agent in result["agents"])
+        result["state"] = "ready_with_limits" if result["limitations"] else "ready"
+        with self.state.db.transaction() as tx:
+            previous = tx.get_record(project_id, "agent_detections", key)
+            if previous:
+                if previous["request_digest"] != request_digest:
+                    raise AuditError("operation_id already belongs to another detection request")
+                return previous["result"]
+            tx.put_record(
+                project_id,
+                "agent_detections",
+                key,
+                {"id": key, "request_digest": request_digest, "result": result},
+                expected_revision=0,
+            )
+        return result
+
+    def _create_discovered(self, project_id, payload, *, suggestion):
+        key = suggestion["discovery_key"]
+        agent_id = "agent_" + digest({"project_id": project_id, "discovery_key": key})[:24]
+        current = self.state.db.get_record(project_id, "application_agents", agent_id)
+        if current:
+            return current
+        try:
+            return self.save_agent(
+                project_id, {**payload, "expected_revision": 0}, agent_id, suggestion=suggestion
+            )
+        except AuditError:
+            # Another explicit discovery may have won creation while this scan ran.
+            current = self.state.db.get_record(project_id, "application_agents", agent_id)
+            if current and current.get("discovery_key") == key:
+                return current
+            raise
+
+    def discover(self, project_id, snapshot_ids=None, *, activate=True):
         workspace = self.state.workspace(project_id)
         existing = {
             a.get("discovery_key"): a
@@ -575,7 +705,7 @@ class Catalog:
                 # A manual code binding already represents this exact file and name.
                 matches = [
                     a
-                    for a in self.agents(project_id)
+                    for a in self.state.db.list_records(project_id, "application_agents")
                     if not a.get("discovery_key")
                     and a["name"] == entry["name"]
                     and a["code_scopes"] == [entry["path"]]
@@ -588,13 +718,14 @@ class Catalog:
                     )
                     == 1
                 ):
-                    found[matches[0]["id"]] = matches[0]
+                    if matches[0]["status"] != "archived":
+                        found[matches[0]["id"]] = matches[0]
                     continue
                 code_evidence = {"kind": "code", **entry, "captured_at": now()}
                 context = discovery.source_context(workspace.root, entry["path"], entry["line"])
                 if context:
                     code_evidence["context"] = context
-                existing[key] = self.save_agent(
+                existing[key] = self._create_discovered(
                     project_id,
                     {
                         "name": entry["name"],
@@ -604,11 +735,19 @@ class Catalog:
                     },
                     suggestion={
                         "discovery_key": key,
-                        "confidence": "suggested",
+                        "confidence": "inferred",
+                        "role": entry["role"],
+                        "role_source": entry["role_source"],
+                        "identity_kind": entry.get("identity_kind", "declaration"),
+                        "identity_limits": entry.get("identity_limits", []),
+                        "dependency_proposals": entry.get("dependency_proposals", []),
+                        "dependency_proposals_omitted": entry.get(
+                            "dependency_proposals_omitted", 0
+                        ),
                         "evidence": [code_evidence],
                         "responsibility_inference": {
-                            "state": "pending",
-                            "reason": "Awaiting bounded coding-backend review.",
+                            "state": "not_inferred",
+                            "reason": "Detected from source. Responsibility can be described or assessed later.",
                             "source_discovery_key": key,
                         },
                     },
@@ -669,7 +808,11 @@ class Catalog:
                     continue
                 name = name.strip()[:160]
                 selector = {
-                    "connection_id": record["connection_id"],
+                    **(
+                        {"connection_id": record["connection_id"]}
+                        if record.get("connection_id")
+                        else {}
+                    ),
                     "name": name,
                     "filters": {"agent_name": name}
                     if metadata.get("agent_name") or item.get("agent_name")
@@ -687,13 +830,12 @@ class Catalog:
                 evidence = {"kind": "traces", "snapshot_id": record["id"]}
                 matches = [
                     a
-                    for a in self.agents(project_id)
+                    for a in self.state.db.list_records(project_id, "application_agents")
                     if a["name"] == name
                     and (
                         a["trace_selector"] == selector
                         or (
                             not a["trace_selector"]
-                            and a["status"] == "suggested"
                             and a.get("discovery_key")
                             and metadata.get("code_path") in a["code_scopes"]
                         )
@@ -709,7 +851,7 @@ class Catalog:
                             suggestion={"evidence": [*candidate["evidence"], evidence]},
                         )
                 else:
-                    candidate = self.save_agent(
+                    candidate = self._create_discovered(
                         project_id,
                         {
                             "name": name,
@@ -719,15 +861,26 @@ class Catalog:
                         },
                         suggestion={
                             "discovery_key": key,
-                            "confidence": "suggested",
+                            "confidence": "inferred",
                             "evidence": [evidence],
                         },
                     )
                 existing[key] = candidate
-                found[candidate["id"]] = candidate
+                if candidate["status"] != "archived":
+                    found[candidate["id"]] = candidate
         if trace_items >= 5000 and not any("Imported-trace" in limit for limit in limits):
             limits.append("Imported-trace scan limit reached; add remaining agents manually.")
+        activation = (
+            self.activate_discovered(project_id)
+            if activate
+            else {"activated": 0, "activated_ids": [], "activation_failures": []}
+        )
+        limits.extend(
+            f"{item['name']} could not be activated: {item['reason']}"
+            for item in activation["activation_failures"]
+        )
         return {
+            **activation,
             "agents": self.agents(project_id),
             "discovered": len(found),
             "scanned_files": coverage["scanned_files"],
@@ -738,14 +891,7 @@ class Catalog:
                 "trace_snapshots": trace_snapshots,
                 "trace_items": trace_items,
             },
-            "limitations": [
-                *(
-                    ["Some files were too large, unreadable or invalid and were skipped."]
-                    if coverage["excluded_files"] or coverage["unreadable_files"]
-                    else []
-                ),
-                *limits,
-            ],
+            "limitations": limits,
         }
 
     def goals(self, project_id, agent_id):
@@ -772,8 +918,31 @@ class Catalog:
         agent = self.agent(project_id, agent_id)
         if agent["status"] != "confirmed":
             raise AuditError("confirm the application agent before setting a goal_record")
-        if set(payload) - {"name", "category", "objective", "ideal_behavior", "source"}:
+        if set(payload) - {
+            "name",
+            "category",
+            "objective",
+            "ideal_behavior",
+            "source",
+            "operation_id",
+        }:
             raise AuditError("unsupported goal_record fields")
+        operation = None
+        if "operation_id" in payload:
+            try:
+                operation = str(uuid.UUID(payload["operation_id"]))
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise AuditError("operation_id must be a UUID") from exc
+        request_digest = digest({k: v for k, v in payload.items() if k != "operation_id"})
+        operation_key = (
+            "goaloperation_" + digest({"agent_id": agent_id, "operation_id": operation})[:24]
+        )
+        if operation:
+            prior = self.state.db.get_record(project_id, "goal_operations", operation_key)
+            if prior:
+                if prior["request_digest"] != request_digest:
+                    raise AuditError("operation_id already belongs to another goal request")
+                return self.goal_record(project_id, agent_id, prior["goal_id"])
         category = payload.get("category", "custom")
         if category not in GOAL_CATEGORIES:
             raise AuditError("choose a supported goal_record category")
@@ -804,7 +973,14 @@ class Catalog:
         if target is not None:
             target = _text(target, "goal_record target", 1000, empty=True)
         record = {
-            "id": _id("goal"),
+            "id": (
+                "goal_"
+                + digest(
+                    {"project_id": project_id, "agent_id": agent_id, "operation_id": operation}
+                )[:24]
+                if operation
+                else _id("goal")
+            ),
             "project_id": project_id,
             "agent_id": agent_id,
             "name": _text(
@@ -821,6 +997,12 @@ class Catalog:
             "created_at": now(),
         }
         with self.state.db.transaction() as tx:
+            if operation:
+                prior = tx.get_record(project_id, "goal_operations", operation_key)
+                if prior:
+                    if prior["request_digest"] != request_digest:
+                        raise AuditError("operation_id already belongs to another goal request")
+                    return tx.get_record(project_id, "goals", prior["goal_id"])
             saved = tx.put_record(project_id, "goals", record["id"], record)
             version = {
                 "id": _id("goalversion"),
@@ -829,6 +1011,18 @@ class Catalog:
                 "created_at": now(),
             }
             tx.put_record(project_id, "goal_versions", version["id"], version)
+            if operation:
+                tx.put_record(
+                    project_id,
+                    "goal_operations",
+                    operation_key,
+                    {
+                        "id": operation_key,
+                        "request_digest": request_digest,
+                        "goal_id": record["id"],
+                    },
+                    expected_revision=0,
+                )
         return saved
 
     def validate_evidence_reference(self, project_id, agent_id, source):

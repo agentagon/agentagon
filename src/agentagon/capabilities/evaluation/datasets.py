@@ -494,23 +494,37 @@ def _load_split(state, project_id, split_id):
 
 def assert_development(workspace, record):
     """Deny both the final partition and a split's full parent in ordinary tools."""
-    if record["provenance"].get("dataset_partition") == FINAL:
-        raise AuditError(
-            "final holdout content is reserved for an explicitly bound final verification"
-        )
-    guard_path = private_directory(workspace, "dataset-splits") / f"{record['id']}.json"
-    if guard_path.exists():
-        guard = load_json(workspace.checked(guard_path))
-        manifest = workspace.read_artifact(guard["manifest_artifact"])
-        if (
-            manifest["parameters"]["source_snapshot_id"] != record["id"]
-            or manifest["parameters"]["source_digest"] != record["digest"]
-        ):
-            raise AuditError("dataset split source binding changed")
-        raise AuditError(
-            "this dataset has a final partition; select its development snapshot "
-            + manifest["development_snapshot_id"]
-        )
+    # A composed dataset cannot bypass a holdout reservation made on an ancestor.
+    pending, seen = [record], set()
+    while pending:
+        current = pending.pop()
+        if current["id"] in seen:
+            continue
+        seen.add(current["id"])
+        if len(seen) > 1000:
+            raise AuditError("dataset provenance is too large to validate safely")
+        if current["provenance"].get("dataset_partition") == FINAL:
+            raise AuditError(
+                "final holdout content is reserved for an explicitly bound final verification"
+            )
+        guard_path = private_directory(workspace, "dataset-splits") / f"{current['id']}.json"
+        if guard_path.exists():
+            guard = load_json(workspace.checked(guard_path))
+            manifest = workspace.read_artifact(guard["manifest_artifact"])
+            if (
+                manifest["parameters"]["source_snapshot_id"] != current["id"]
+                or manifest["parameters"]["source_digest"] != current["digest"]
+            ):
+                raise AuditError("dataset split source binding changed")
+            raise AuditError(
+                "this dataset has a final partition; select its development snapshot "
+                + manifest["development_snapshot_id"]
+            )
+        for reference in current["provenance"].get("source_datasets", []):
+            source = snapshots.load(workspace, reference["id"])
+            if source["digest"] != reference["digest"]:
+                raise AuditError("composed dataset source binding changed")
+            pending.append(source)
 
 
 def assert_development_evaluator(workspace, evaluation_id):

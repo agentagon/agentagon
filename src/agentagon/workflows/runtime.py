@@ -9,10 +9,10 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 
 from agentagon.capabilities.traces import snapshots
 from agentagon.core.records import AuditError, digest, now
+from agentagon.domain import tasks as task_facts
 from agentagon.storage.config import Config
 from agentagon.storage.state import identifier, private_directory
 from agentagon.workflows import procedures as workflows
@@ -37,8 +37,9 @@ def operation_id(value):
         raise AuditError("operation_id must be a UUID") from exc
 
 
-def public_task(job):
-    return {
+def public_task(job, *, host_active=None):
+    host_active = bool(job.get("attempt_started_at")) if host_active is None else host_active
+    result = {
         k: copy.deepcopy(v)
         for k, v in job.items()
         if k
@@ -50,8 +51,15 @@ def public_task(job):
             "agent_settings",
             "attempt_started_at",
             "answers",
+            "start_intent",
         }
     }
+    result.update(
+        accounting=task_facts.accounting(job),
+        recovery=task_facts.recovery(job, host_active=host_active),
+        available_actions=task_facts.available_actions(job, host_active=host_active),
+    )
+    return result
 
 
 class TaskRuntime:
@@ -66,6 +74,8 @@ class TaskRuntime:
         self.slots = {}
         self.question_locks = {}
         self.answers = {}
+        self.clocks = {}
+        self.waiters = {}
         self.threads = set()
         self.stopping = False
         self.verify_result = lambda workspace, job, result: result
@@ -87,6 +97,52 @@ class TaskRuntime:
                         self._write(job)
             except (AuditError, OSError):
                 continue
+        self.accounting_thread = threading.Thread(
+            target=self._account_loop, daemon=True, name="agentagon-task-accounting"
+        )
+        self.accounting_thread.start()
+
+    def _phase(self, job):
+        key = (job["project_id"], job["id"])
+        if key in self.active:
+            sessions = min(job.get("host_slots", 1), max(1, len(job.get("active_reflections", []))))
+            return "waiting" if self.waiters.get(key, 0) >= sessions else "active"
+        return {"queued": "queued", "paused": "paused", "needs_input": "waiting"}.get(job["state"])
+
+    def _account_loop(self):
+        with self.condition:
+            while not self.stopping:
+                delay = 5
+                for project_id, task_id in list(self.active):
+                    try:
+                        job = self._read(project_id, task_id)
+                        clock = self.clocks.get((project_id, task_id))
+                        if not clock:
+                            continue
+                        elapsed = time.monotonic() - clock[0]
+                        remaining = task_facts.accounting(job)["remaining_seconds"]
+                        if elapsed >= 5 or (clock[1] == "active" and elapsed >= remaining):
+                            self._write(job)
+                            remaining = task_facts.accounting(job)["remaining_seconds"]
+                            if remaining <= 0 and job["state"] in {"running", "needs_input"}:
+                                job.update(
+                                    state="failed",
+                                    question=None,
+                                    next_action="Task time budget exhausted. Start another attempt with explicit limits.",
+                                )
+                                job.pop("continue_after_guidance", None)
+                                self._write(job)
+                                self.active[(project_id, task_id)].set()
+                        latest_clock = self.clocks[(project_id, task_id)]
+                        if latest_clock[1] == "active" and job["state"] in {
+                            "running",
+                            "needs_input",
+                        }:
+                            pending = time.monotonic() - latest_clock[0]
+                            delay = min(delay, max(0.01, remaining - pending))
+                    except (AuditError, OSError):
+                        continue
+                self.condition.wait(timeout=delay)
 
     def _read(self, project_id, job_id):
         identifier(job_id, "task")
@@ -96,16 +152,43 @@ class TaskRuntime:
         return job
 
     def _write(self, job, transaction=None):
+        key = (job["project_id"], job["id"])
+        timestamp, tick = now(), time.monotonic()
+        timing = dict(job.get("accounting") or {})
+        previous = self.clocks.get(key)
+        if previous:
+            elapsed, phase = max(0, tick - previous[0]), previous[1]
+        else:
+            phase = timing.get("phase")
+            elapsed = task_facts.seconds_between(timing.get("checkpoint_at"), timestamp)
+            # Abandoned live attempts are reconciled by _charge_attempt on startup.
+            if phase not in {"queued", "paused", "waiting"}:
+                elapsed = 0
+        if phase:
+            field = f"{phase}_seconds"
+            timing[field] = float(timing.get(field, 0)) + elapsed
+            if phase == "active":
+                job["elapsed_seconds"] += elapsed
+        timing.update(
+            active_seconds=job.get("elapsed_seconds", 0),
+            checkpoint_at=timestamp,
+            phase=self._phase(job),
+        )
+        job["accounting"] = timing
         saved = (transaction or self.state.db).put_record(
             job["project_id"], "tasks", job["id"], job
         )
         job.update(revision=saved["revision"], updated_at=saved["updated_at"])
+        if key in self.active:
+            self.clocks[key] = (tick, timing["phase"])
         with self.condition:
             self.condition.notify_all()
 
     def get(self, project_id, job_id):
         with self.condition:
-            return public_task(self._read(project_id, job_id))
+            return public_task(
+                self._read(project_id, job_id), host_active=(project_id, job_id) in self.active
+            )
 
     def list(self, project_id):
         return self.state.db.list_records(project_id, "tasks")
@@ -122,7 +205,7 @@ class TaskRuntime:
             raise AuditError("operation_id was already used for different task settings")
         return public_task(existing)
 
-    def submit(self, project_id, payload, *, request_binding=None):
+    def submit(self, project_id, payload, *, request_binding=None, start_context=None):
         if not isinstance(payload, dict):
             raise AuditError("task must be an object")
         if set(payload) - {
@@ -259,6 +342,9 @@ class TaskRuntime:
             for key in BUDGET_DEFAULTS:
                 options[key] = min(options[key], execution_profile["limits"][key])
                 execution_profile["limits"][key] = options[key]
+            execution_profile["limits"]["parallel_trials"] = min(
+                execution_profile["limits"]["parallel_trials"], options["max_trials"]
+            )
         settings = self.state.read()["agents"]
         if not settings.get("claude_api_key_ref") and os.environ.get("ANTHROPIC_API_KEY"):
             settings["claude_api_key_ref"] = "env:ANTHROPIC_API_KEY"
@@ -317,6 +403,25 @@ class TaskRuntime:
                 "elapsed_seconds": 0,
                 "next_action": "Waiting for coding-agent capacity.",
             }
+            if start_context:
+                job["start_intent"] = copy.deepcopy(start_context["intent"])
+                if start_context.get("goal_run"):
+                    context = start_context["goal_run"]
+                    job["goal_run_id"] = context["id"]
+                    job["goal"] += (
+                        "\n\nContinue this goal automatically through its current stage. "
+                        "Preserve existing required behaviors, scored metric definitions and regression guards. "
+                        "Ask only for genuinely missing inputs or incompatible correctness decisions. "
+                        "Do not publish, merge or deploy."
+                    )
+                    if context.get("details"):
+                        job["goal"] += "\n\nAdditional goal details: " + context["details"]
+                if start_context.get("continuation_of"):
+                    job["continuation_of"] = start_context["continuation_of"]
+                    if start_context.get("preparation"):
+                        job["preparation"] = copy.deepcopy(start_context["preparation"])
+                        if job["preparation"].get("snapshot_id"):
+                            job["options"]["trace_snapshot_id"] = job["preparation"]["snapshot_id"]
             with self.state.db.transaction() as transaction:
                 existing = transaction.get_record(project_id, "tasks", job_id)
                 if existing is not None:
@@ -423,7 +528,6 @@ class TaskRuntime:
             prepare(workspace, job, self._write)
 
     def _run(self, project_id, job_id, cancelled):
-        started = time.monotonic()
         request = {}
         try:
             with self.condition:
@@ -434,7 +538,7 @@ class TaskRuntime:
                 job.update(state="running", next_action=None, attempt_started_at=now())
                 self._write(job)
                 workflows.freeze_settings(workspace, job)
-                remaining = job["options"]["max_elapsed_seconds"] - job["elapsed_seconds"]
+                remaining = task_facts.accounting(job)["remaining_seconds"]
                 if remaining <= 0:
                     raise AuditError(
                         "task time budget exhausted; start a new task with explicit limits"
@@ -444,6 +548,12 @@ class TaskRuntime:
                 job = self._read(project_id, job_id)
                 if cancelled.is_set() or job["state"] != "running":
                     return
+                self._write(job)
+                remaining = task_facts.accounting(job)["remaining_seconds"]
+                if remaining <= 0:
+                    raise AuditError(
+                        "task time budget exhausted; start a new task with explicit limits"
+                    )
                 request = {
                     "agent": job["agent"],
                     "model": job.get("actual_model") or job["model"],
@@ -484,11 +594,11 @@ class TaskRuntime:
             outcome = (
                 automatic
                 if automatic is not None
-                else self._advance(project_id, job_id, workspace, request, cancelled, started)
+                else self._advance(project_id, job_id, workspace, request, cancelled)
             )
             with self.condition:
                 job = self._read(project_id, job_id)
-                if job["state"] in {"paused", "cancelled", "interrupted"}:
+                if job["state"] in {"paused", "cancelled", "interrupted", "failed"}:
                     return
                 if outcome.get("state") != "completed":
                     job.update(
@@ -527,7 +637,7 @@ class TaskRuntime:
         except Exception as exc:
             with self.condition:
                 job = self._read(project_id, job_id)
-                if job["state"] not in {"paused", "cancelled", "interrupted"}:
+                if job["state"] not in {"paused", "cancelled", "interrupted", "failed"}:
                     message = (
                         str(exc) if isinstance(exc, AuditError) else f"{type(exc).__name__}: {exc}"
                     )
@@ -546,7 +656,7 @@ class TaskRuntime:
             with self.condition:
                 cancelled.set()  # Release outstanding approval waiters on timeout/failure too.
                 job = self._read(project_id, job_id)
-                job["elapsed_seconds"] += time.monotonic() - started
+                self._write(job)
                 job.pop("attempt_started_at", None)
                 try:
                     self.record_outcome(workspace, job)
@@ -555,26 +665,39 @@ class TaskRuntime:
                     job["memory_retry_count"] = 1
                     job["memory_retry_at"] = now()
 
-                self._write(job)
                 self.active.pop((project_id, job_id), None)
+                self.clocks.pop((project_id, job_id), None)
+                self.waiters.pop((project_id, job_id), None)
+                if job.pop("continue_after_guidance", False) and not self.stopping:
+                    if task_facts.accounting(job)["remaining_seconds"] > 0:
+                        job.update(
+                            state="queued",
+                            question=None,
+                            next_action="Continuing with your guidance.",
+                        )
+                    else:
+                        job.update(
+                            state="failed",
+                            question=None,
+                            next_action="Task time budget exhausted. Start another attempt with explicit limits.",
+                        )
+                job["accounting"]["phase"] = None
+                self._write(job)
                 self.slots.pop((project_id, job_id), None)
                 self.question_locks.pop((project_id, job_id), None)
                 self.answers.pop((project_id, job_id), None)
                 self.threads.discard(threading.current_thread())
                 self._dispatch()
 
-    def _advance(self, project_id, job_id, workspace, request, cancelled, started):
+    def _advance(self, project_id, job_id, workspace, request, cancelled):
         """Own author/reviewer turns under one capacity slot and elapsed budget."""
         while True:
             with self.condition:
                 job = self._read(project_id, job_id)
                 if cancelled.is_set() or job["state"] != "running":
                     return {"state": "interrupted", "session_id": job.get("session_id")}
-                remaining = (
-                    job["options"]["max_elapsed_seconds"]
-                    - job["elapsed_seconds"]
-                    - (time.monotonic() - started)
-                )
+                self._write(job)
+                remaining = task_facts.accounting(job)["remaining_seconds"]
                 if remaining <= 0:
                     raise AuditError(
                         "task time budget exhausted; start a new task with explicit limits"
@@ -611,11 +734,14 @@ class TaskRuntime:
                         session_id=job.get("session_id"),
                         model=job.get("actual_model") or job["model"],
                         prompt=workflows.prompt(workspace, job),
+                        guidance_operations=[
+                            item["operation_id"]
+                            for item in job["messages"]
+                            if item.get("delivery_state") == "pending"
+                        ],
                     )
             if reflections:
-                if not self._reflect_batch(
-                    project_id, job_id, workspace, job, request, cancelled, remaining
-                ):
+                if not self._reflect_batch(project_id, job_id, workspace, job, request, cancelled):
                     return {"state": "interrupted", "session_id": job.get("session_id")}
                 continue
             if task:
@@ -674,9 +800,11 @@ class TaskRuntime:
                     job["review_tasks"][review_id]["state"] = review_state
                     job["active_review_id"] = None
                     job["messages"].append(
-                        f"Application-managed independent review {review_id} is {review_state}. "
-                        "Inspect its saved response. Continue the same workflow; a rejected evaluator "
-                        "must be repaired and checked again before requesting a new review."
+                        task_facts.message(
+                            f"Application-managed independent review {review_id} is {review_state}. "
+                            "Inspect its saved response. Continue the same workflow; a rejected evaluator "
+                            "must be repaired and checked again before requesting a new review."
+                        )
                     )
                     self._write(job)
                 continue
@@ -731,13 +859,14 @@ class TaskRuntime:
                 job["active_review_id"] = task["id"]
                 self._write(job)
 
-    def _reflect_batch(self, project_id, job_id, workspace, job, request, cancelled, remaining):
+    def _reflect_batch(self, project_id, job_id, workspace, job, request, cancelled):
         from agentagon.brain.adapters import run_reflection
 
-        deadline = time.monotonic() + remaining
-
         def run(reflection):
-            timeout = deadline - time.monotonic()
+            with self.condition:
+                current = self._read(project_id, job_id)
+                self._write(current)
+                timeout = task_facts.accounting(current)["remaining_seconds"]
             if timeout <= 0 or cancelled.is_set():
                 cancelled.set()
                 return False
@@ -775,7 +904,9 @@ class TaskRuntime:
                     item for item in saved["active_reflections"] if item != reflection
                 ]
                 saved["messages"].append(
-                    f"Application-managed reflection {reflection['request_id']} is complete. Continue using its saved response."
+                    task_facts.message(
+                        f"Application-managed reflection {reflection['request_id']} is complete. Continue using its saved response."
+                    )
                 )
                 self._write(saved)
             return True
@@ -793,6 +924,15 @@ class TaskRuntime:
     def _emit(self, project_id, job_id, event, *, review_id=None):
         with self.condition:
             job = self._read(project_id, job_id)
+            if event.get("type") == "guidance_delivered" and not review_id:
+                supplied = set(event.get("operation_ids") or [])
+                for item in job["messages"]:
+                    if item.get("operation_id") in supplied:
+                        item.update(
+                            delivery_state="delivered",
+                            delivered_at=now(),
+                            delivered_session_id=event.get("session_id") or job.get("session_id"),
+                        )
             if event.get("type") == "session" and review_id:
                 task = job["review_tasks"][review_id]
                 if event["session_id"] == job.get("session_id"):
@@ -837,10 +977,20 @@ class TaskRuntime:
     def _ask(self, project_id, job_id, question, cancelled):
         with self.condition:
             lock = self.question_locks.setdefault((project_id, job_id), threading.Lock())
+            key = (project_id, job_id)
+            self._write(self._read(project_id, job_id))
+            self.waiters[key] = self.waiters.get(key, 0) + 1
+            self._write(self._read(project_id, job_id))
         # Concurrent native sessions may ask questions, but the browser answers one
         # exact question at a time. Do not hold the condition while waiting for this lock.
-        with lock:
-            return self._ask_one(project_id, job_id, question, cancelled)
+        try:
+            with lock:
+                return self._ask_one(project_id, job_id, question, cancelled)
+        finally:
+            with self.condition:
+                self._write(self._read(project_id, job_id))
+                self.waiters[key] = max(0, self.waiters.get(key, 1) - 1)
+                self._write(self._read(project_id, job_id))
 
     def _ask_one(self, project_id, job_id, question, cancelled):
         with self.condition:
@@ -869,13 +1019,8 @@ class TaskRuntime:
             )
             self._write(job)
             key = (project_id, job_id)
-            budget_left = job["options"]["max_elapsed_seconds"] - job["elapsed_seconds"]
-            deadline = datetime.fromisoformat(job["attempt_started_at"]).timestamp() + budget_left
             while key not in self.answers and not cancelled.is_set():
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    raise AuditError("task time budget exhausted while waiting for input")
-                self.condition.wait(timeout=min(1, remaining))
+                self.condition.wait(timeout=1)
             if cancelled.is_set():
                 return {"decision": "decline"}
             answer = self.answers.pop(key)
@@ -883,11 +1028,14 @@ class TaskRuntime:
             if job["state"] != "needs_input":
                 return {"decision": "decline"}
             job["answers"][job["question"]["id"]]["consumed_at"] = now()
+            for item in job["messages"]:
+                if item.get("question_id") == job["question"]["id"]:
+                    item.update(delivery_state="delivered", delivered_at=now())
             job.update(state="running", question=None, next_action=None)
             self._write(job)
             return answer
 
-    def control(self, project_id, job_id, action, payload):
+    def control(self, project_id, job_id, action, payload, *, goal_run_id=None):
         if action not in {"answer", "pause", "resume", "cancel", "message", "retry-memory"}:
             raise AuditError("unsupported task control")
         allowed = {"operation_id", "question_id", "answer", "message"}
@@ -928,16 +1076,31 @@ class TaskRuntime:
                         raise AuditError("answer must be a bounded object")
                     if question_id in job["answers"]:
                         raise AuditError("this question already has an accepted response")
+                    if (
+                        job["question"].get("retained")
+                        and task_facts.accounting(job)["remaining_seconds"] <= 0
+                    ):
+                        raise task_facts.TaskControlError(
+                            "This task has no remaining time to act on an answer. Start another attempt with explicit limits.",
+                            "budget_exhausted",
+                            action=task_facts.recovery(job)["suggested_action"],
+                        )
                     job["answers"][question_id] = {
                         "answer": copy.deepcopy(answer),
                         "accepted_at": now(),
                     }
-                    if job["question"].get("retained"):
-                        job["messages"].append(
-                            json.dumps({"question": job["question"]["text"], "answer": answer})
+                    job["messages"].append(
+                        task_facts.message(
+                            json.dumps({"question": job["question"]["text"], "answer": answer}),
+                            role="user",
+                            kind="answer",
+                            operation_id=op,
+                            question_id=question_id,
                         )
-                        if len(job["messages"]) > 100:
-                            raise AuditError("task guidance limit reached; start a new task")
+                    )
+                    if len(job["messages"]) > 100:
+                        raise AuditError("task guidance limit reached; start a new task")
+                    if job["question"].get("retained"):
                         job.update(
                             state="queued",
                             question=None,
@@ -955,13 +1118,28 @@ class TaskRuntime:
                         next_action="Resume when ready." if action == "pause" else None,
                     )
                     interrupt = True
+                    job.pop("continue_after_guidance", None)
                 elif action == "resume":
+                    if job.get("goal_run_id") and job["goal_run_id"] != goal_run_id:
+                        raise task_facts.TaskControlError(
+                            "Resume this work from its goal run so its shared scope and remaining allowance can be checked.",
+                            "goal_run_owned",
+                            action="resume_goal_run",
+                        )
                     if key in self.active:
                         raise AuditError(
                             "wait for the previous agent process to stop before resuming"
                         )
-                    if job["state"] not in {"paused", "interrupted", "failed", "needs_input"}:
-                        raise AuditError("only paused, interrupted or blocked tasks can resume")
+                    status = task_facts.recovery(job)
+                    if not status["resume_allowed"]:
+                        raise task_facts.TaskControlError(
+                            "This task cannot resume: its time allowance is exhausted or execution is unreconciled. Start another attempt with explicit limits."
+                            if status["reason_code"]
+                            in {"budget_exhausted", "execution_unreconciled"}
+                            else "This task cannot resume; answer its current question or inspect its result.",
+                            status["reason_code"] or "resume_unavailable",
+                            action=status["suggested_action"],
+                        )
                     job.update(
                         state="queued",
                         question=None,
@@ -973,15 +1151,27 @@ class TaskRuntime:
                         raise AuditError("message must contain 1–4000 characters")
                     if job["state"] in TERMINAL:
                         raise AuditError("start a new task to follow up on a completed task")
-                    job["messages"].append(message.strip())
+                    job["messages"].append(
+                        task_facts.message(
+                            message.strip(), role="user", kind="guidance", operation_id=op
+                        )
+                    )
                     if len(job["messages"]) > 100:
                         raise AuditError("task guidance limit reached; start a new task")
                     if key in self.active:
                         interrupt = True
+                        continue_running = job["state"] in {"running", "needs_input"} or bool(
+                            job.get("continue_after_guidance")
+                        )
                         job.update(
                             state="paused",
                             question=None,
-                            next_action="Guidance saved. Resume after the current turn stops.",
+                            next_action=(
+                                "Guidance saved. Continuing after the current turn stops."
+                                if continue_running
+                                else "Guidance saved. Resume when ready."
+                            ),
+                            continue_after_guidance=continue_running,
                         )
                 job["receipts"][op] = binding
                 self._write(job, transaction)
@@ -1035,8 +1225,17 @@ class TaskRuntime:
         started = job.pop("attempt_started_at", None)
         if started is None:
             return False
-        elapsed = max(0, time.time() - datetime.fromisoformat(started).timestamp())
-        job["elapsed_seconds"] += elapsed
+        timing = dict(job.get("accounting") or {})
+        elapsed = task_facts.seconds_between(timing.get("checkpoint_at") or started, now())
+        timing["offline_seconds"] = float(timing.get("offline_seconds", 0)) + elapsed
+        if timing.get("phase", "active") == "active":
+            remaining = task_facts.accounting(job)["remaining_seconds"]
+            timing["unknown_seconds"] = float(timing.get("unknown_seconds", 0)) + min(
+                elapsed, remaining
+            )
+        timing.update(phase=None, checkpoint_at=now())
+        job["accounting"] = timing
+        job.pop("continue_after_guidance", None)
         return True
 
     def close(self):
@@ -1050,8 +1249,10 @@ class TaskRuntime:
                     question=None,
                     next_action="Restart Agentagon and resume this task.",
                 )
+                job.pop("continue_after_guidance", None)
                 self._write(job)
             self.condition.notify_all()
             threads = list(self.threads)
         for thread in threads:
             thread.join(timeout=5)
+        self.accounting_thread.join(timeout=5)

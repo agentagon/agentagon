@@ -3,6 +3,7 @@
 | Behavior | Source | Representative tests |
 |---|---|---|
 | Shared task admission, questions, cancellation and resumption | [Runtime](../../src/agentagon/workflows/runtime.py), [start contract](../../src/agentagon/workflows/requests.py) | [Lifecycle](../../tests/test_webapp_jobs.py), [real journeys](../../tests/test_workflow_runtime.py) |
+| Goal-driven improvement and shared allowance | [Coordinator](../../src/agentagon/workflows/goal_runs.py) | [Authorization and recovery](../../tests/test_goal_runs.py) |
 | Application agents and goals | [Domain catalog](../../src/agentagon/domain/catalog.py), [discovery](../../src/agentagon/capabilities/discovery.py) | [Identity and scope](../../tests/test_webapp_catalog.py) |
 | Independent trace issues and focused repair | [Issues](../../src/agentagon/domain/issues.py), [Discover](../../src/agentagon/workflows/discover/handler.py), [Fix](../../src/agentagon/workflows/fix/handler.py) | [Journeys](../../tests/test_workflow_runtime.py) |
 | Managed authors and separate reviewers | [Brain adapters](../../src/agentagon/brain/adapters.py), [review protocol](../../src/agentagon/workflows/procedures.py) | [Backend protocols](../../tests/test_webapp_agents.py), [managed reviews](../../tests/test_webapp_review.py) |

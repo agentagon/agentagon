@@ -14,6 +14,6 @@ This breaking release requires fresh state. Existing private data is neither mig
 
 `AGENTAGON_APP_STATE` isolates application settings, registrations and tasks. Project evidence is stored separately in the selected folder's `.agentagon` directory. A new application-state directory does not replace that project state.
 
-If Analyze project reports incompatible workspace state, stop the service and preserve the old `.agentagon` directory in a backup outside the project. Restart the service with the same application settings and retry analysis; it creates fresh project state. Keep the backup intact, and do not change version numbers to bypass validation. This does not require cloning the source folder or using GitHub.
+If detection reports incompatible workspace state, stop the service and preserve the old `.agentagon` directory in a backup outside the project. Restart the service with the same application settings and retry detection; it creates fresh project state. Keep the backup intact, and do not change version numbers to bypass validation. This does not require cloning the source folder or using GitHub.
 
 [Dashboard guide](../app.md) · [MCP setup](../mcp.md)

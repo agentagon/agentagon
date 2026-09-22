@@ -66,7 +66,9 @@ MAX_FILES = 1500
 MAX_FILE_BYTES = 500_000
 MAX_SCAN_BYTES = 20_000_000
 MAX_CANDIDATES = 200
+MAX_COVERAGE_DETAILS = 200
 REVIEW_CONTEXT_LINES = 50
+AGENT_ROLES = {"serving", "background", "evaluation", "development_utility", "unknown"}
 PYTHON_ENTRYPOINTS = {
     "agents.Agent",
     "agents.agent.Agent",
@@ -186,6 +188,8 @@ class PythonEntries(ast.NodeVisitor):
         self.scope = []
         self.entries = {}
         self.graphs = {}
+        self.recognized_calls = set()
+        self.unresolved = []
 
     def qualified(self, node):
         if isinstance(node, ast.Subscript):
@@ -241,7 +245,7 @@ class PythonEntries(ast.NodeVisitor):
 
     def visit_Assign(self, node):
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        names = [target.id for target in targets if isinstance(target, ast.Name)]
+        names = [name for target in targets if (name := self.assignment_name(target))]
         if names and isinstance(node.value, ast.Call):
             call = self.qualified(node.value.func)
             symbol = ".".join([*self.scope, names[0]])
@@ -257,13 +261,15 @@ class PythonEntries(ast.NodeVisitor):
                     call = graph["call"]
                     self.entries.pop(graph["symbol"], None)
             if call in PYTHON_ENTRYPOINTS:
+                self.recognized_calls.add(id(node.value))
                 entry = {
                     "name": _name(node.value, names[0]),
                     "symbol": symbol,
                     "line": node.lineno,
                     "call": call,
                 }
-                self.entries[symbol] = entry
+                self.describe_identity(entry, node.value)
+                self.record_entry(entry)
                 if call.endswith(".StateGraph") and not graph:
                     self.graphs[names[0]] = entry
         for name in names:
@@ -275,8 +281,94 @@ class PythonEntries(ast.NodeVisitor):
                 .endswith(".StateGraph")
             ):
                 self.graphs.pop(name, None)
+        if node.value is not None:
+            self.visit(node.value)
 
     visit_AnnAssign = visit_Assign
+
+    def record_entry(self, entry):
+        previous = self.entries.get(entry["symbol"])
+        if previous and previous["line"] != entry["line"]:
+            # One binding may have several conditional constructors. Keep a single
+            # reviewable identity and report alternatives instead of guessing instances.
+            lines = sorted(
+                set(previous.get("constructor_lines", [previous["line"]]) + [entry["line"]])
+            )
+            previous["constructor_lines"] = lines
+            limits = [
+                item
+                for item in previous.get("identity_limits", [])
+                if item["code"] != "multiple_constructors"
+            ]
+            limits.append(
+                {
+                    "code": "multiple_constructors",
+                    "reason": "This binding has alternative constructors at lines "
+                    + ", ".join(map(str, lines))
+                    + ".",
+                    "action": "Review the conditional definitions; add explicit instance bindings if they represent different agents.",
+                }
+            )
+            previous["identity_limits"] = limits
+            return
+        self.entries[entry["symbol"]] = entry
+
+    @staticmethod
+    def assignment_name(node):
+        """Keep the owning class/method and attribute in the stable source identity."""
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            owner = PythonEntries.assignment_name(node.value)
+            return f"{owner}.{node.attr}" if owner else None
+        return None
+
+    def describe_identity(self, entry, call):
+        name = next((item.value for item in call.keywords if item.arg == "name"), None)
+        dynamic = name is not None and not (
+            isinstance(name, ast.Constant) and isinstance(name.value, str)
+        )
+        entry["identity_kind"] = "factory" if dynamic and self.scope else "declaration"
+        if dynamic:
+            owner = self.scope[-1] if self.scope else entry["symbol"]
+            label = re.sub(r"^(make|create|build|run)_", "", owner).removesuffix("_tool")
+            entry["name"] = (label.replace("_", " ").strip().capitalize() + " factory")[:160]
+            entry["identity_limits"] = [
+                {
+                    "code": "dynamic_name",
+                    "reason": "Agent names depend on runtime configuration; instances are unresolved.",
+                    "action": "Review the factory and add explicit instance bindings if needed.",
+                }
+            ]
+
+    def visit_Return(self, node):
+        if isinstance(node.value, ast.Call):
+            call = self.qualified(node.value.func)
+            if call in PYTHON_ENTRYPOINTS:
+                self.recognized_calls.add(id(node.value))
+                symbol = ".".join([*self.scope, "return"])
+                entry = {
+                    "name": _name(node.value, self.scope[-1] if self.scope else "Agent"),
+                    "symbol": symbol,
+                    "line": node.lineno,
+                    "call": call,
+                }
+                self.describe_identity(entry, node.value)
+                self.record_entry(entry)
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        call = self.qualified(node.func)
+        if call in PYTHON_ENTRYPOINTS and id(node) not in self.recognized_calls:
+            self.unresolved.append(
+                {
+                    "line": node.lineno,
+                    "constructor": call,
+                    "reason": "unsupported_binding",
+                    "action": "Review this constructor and add an explicit agent binding.",
+                }
+            )
+        self.generic_visit(node)
 
 
 def python_entries(source):
@@ -360,7 +452,60 @@ def javascript_entries(source):
     return [{**entry, "call": ".".join(entry["call"])} for entry in entries.values()]
 
 
+def candidate_role(path):
+    """Directory conventions are reviewable hints, never exclusion or edit permission."""
+    parts = {part.casefold() for part in Path(path).parts[:-1]}
+    if parts & {"synthetic_data", "scripts", "development", "devtools"}:
+        return "development_utility"
+    if parts & {"evals", "evaluations", "evaluation", "benchmarks", "scorers"}:
+        return "evaluation"
+    if parts & {"workers", "background", "jobs"}:
+        return "background"
+    return "unknown"
+
+
+def dependency_proposals(tree, path, root):
+    """Resolve local import paths without loading modules or widening the edit scope."""
+    proposals = {}
+    for node in ast.walk(tree):
+        modules = []
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:
+                parent = Path(path).parent
+                for _ in range(node.level - 1):
+                    parent = parent.parent
+                base = ".".join([*parent.parts, *base.split(".")]).strip(".")
+            modules = [base, *(f"{base}.{alias.name}" for alias in node.names)]
+        for module in modules:
+            if not module or "*" in module:
+                continue
+            relative = Path(*module.split("."))
+            for base in (root, root / "src"):
+                candidates = [base / relative.with_suffix(".py"), base / relative / "__init__.py"]
+                for target in candidates:
+                    if target == root / path or not target.is_file():
+                        continue
+                    local_path = target.relative_to(root).as_posix()
+                    if not eligible_suggestion(root, local_path):
+                        continue
+                    proposals.setdefault(
+                        local_path,
+                        {
+                            "path": local_path,
+                            "relationship": "imports",
+                            "source_line": node.lineno,
+                            "approved_for_edits": False,
+                        },
+                    )
+                    break
+    return sorted(proposals.values(), key=lambda item: item["path"])
+
+
 def scan(root):
+    root = Path(root).resolve()
     candidates = []
     coverage = {
         "inspected_files": 0,
@@ -368,8 +513,39 @@ def scan(root):
         "scanned_bytes": 0,
         "excluded_files": 0,
         "unreadable_files": 0,
+        "policy_excluded_files": 0,
+        "excluded_directories": 0,
+        "generated_files": 0,
+        "oversized_files": 0,
+        "parse_error_files": 0,
+        "unsupported_patterns": 0,
+        "omissions": [],
+        "omitted_details": 0,
     }
     limits = []
+
+    def omission(path, reason, action, **details):
+        if len(coverage["omissions"]) < MAX_COVERAGE_DETAILS:
+            coverage["omissions"].append(
+                {"path": str(path), "reason": reason, "action": action, **details}
+            )
+        else:
+            coverage["omitted_details"] += 1
+
+    def finish():
+        descriptions = [
+            ("oversized_files", "source files exceed the size limit"),
+            ("parse_error_files", "source files could not be parsed"),
+            ("unreadable_files", "source files could not be read"),
+            ("unsupported_patterns", "agent constructions need an explicit identity review"),
+        ]
+        messages = [
+            f"{coverage[key]} {label}; review the named discovery omissions."
+            for key, label in descriptions
+            if coverage[key]
+        ]
+        return candidates, coverage, [*messages, *limits]
+
     local_modules = {
         name.split(".")[0]
         for name in PYTHON_ENTRYPOINTS
@@ -380,12 +556,14 @@ def scan(root):
         )
     }
     for directory, dirs, files in os.walk(root, followlinks=False):
-        dirs[:] = sorted(
-            d
-            for d in dirs
-            if application_path(Path(directory).relative_to(root) / d)
-            and not (Path(directory) / d).is_symlink()
-        )
+        retained_dirs = []
+        for name in sorted(dirs):
+            relative = (Path(directory) / name).relative_to(root)
+            if not application_path(relative) or (Path(directory) / name).is_symlink():
+                coverage["excluded_directories"] += 1
+                continue
+            retained_dirs.append(name)
+        dirs[:] = retained_dirs
         for filename in sorted(files):
             file = Path(directory) / filename
             relative = file.relative_to(root)
@@ -393,58 +571,107 @@ def scan(root):
                 continue
             if file.is_symlink() or not application_path(relative):
                 coverage["excluded_files"] += 1
+                coverage["policy_excluded_files"] += 1
                 continue
             if coverage["inspected_files"] >= MAX_FILES or len(candidates) >= MAX_CANDIDATES:
-                return (
-                    candidates,
-                    coverage,
-                    ["Discovery scan limit reached; add remaining agents manually."],
+                omission(
+                    relative,
+                    "scan_limit",
+                    "Narrow the source selection or add an explicit binding.",
                 )
+                limits.append("Discovery scan limit reached; review the last scanned path.")
+                return finish()
             try:
                 coverage["inspected_files"] += 1
                 size = file.stat().st_size
                 if size > MAX_FILE_BYTES:
                     coverage["excluded_files"] += 1
+                    coverage["oversized_files"] += 1
+                    omission(
+                        relative,
+                        "file_size_limit",
+                        "Review this file and add an explicit agent binding.",
+                        bytes=size,
+                        limit_bytes=MAX_FILE_BYTES,
+                    )
                     continue
                 if coverage["scanned_bytes"] + size > MAX_SCAN_BYTES:
-                    return (
-                        candidates,
-                        coverage,
-                        ["Source byte limit reached; add remaining agents manually."],
+                    omission(
+                        relative,
+                        "byte_limit",
+                        "Narrow the source selection or add explicit bindings.",
                     )
+                    limits.append("Source byte limit reached; review the last scanned path.")
+                    return finish()
                 with file.open("rb") as stream:
                     raw = stream.read(MAX_FILE_BYTES + 1)
                 if len(raw) > MAX_FILE_BYTES:
                     coverage["excluded_files"] += 1
+                    coverage["oversized_files"] += 1
+                    omission(
+                        relative,
+                        "file_size_limit",
+                        "Review this file and add an explicit agent binding.",
+                        limit_bytes=MAX_FILE_BYTES,
+                    )
                     continue
                 if coverage["scanned_bytes"] + len(raw) > MAX_SCAN_BYTES:
-                    return (
-                        candidates,
-                        coverage,
-                        ["Source byte limit reached; add remaining agents manually."],
+                    omission(
+                        relative,
+                        "byte_limit",
+                        "Narrow the source selection or add explicit bindings.",
                     )
+                    limits.append("Source byte limit reached; review the last scanned path.")
+                    return finish()
                 source = raw.decode(errors="replace")
                 coverage["scanned_files"] += 1
                 coverage["scanned_bytes"] += len(raw)
                 if generated(source):
                     coverage["excluded_files"] += 1
+                    coverage["generated_files"] += 1
                     continue
-                entries = (
-                    python_entries(source) if file.suffix == ".py" else javascript_entries(source)
-                )
+                dependencies = []
                 if file.suffix == ".py":
+                    tree = ast.parse(source)
+                    visitor = PythonEntries()
+                    visitor.visit(tree)
                     entries = [
                         entry
-                        for entry in entries
+                        for entry in visitor.entries.values()
                         if entry["call"].split(".")[0] not in local_modules
                     ]
+                    for unresolved in visitor.unresolved:
+                        if unresolved["constructor"].split(".")[0] in local_modules:
+                            continue
+                        coverage["unsupported_patterns"] += 1
+                        omission(relative, **unresolved)
+                    if entries:
+                        dependencies = dependency_proposals(tree, relative, root)
+                else:
+                    entries = javascript_entries(source)
                 candidates.extend(
-                    {**entry, "path": relative.as_posix()}
+                    {
+                        **entry,
+                        "path": relative.as_posix(),
+                        "role": candidate_role(relative),
+                        "role_source": "path_convention",
+                        "dependency_proposals": dependencies[:30],
+                        "dependency_proposals_omitted": max(0, len(dependencies) - 30),
+                    }
                     for entry in entries[: MAX_CANDIDATES - len(candidates)]
                 )
                 if len(candidates) >= MAX_CANDIDATES:
                     limits.append("Agent suggestion limit reached; add remaining agents manually.")
-                    return candidates, coverage, limits
-            except (OSError, SyntaxError, ValueError, RecursionError):
+                    return finish()
+            except OSError:
                 coverage["unreadable_files"] += 1
-    return candidates, coverage, limits
+                omission(relative, "unreadable", "Check that this source file is readable.")
+            except (SyntaxError, ValueError, RecursionError) as exc:
+                coverage["parse_error_files"] += 1
+                omission(
+                    relative,
+                    "parse_error",
+                    "Review syntax or add an explicit agent binding without running this file.",
+                    **({"line": exc.lineno} if isinstance(exc, SyntaxError) else {}),
+                )
+    return finish()

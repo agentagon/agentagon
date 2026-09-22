@@ -2,11 +2,11 @@
 
 Agentagon connects two loops: improve application agents using evidence, then remember outcomes to guide subsequent attempts. Improvement memory already participates in task preparation; production observations add feedback after deployment. Automatic rewriting of Agentagon's own workflows or evaluation gates is outside this release.
 
-## Start with an assessment
+## Detect agents and choose a goal
 
-Open any local folder, or clone a repository only when you need a new checkout. A GitHub remote is optional. Configure the managed Codex or Claude backend, optionally connect Braintrust, LangSmith or Langfuse, or import a supported trace. Save setup and select **Analyze project**. The default selection covers seven days and at most 100 completed traces within provider bounds.
+Add a local folder, or clone a repository when you need a new checkout, then select **Detect agents**. Valid discovered agents become active immediately. Open an agent, choose a goal, optionally add details and click **Go** to prepare measurements and search for verified improvements. A GitHub remote and production traces are optional.
 
-Assessment runs as a task. It scans application code, discovers trace identities, proposes bindings, groups supported issues and recommends next actions. Code-only and trace-only results remain useful. Missing authentication preserves partial results. Suggestions require confirmation; a trace name alone does not authorize source changes. A confirmed trace-only agent needs code ownership before Fix.
+For deeper evidence analysis, **Assess project** runs as a task. It scans application code and explicitly selected traces, enriches bindings, groups supported issues and recommends next actions. The default trace selection covers seven days and at most 100 completed traces within provider bounds. Missing authentication preserves partial results. A trace-only agent needs code ownership before code changes.
 
 ## Keep an improvement history
 

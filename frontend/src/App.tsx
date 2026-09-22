@@ -1,25 +1,26 @@
 import { OnboardingPage, ProjectProductionPage } from "./lifecycle";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate, useParams } from "react-router-dom";
 
 import {
   AddAgentModal,
   AddProjectModal,
   Button,
   Empty,
+  LaunchWorkflowModal,
   Sidebar,
   TaskPanel,
   Topbar,
   useSelectedTask,
 } from "./components";
-import { useAgents, useProjects, useTasks } from "./hooks";
+import { useAgents, useProjects, useTasks, useWorkflows } from "./hooks";
 import { TracePage } from "./traces";
+import { NewWorkFlow, NewWorkMenu, type NewWorkAction } from "./newwork";
 import {
   AgentInventoryPage,
   AgentPage,
   GoalPage,
-  GoalsPage,
   HomePage,
   SettingsPage,
   IssuesPage,
@@ -45,18 +46,36 @@ function Root() {
   return <main className="welcome" id="main"><div className="welcome-brand"><img src="/logo-split-crown-96.png" alt="" /><span>agentagon</span></div><div className="welcome-content"><p className="eyebrow">Agent improvement workspace</p><h1>Recursive self-improvement<br />for AI agents.</h1><p>Find problems, verify improvements, and learn from production outcomes.</p><div className="welcome-actions"><Button onClick={() => setAddProject("local")}>Open local folder</Button><Button tone="secondary" onClick={() => setAddProject("clone")}>Clone repository</Button></div><small>Work with any local folder. A GitHub remote is not required.</small></div>{addProject && <AddProjectModal mode={addProject} onClose={() => setAddProject(null)} />}</main>;
 }
 
+type WorkflowReturn = { to: string; workflow: string; defaultAgentId?: string; defaultGoalId?: string; defaultInput?: { type: string; id?: string; text?: string } };
+
 function Workspace() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const agentRoute = useMatch("/projects/:projectId/agents/:agentId/*");
   const queryClient = useQueryClient();
   const projects = useProjects();
   const agents = useAgents(projectId);
   const tasks = useTasks(projectId);
+  const workflows = useWorkflows();
+  const [returnDraft, setReturnDraft] = useState<WorkflowReturn>();
+  const [resumedDraft, setResumedDraft] = useState<WorkflowReturn>();
   const [navOpen, setNavOpen] = useState(false);
   const [addProject, setAddProject] = useState(false);
   const [addAgent, setAddAgent] = useState(false);
+  const [newWork, setNewWork] = useState<NewWorkAction>();
   const task = useSelectedTask(projectId);
   const project = projects.data?.projects.find((item) => item.id === projectId);
+  const contextAgentId = agentRoute?.params.agentId || new URLSearchParams(location.search).get("agent_id");
+  const contextAgent = agents.data?.confirmed.find(item => item.id === contextAgentId);
+  useEffect(() => { setNewWork(undefined); setReturnDraft(undefined); setResumedDraft(undefined); }, [projectId]);
+  useEffect(() => {
+    const context = location.state?.workflowReturn as WorkflowReturn | undefined;
+    if (context?.to?.startsWith(`/projects/${projectId}/`) && typeof context.workflow === "string") setReturnDraft(context);
+  }, [location.key, projectId]);
+  const resumedWorkflow = workflows.data?.workflows.find(item => item.workflow === resumedDraft?.workflow);
+  const requestedReturn = new URLSearchParams(location.search).get("return");
+  const goalReturn = requestedReturn?.startsWith(`/projects/${projectId}/agents/`) && requestedReturn.includes("/goals/") ? requestedReturn : null;
 
   useEffect(() => {
     if (!projectId) return;
@@ -70,14 +89,14 @@ function Workspace() {
   }, [projectId, queryClient]);
 
   if (projects.isLoading || agents.isLoading) return <div className="splash"><p>Loading workspace…</p></div>;
+  if (projects.isError && !projects.data) return <div className="splash"><h1>Workspace unavailable</h1><p>{projects.error.message}</p><Button onClick={() => projects.refetch()}>Retry</Button></div>;
   if (!project) return <Navigate to="/" replace />;
   const taskAttention = tasks.data?.tasks.filter((item) => item.needs_attention).length || 0;
-  const suggestionCount = agents.data?.suggestions.length || 0;
-  const attention = taskAttention + (suggestionCount ? 1 : 0);
+  const attention = taskAttention;
   return <div className={`app-shell ${task.selected ? "has-task-panel" : ""}`}>
-    <Sidebar projects={projects.data?.projects || []} project={project} agents={agents.data?.confirmed || []} suggestionCount={suggestionCount} open={navOpen} onClose={() => setNavOpen(false)} onAddProject={() => setAddProject(true)} onAddAgent={() => setAddAgent(true)} />
+    <Sidebar projects={projects.data?.projects || []} project={project} agents={agents.data?.confirmed || []} open={navOpen} onClose={() => setNavOpen(false)} onAddProject={() => setAddProject(true)} onAddAgent={() => setAddAgent(true)} />
     {navOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setNavOpen(false)} />}
-    <div className="workspace-shell"><Topbar project={project} taskCount={attention} onMenu={() => setNavOpen(true)} /><div className="work-area"><main id="main" tabIndex={-1} className="main-workspace"><Routes>
+    <div className="workspace-shell"><Topbar project={project} taskCount={attention} onMenu={() => setNavOpen(true)} newWork={<NewWorkMenu projectId={projectId} agentId={contextAgent?.id} agentName={contextAgent?.name} onAction={setNewWork} />} /><div className="work-area"><main id="main" tabIndex={-1} className="main-workspace">{goalReturn && <div className="workflow-return"><span>Your goal is saved.</span><Link className="button button-secondary" to={goalReturn}>Back to goal</Link></div>}{returnDraft && <div className="workflow-return"><span>Return to your workflow when setup is complete.</span><Button tone="secondary" onClick={() => { navigate(returnDraft.to); setResumedDraft(returnDraft); setReturnDraft(undefined); }}>Back to draft</Button></div>}<Routes>
       <Route path="home" element={<HomePage project={project} />} />
       <Route path="production" element={<ProjectProductionPage projectId={projectId} />} />
       <Route path="onboarding" element={<OnboardingPage project={project} />} />
@@ -88,20 +107,18 @@ function Workspace() {
       <Route path="tasks" element={<TasksPage projectId={projectId} />} />
       <Route path="tasks/:taskId" element={<TasksPage projectId={projectId} />} />
       <Route path="results/:workflow/:runId" element={<ResultPage projectId={projectId} />} />
-      <Route path="goals" element={<GoalsPage projectId={projectId} />} />
       <Route path="issues" element={<IssuesPage projectId={projectId} />} />
       <Route path="issues/:issueId" element={<IssuePage projectId={projectId} />} />
       <Route path="traces/:snapshotId" element={<TracePage projectId={projectId} />} />
       <Route path="lessons/:groupId/:entryId" element={<LessonPage projectId={projectId} />} />
-      <Route path="memory" element={<Navigate to={`/projects/${projectId}/settings/data`} replace />} />
-      <Route path="workflows" element={<Navigate to={`/projects/${projectId}/settings/execution`} replace />} />
-      <Route path="connectors" element={<Navigate to={`/projects/${projectId}/settings/connections`} replace />} />
       <Route path="settings/:section" element={<SettingsPage projectId={projectId} />} />
       <Route path="settings" element={<Navigate to="project" replace />} />
       <Route index element={<Navigate to="home" replace />} />
       <Route path="*" element={<Empty title="Page not found" action={<Button onClick={() => navigate(`/projects/${projectId}/home`)}>Go home</Button>} />} />
-    </Routes></main>{task.selected && <TaskPanel projectId={projectId} taskId={task.selected} onClose={task.close} />}</div></div>
+    </Routes></main>{task.selected && <TaskPanel key={task.selected} projectId={projectId} taskId={task.selected} onClose={task.close} />}</div></div>
     {addProject && <AddProjectModal onClose={() => setAddProject(false)} />}
     {addAgent && <AddAgentModal projectId={projectId} onClose={() => setAddAgent(false)} />}
+    {resumedDraft && resumedWorkflow && <LaunchWorkflowModal key={`${projectId}:${resumedDraft.to}:${resumedDraft.workflow}`} projectId={projectId} workflow={resumedWorkflow} defaultAgentId={resumedDraft.defaultAgentId} defaultGoalId={resumedDraft.defaultGoalId} defaultInput={resumedDraft.defaultInput} onClose={() => setResumedDraft(undefined)} />}
+    {newWork && <NewWorkFlow key={`${projectId}:${contextAgent?.id || "project"}:${newWork}`} projectId={projectId} agentId={contextAgent?.id} action={newWork} onClose={() => setNewWork(undefined)} />}
   </div>;
 }

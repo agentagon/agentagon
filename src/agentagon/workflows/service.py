@@ -202,6 +202,9 @@ class Application:
         self.production = ProductionRuntime(self)
         self.runtime.prepare_task = self.production.prepare
         self.scheduler = Scheduler(self)
+        from agentagon.workflows.goal_runs import GoalRuns
+
+        self.goal_runs = GoalRuns(self)
 
     def diagnostics(self):
         """Return bounded identities for the code and state loaded by this process."""
@@ -304,6 +307,10 @@ class Application:
             "suggestions": [item for item in agents if item["status"] != "confirmed"],
             "excluded": excluded,
         }
+
+    def detect_application_agents(self, project_id, payload):
+        with self.lock:
+            return self.catalog.detect(project_id, payload)
 
     def project_agent(self, project_id, agent_id):
         from agentagon.domain.projections import agent_projection
@@ -451,10 +458,25 @@ class Application:
 
         return prepare_workflow_start(self, project_id, payload)
 
-    def submit_task(self, project_id, payload, *, scheduled=False):
+    def workflow_draft(self, project_id, key):
+        from agentagon.workflows import drafts
+
+        return drafts.inspect(self.state, project_id, key)
+
+    def save_workflow_draft(self, project_id, key, payload):
+        from agentagon.workflows import drafts
+
+        return drafts.save(self.state, project_id, key, payload)
+
+    def clear_workflow_draft(self, project_id, key, payload):
+        from agentagon.workflows import drafts
+
+        return drafts.clear(self.state, project_id, key, payload)
+
+    def submit_task(self, project_id, payload, *, scheduled=False, goal_run=None):
         from agentagon.workflows.requests import submit
 
-        return submit(self, project_id, payload, scheduled=scheduled)
+        return submit(self, project_id, payload, scheduled=scheduled, goal_run=goal_run)
 
     def register(self, path):
         project = self.state.register(path)
@@ -507,44 +529,6 @@ class Application:
             )
         return self.register(str(path))
 
-    def application_agents(self, project_id):
-        return {"agents": self.catalog.agents(project_id)}
-
-    def discover_application_agents(self, project_id, payload):
-        """Discovery is an ordinary managed assessment task."""
-        if not isinstance(payload, dict) or set(payload) - {"operation_id", "options"}:
-            raise AuditError("use an assessment operation_id and options")
-        return self.submit_task(
-            project_id,
-            {
-                "workflow": "assess",
-                "operation_id": payload.get("operation_id"),
-                "input": {"type": "project", "id": project_id},
-                "options": payload.get("options", {}),
-            },
-        )
-
-    def infer_application_agent_responsibility(self, project_id, agent_id, payload):
-        """Review one retained suggestion with its exact bounded source context."""
-
-        if not isinstance(payload, dict) or set(payload) != {"operation_id"}:
-            raise AuditError("use an operation_id for responsibility inference")
-        agent = self.catalog.agent(project_id, agent_id)
-        if agent["status"] != "suggested":
-            raise AuditError("responsibility inference is available for suggested identities")
-        if len(agent.get("code_scopes", [])) != 1:
-            raise AuditError("responsibility inference requires one retained agent definition")
-        return self.submit_task(
-            project_id,
-            {
-                "workflow": "assess",
-                "operation_id": payload["operation_id"],
-                "agent_id": agent_id,
-                "input": {"type": "project", "id": project_id},
-                "options": {"assessment": {}},
-            },
-        )
-
     def save_application_agent(self, project_id, payload, agent_id=None):
         selector = payload.get("trace_selector", {})
         if not isinstance(selector, dict):
@@ -554,14 +538,6 @@ class Application:
             self._selected_connection_project(connection, selector)
         with self.lock:
             return self.catalog.save_agent(project_id, payload, agent_id)
-
-    def confirm_application_agent(self, project_id, agent_id, payload):
-        if not isinstance(payload, dict) or set(payload) != {"expected_revision"}:
-            raise AuditError("confirm the displayed identity revision")
-        with self.lock:
-            return self.catalog.confirm_suggestion(
-                project_id, agent_id, payload["expected_revision"]
-            )
 
     def exclude_application_agent(self, project_id, agent_id, payload):
         if not isinstance(payload, dict) or set(payload) != {"reason", "expected_revision"}:
@@ -598,6 +574,7 @@ class Application:
         return {
             "goal_record": goal_record,
             "draft": self.designs.get(project_id, agent_id, goal_id),
+            "attached_cases": self.designs.attached_cases(project_id, agent_id, goal_id),
             "evaluators": inventory["candidates"],
             "limitations": inventory["limitations"],
             "frozen_evaluators": frozen,
@@ -649,7 +626,13 @@ class Application:
         return result
 
     def submit_job(
-        self, project_id, payload, *, request_binding=None, suggested_read_only_scope=None
+        self,
+        project_id,
+        payload,
+        *,
+        request_binding=None,
+        suggested_read_only_scope=None,
+        start_context=None,
     ):
         request_binding = request_binding or digest(payload)
         existing = self.runtime.existing_submission(
@@ -845,7 +828,9 @@ class Application:
                 options["suite_manifest"] = suite
                 if measurement.get("baseline_id"):
                     options["baseline_id"] = measurement["baseline_id"]
-            return self.runtime.submit(project_id, payload, request_binding=request_binding)
+            return self.runtime.submit(
+                project_id, payload, request_binding=request_binding, start_context=start_context
+            )
 
     def completed_job(self, workspace, job, result):
         """Attach validated engine evidence to the goal_record captured by this task."""
@@ -908,6 +893,14 @@ class Application:
                 agent_id,
                 goal_id,
                 {
+                    **(
+                        {
+                            key: copy.deepcopy(goal_record["measurement"][key])
+                            for key in ("primary_metric", "guardrails")
+                        }
+                        if job.get("goal_run_id") and goal_record.get("measurement")
+                        else {}
+                    ),
                     "evaluation_id": result["evaluation_id"],
                     "expected_revision": goal_record["revision"],
                 },
@@ -922,6 +915,14 @@ class Application:
                 agent_id,
                 goal_id,
                 {
+                    **(
+                        {
+                            key: copy.deepcopy(goal_record["measurement"][key])
+                            for key in ("primary_metric", "guardrails")
+                        }
+                        if job.get("goal_run_id") and goal_record.get("measurement")
+                        else {}
+                    ),
                     "evaluation_id": baseline["evaluation_id"],
                     "baseline_id": baseline["baseline_id"],
                     "expected_revision": goal_record["revision"],
@@ -1994,6 +1995,7 @@ class Application:
             return self.agents()
 
     def close(self):
+        self.goal_runs.close()
         self.scheduler.close()
         self.runtime.close()
         with self.lock:
