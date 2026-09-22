@@ -2,7 +2,7 @@
 
 ## Is Agentagon a model or an agent framework?
 
-No. It is a local web app with CLI commands and optional coding-host skills for improving an existing agent application. Managed Codex or Claude sessions provide reasoning and code changes. Agentagon captures evidence, executes declared checks, and retains comparisons.
+No. It is a local web app with CLI commands and a local MCP interface for improving an existing agent application. Managed Codex or Claude sessions provide reasoning and code changes. Agentagon captures evidence, executes declared checks, and retains comparisons.
 
 It does not replace your application’s agent framework, production runtime, or trace collector.
 
@@ -30,7 +30,7 @@ It can inspect permitted textual prompt files and prompt construction in the sel
 
 ## Do I need production traces?
 
-No. Start with a goal based on requirements, code or existing tests, then agree on its measurement plan. Traces can supply runtime evidence when you have compatible exports or a project connection and permission to inspect them. Selected traces are a sample; they do not automatically establish production-wide rates.
+No. Start with a goal based on requirements, code or existing tests, then click Go to prepare measurements automatically. Traces can supply runtime evidence when you have compatible exports or a project connection and permission to inspect them. Selected traces are a sample; they do not automatically establish production-wide rates.
 
 ## Is it fully local or offline?
 
@@ -38,7 +38,7 @@ The bundled synthetic example needs no network after installation. Evidence is s
 
 ## Does it keep running when I close the coding agent?
 
-The web app owns its managed coding-agent sessions. Closing the browser leaves tasks running while the local service stays open. Stopping the service interrupts work; resume it explicitly after restarting. Optional skill workflows depend on their coding host, and saved evidence supports resumption there. See [task lifecycle](app.md).
+The web app owns its managed coding-agent sessions. Closing the browser leaves tasks running while the local service stays open. Stopping the service interrupts work; resume it explicitly after restarting. See [task lifecycle](app.md).
 
 ## Does a verified candidate mean the application is safe to deploy?
 
@@ -62,4 +62,4 @@ You choose among verified alternatives. Agentagon can prepare the selected chang
 
 ## Where should I start?
 
-[Install Agentagon](getting-started/install.md), then [open any local agent folder](app.md) and choose **Analyze project**. Review the suggested identities and confirm the exact agent scope. Bring one failure through **All issues**, or create an evaluation when you want to improve a broader behavior. A goal is optional for a trace-driven Fix. [Audit](audit.md) remains available for a separate fixed-rubric investigation. To inspect the local evidence format first, use the [synthetic example](getting-started/local-example.md).
+[Install Agentagon](getting-started/install.md), add a local project and choose **Detect agents**. Open an agent, choose a goal, optionally add details and click **Go**. Bring a specific failure through **All issues** for focused Fix work. [Audit](audit.md) remains available for a separate fixed-rubric investigation. To inspect the local evidence format first, use the [synthetic example](getting-started/local-example.md).

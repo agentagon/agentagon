@@ -76,6 +76,8 @@ export function useSessionOperation<T extends object>(key: string, binding: stri
   }, [binding, draft, key, operation, options.deferSavedBinding]);
   return {
     operation,
-    clear: () => sessionStorage.removeItem(key),
+    clear: () => {
+      try { sessionStorage.removeItem(key); } catch { /* Storage availability must not turn an admitted operation into a failed request. */ }
+    },
   };
 }

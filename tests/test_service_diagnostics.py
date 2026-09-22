@@ -26,7 +26,7 @@ def test_diagnostics_report_loaded_assets_and_state_contracts(tmp_path, monkeypa
     assert first["package_version"]
     assert first["build_id"] == "local-review"
     assert len(first["frontend_asset_version"]) == 16
-    assert first["state_contracts"] == {"evidence": "1", "workspace": 2, "metadata": 4}
+    assert first["state_contracts"] == {"evidence": "1", "workspace": 2, "metadata": 5}
     assert "must-not-leak" not in str(first)
 
 

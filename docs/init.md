@@ -1,7 +1,9 @@
-# Set up recursive self-improvement
+# Start with a goal
 
-Open Agentagon and choose **Open local folder** for an existing directory. Use **Clone repository** only when you need a new checkout; GitHub is optional. Configure the coding backend, optionally connect observability or share a trace, and review the scope before choosing **Analyze project**. Setup is saved so you can return later.
+Add your local project and select **Detect agents**. Detected agents are immediately available; you can edit their details or exclude an identity from **Agents**. Detection does not require Git, a coding backend or production traces.
 
-The assessment proposes application agents and code/trace bindings, groups supported issues, and recommends next actions. Confirm bindings before repairs. Code-only paths remain useful and are labeled unmeasured. Missing authentication preserves partial results.
+Open an agent and choose correctness, reliability, latency or cost, or write your own goal. Add optional details and click **Go**. Agentagon prepares measurements and an evaluator, measures a baseline, and searches for improvements within one time and trial allowance. It asks for missing inputs and continues after you answer. Code execution requires a clean committed Git checkout and authenticated coding backend.
 
-The sidebar keeps only the durable workspace destinations: **Overview**, **Agents**, **Production**, **Activity**, and **Settings**. Open each agent for its evaluations, issues, improvements, production observations, and lessons. Enable recurring observation explicitly from its Production tab. Monitoring observes and recommends; you start repairs and control deployment. Read the [production guide](production.md) for limits and interpretation, and the [workflow guide](workflows.md) for Fix and Optimize.
+The goal shows progress, questions and retained results. Pause, continue or stop the run there. Evaluation details and execution limits remain available as advanced controls. You choose among verified changes and control publication and deployment.
+
+The sidebar contains **Overview**, **Agents**, **Production**, **Activity**, and **Settings**. Each agent has evaluations, issues, changes, production observations and lessons. Enable recurring observation explicitly from its Production tab. Read the [production guide](production.md) for monitoring and the [workflow guide](workflows.md) for focused Fix work.

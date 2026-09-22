@@ -770,7 +770,7 @@ def _next_actions(issue, facets):
 def lifecycle_projection(application, project_id, issue_id):
     """Compose independent issue facets from their authoritative evidence.
 
-    This is a read projection only.  It does not rewrite the legacy ``status``
+    This is a read projection only.  It does not rewrite the persisted ``status``
     field, task state, engine verification, result decision, delivery,
     deployment, or observation records.
     """

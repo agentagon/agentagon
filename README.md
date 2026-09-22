@@ -29,7 +29,7 @@ agentagon
 
 ## Set up your improvement loop
 
-Open any existing local folder, or choose the separate clone action when you need a new checkout. A Git repository or GitHub remote is not required for assessment. Configure the managed coding backend and optionally connect observability or share a trace. **Analyze project** discovers application agents, proposes code/trace bindings, and recommends next actions. Confirm exact ownership before code-writing work. Missing authentication preserves the local scan and acquired evidence.
+Open any existing local folder, or choose the separate clone action when you need a new checkout. A Git repository or GitHub remote is not required for assessment. **Detect agents** scans the folder and makes detected agents available immediately, without a model or an acceptance queue. Open an agent, choose a goal, optionally add details, and click **Go**. Agentagon coordinates measurement and improvement in the background and asks for missing inputs. Code and trace assessment remains an optional deeper action.
 
 The persistent workspace is organized around **Overview**, **Agents**, **Production**, and **Activity**, with project configuration under **Settings**. Goals, issues, evaluations, improvements, connections, and lessons appear in the context where an engineer uses them.
 
@@ -37,11 +37,11 @@ Each agent has persistent improvement history and production observations. Enabl
 
 ## Choose a journey
 
-- **Assess project:** discover agents and next actions from selected code and traces.
+- **Detect agents:** find and activate agents from local source in one action. Optional assessment enriches their responsibilities and evidence.
 - **Observe production:** retain bounded observations, compare declared release cohorts, and recommend the next improvement.
 - **Discover issues:** import selected traces, diagnose and group supported failures, then choose what to address. Discovery does not launch repairs.
 - **Fix:** supply an issue, a trace, or a problem description. Establish expected behavior, reproduce the failure, author one focused repair, and verify it with independent review. A saved goal and full audit are optional.
-- **Optimize:** define a broader goal, accept a measurement plan, prepare an evaluator and baseline, then compare bounded, verified alternatives.
+- **Improve a goal:** choose an outcome and click Go. Agentagon prepares measurements, an evaluator and a baseline, then compares bounded, independently verified alternatives. Advanced evaluation controls remain available.
 
 Evaluation preparation, baseline measurement, measurement design, and full Audit are also built-in workflows. Explicit full audits retain the complete rubric and selected code/trace scope.
 

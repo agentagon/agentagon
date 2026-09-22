@@ -322,6 +322,9 @@ class _Run:
         self.text = []
         self.raw_final = None
         self.raw_last = None
+        self.waiting_lock = threading.Lock()
+        self.waiting_count = 0
+        self.waiting_started = None
 
     def safe(self, value):
         if isinstance(value, str):
@@ -345,7 +348,12 @@ class _Run:
     def check(self):
         if self.cancelled.is_set():
             raise _Stopped
-        if time.monotonic() >= self.deadline:
+        with self.waiting_lock:
+            waiting = (
+                time.monotonic() - self.waiting_started if self.waiting_started is not None else 0
+            )
+            expired = time.monotonic() >= self.deadline + waiting
+        if expired:
             raise AuditError(
                 "Coding-agent time limit reached. Resume the saved session explicitly."
             )
@@ -397,7 +405,6 @@ class _Run:
         # coding-agent execution time, so extend this turn's deadline by the exact
         # wait duration once the application resolves the request. A daemon waiter
         # still lets the owning job cancel a native request whose process is gone.
-        waiting_started = time.monotonic()
         answer_queue = queue.Queue(maxsize=1)
 
         def wait():
@@ -406,19 +413,29 @@ class _Run:
             except Exception as exc:
                 answer_queue.put((False, exc))
 
-        threading.Thread(target=wait, daemon=True, name="agentagon-agent-input").start()
-        while True:
-            if self.cancelled.is_set():
-                raise _Stopped
-            try:
-                ok, answer = answer_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
-            self.deadline += time.monotonic() - waiting_started
-            if not ok:
-                raise AuditError("The application could not resolve the agent's input request.")
-            self.check()
-            return answer if isinstance(answer, dict) else {}
+        with self.waiting_lock:
+            if self.waiting_count == 0:
+                self.waiting_started = time.monotonic()
+            self.waiting_count += 1
+        try:
+            threading.Thread(target=wait, daemon=True, name="agentagon-agent-input").start()
+            while True:
+                if self.cancelled.is_set():
+                    raise _Stopped
+                try:
+                    ok, answer = answer_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if not ok:
+                    raise AuditError("The application could not resolve the agent's input request.")
+                self.check()
+                return answer if isinstance(answer, dict) else {}
+        finally:
+            with self.waiting_lock:
+                self.waiting_count -= 1
+                if self.waiting_count == 0:
+                    self.deadline += time.monotonic() - self.waiting_started
+                    self.waiting_started = None
 
     def result(self, state):
         result = {"session_id": self.session_id, "text": "\n\n".join(self.text), "state": state}
@@ -758,6 +775,16 @@ def _codex(run):
         client.turn_id = response.get("turn", {}).get("id")
         if not client.turn_id:
             raise AuditError("Codex did not return a turn id.")
+        if run.request.get("guidance_operations"):
+            run.emit(
+                {
+                    "type": "guidance_delivered",
+                    "visibility": "diagnostic",
+                    "operation_ids": run.request["guidance_operations"],
+                    "session_id": run.session_id,
+                    "turn_id": client.turn_id,
+                }
+            )
         if client.pending_completion:
             client.handle(client.pending_completion)
         while client.finished is None:
@@ -892,6 +919,15 @@ async def _claude(run):
     async def drive():
         async with sdk.ClaudeSDKClient(options=sdk.ClaudeAgentOptions(**options)) as client:
             await client.query(run.request["prompt"])
+            if run.request.get("guidance_operations"):
+                run.emit(
+                    {
+                        "type": "guidance_delivered",
+                        "visibility": "diagnostic",
+                        "operation_ids": run.request["guidance_operations"],
+                        "session_id": run.session_id,
+                    }
+                )
             try:
                 await receive(client)
             except (_Stopped, AuditError, asyncio.CancelledError):

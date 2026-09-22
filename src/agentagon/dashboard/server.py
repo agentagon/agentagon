@@ -5,7 +5,7 @@ import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from agentagon.core.records import AuditError, encoded
 from agentagon.workflows.runtime import public_task
@@ -193,7 +193,10 @@ def create_server(application, port=0):
                     else:
                         self._json(200, self._get(parts))
             except AuditError as exc:
-                self._json(400, {"error": str(exc)})
+                self._json(
+                    getattr(exc, "status_code", 400),
+                    {"error": str(exc), **getattr(exc, "details", {})},
+                )
             except (OSError, ValueError, KeyError, TypeError):
                 self._json(400, {"error": "Unable to read this application resource."})
 
@@ -213,10 +216,17 @@ def create_server(application, port=0):
             if len(parts) >= 4 and parts[:2] == ["api", "projects"]:
                 project_id, resource = parts[2:4]
                 application.state.project(project_id)
+                if resource == "drafts" and len(parts) == 5:
+                    return application.workflow_draft(project_id, unquote(parts[4]))
+                if resource == "goal-runs" and len(parts) == 5:
+                    return application.goal_runs.get(project_id, parts[4])
                 if len(parts) == 4 and resource == "onboarding":
                     return application.production.onboarding(project_id)
                 if len(parts) == 4 and resource == "recommendations":
-                    return {"recommendations": application.production.recommendations(project_id)}
+                    return {
+                        "recommendations": application.production.recommendations(project_id),
+                        "action_templates": application.production.action_templates(),
+                    }
                 if len(parts) == 4 and resource in {
                     "production",
                     "improvements",
@@ -230,6 +240,8 @@ def create_server(application, port=0):
                     if len(parts) == 4:
                         return application.project_agents(project_id)
                     agent_id = parts[4]
+                    if len(parts) == 8 and parts[5] == "goals" and parts[7] == "runs":
+                        return application.goal_runs.list(project_id, agent_id, parts[6])
                     if len(parts) == 8 and parts[5] == "goals" and parts[7] == "design":
                         return application.measurement_design(project_id, agent_id, parts[6])
                     if len(parts) == 6 and parts[5] == "metrics":
@@ -329,6 +341,9 @@ def create_server(application, port=0):
         def do_POST(self):
             self._mutate()
 
+        def do_PUT(self):
+            self._mutate()
+
         def do_DELETE(self):
             self._mutate()
 
@@ -350,7 +365,10 @@ def create_server(application, port=0):
                 )
                 self._json(200, result)
             except AuditError as exc:
-                self._json(400, {"error": str(exc)})
+                self._json(
+                    getattr(exc, "status_code", 400),
+                    {"error": str(exc), **getattr(exc, "details", {})},
+                )
             except (OSError, ValueError, TypeError, KeyError):
                 self._json(
                     400,
@@ -367,6 +385,10 @@ def create_server(application, port=0):
             raise AuditError("operation not found")
 
         def _post(self, parts, body):
+            if self.command == "PUT" and not (
+                len(parts) == 5 and parts[:2] == ["api", "projects"] and parts[3] == "drafts"
+            ):
+                raise AuditError("operation not found")
             if parts == ["api", "projects"]:
                 return application.register(body.get("path"))
             if parts == ["api", "projects", "clone"]:
@@ -376,6 +398,13 @@ def create_server(application, port=0):
             if len(parts) >= 4 and parts[:2] == ["api", "projects"]:
                 project_id, resource = parts[2:4]
                 application.state.project(project_id)
+                if resource == "drafts":
+                    if len(parts) == 5:
+                        return application.save_workflow_draft(project_id, unquote(parts[4]), body)
+                    if len(parts) == 6 and parts[5] == "clear":
+                        return application.clear_workflow_draft(project_id, unquote(parts[4]), body)
+                if resource == "goal-runs" and len(parts) == 6:
+                    return application.goal_runs.control(project_id, parts[4], parts[5], body)
                 if resource == "onboarding" and len(parts) == 4:
                     return application.production.save_onboarding(project_id, body)
                 if resource == "recommendations" and len(parts) == 6 and parts[5] == "disposition":
@@ -423,23 +452,23 @@ def create_server(application, port=0):
                 if resource == "lessons" and len(parts) == 6:
                     return application.correct_lesson(project_id, parts[4], parts[5], body)
                 if resource == "agents":
+                    if len(parts) == 5 and parts[4] == "detect":
+                        return application.detect_application_agents(project_id, body)
+                    if len(parts) == 8 and parts[5] == "goals" and parts[7] == "runs":
+                        return application.goal_runs.start(project_id, parts[4], parts[6], body)
                     if len(parts) in {8, 9} and parts[5] == "goals" and parts[7] == "design":
                         if len(parts) == 8:
                             return application.designs.save(project_id, parts[4], parts[6], body)
                         if parts[8] == "accept":
                             return application.designs.accept(project_id, parts[4], parts[6], body)
+                        if parts[8] == "cases":
+                            return application.designs.attach_cases(
+                                project_id, parts[4], parts[6], body
+                            )
                     if len(parts) == 8 and parts[5] == "goals" and parts[7] == "measurement":
                         return application.catalog.bind_measurement(
                             project_id, parts[4], parts[6], body
                         )
-                    if len(parts) == 5 and parts[4] == "discover":
-                        return application.discover_application_agents(project_id, body)
-                    if len(parts) == 6 and parts[5] == "infer-responsibility":
-                        return application.infer_application_agent_responsibility(
-                            project_id, parts[4], body
-                        )
-                    if len(parts) == 6 and parts[5] == "confirm":
-                        return application.confirm_application_agent(project_id, parts[4], body)
                     if len(parts) == 6 and parts[5] == "exclude":
                         return application.exclude_application_agent(project_id, parts[4], body)
                     if len(parts) == 6 and parts[5] == "restore":
@@ -463,6 +492,12 @@ def create_server(application, port=0):
                         result["dashboard_url"] = self.origin + result["dashboard_url"]
                         return result
                     if len(parts) == 6:
+                        if parts[5] == "continue":
+                            from agentagon.workflows.requests import continue_task
+
+                            result = continue_task(application, project_id, parts[4], body)
+                            result["dashboard_url"] = self.origin + result["dashboard_url"]
+                            return result
                         return application.runtime.control(project_id, parts[4], parts[5], body)
                 if resource == "workflows" and len(parts) == 5 and parts[4] == "prepare":
                     return application.prepare_workflow_start(project_id, body)

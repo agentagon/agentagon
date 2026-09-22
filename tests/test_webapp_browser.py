@@ -1,3 +1,4 @@
+import copy
 import os
 import uuid
 from pathlib import Path
@@ -41,16 +42,18 @@ class WorkspaceFixture:
                     "revision": 2,
                 },
                 {
-                    "id": "agent_suggested",
+                    "id": "agent_example",
                     "project_id": "project_alpha",
                     "name": "Example agent",
                     "responsibility": "",
                     "responsibility_inference": {
-                        "state": "pending",
-                        "reason": "Awaiting bounded coding-backend review.",
+                        "state": "not_inferred",
+                        "reason": "Responsibility can be added after detection.",
                         "source_discovery_key": "discovery-example",
                     },
-                    "status": "suggested",
+                    "status": "confirmed",
+                    "origin": "code",
+                    "role": "development_utility",
                     "code_scopes": ["examples/example_agent.py"],
                     "shared_dependencies": [],
                     "trace_selector": {},
@@ -131,11 +134,10 @@ class WorkspaceFixture:
                     "events": [{"type": "progress", "text": "Compared two verified candidates."}],
                     "question": {
                         "id": "question_candidate",
-                        "prompt": "Choose the candidate to prepare for delivery.",
+                        "kind": "input",
+                        "text": "Choose the candidate to prepare for delivery.",
                     },
                     "next_action": "Choose a verified candidate.",
-                    "can_resume": False,
-                    "can_cancel": True,
                     "result": None,
                 },
                 {
@@ -155,8 +157,6 @@ class WorkspaceFixture:
                     "events": [{"type": "result", "text": "Baseline recorded."}],
                     "question": None,
                     "next_action": None,
-                    "can_resume": False,
-                    "can_cancel": False,
                     "result": {"baseline_id": "baseline_support"},
                 },
                 {
@@ -176,13 +176,11 @@ class WorkspaceFixture:
                     "events": [{"type": "progress", "text": "Reviewed code-backed candidates."}],
                     "question": None,
                     "next_action": None,
-                    "can_resume": False,
-                    "can_cancel": False,
                     "result": {
                         "summary": "Retained one code-backed agent definition.",
                         "candidates": [
                             {
-                                "id": "agent_suggested",
+                                "id": "agent_example",
                                 "file": "examples/example_agent.py",
                                 "keep": True,
                             }
@@ -244,6 +242,15 @@ class WorkspaceFixture:
             "project_beta": {},
         }
         self.discovery = None
+        self.detectable_agents = copy.deepcopy(self.agents)
+        self.goal_runs = {}
+        for tasks in self.tasks.values():
+            for task in tasks:
+                task["available_actions"] = (
+                    ["answer", "pause", "cancel", "message"]
+                    if task["state"] == "needs_input"
+                    else []
+                )
 
     @staticmethod
     def workflows():
@@ -350,7 +357,7 @@ class WorkspaceFixture:
         if resource == "onboarding":
             return {"state": "complete", "scope": {}}
         if resource == "recommendations":
-            return {"recommendations": []}
+            return {"recommendations": [], "action_templates": []}
         if resource == "production":
             return {
                 "monitors": [],
@@ -361,6 +368,22 @@ class WorkspaceFixture:
             }
         if resource == "agents":
             records = self.agents[project_id]
+            if len(parts) == 5 and parts[4] == "detect" and method == "POST":
+                assert uuid.UUID(payload["operation_id"])
+                known = {item["id"] for item in records}
+                records.extend(
+                    copy.deepcopy(item)
+                    for item in self.detectable_agents[project_id]
+                    if item["id"] not in known
+                )
+                return {
+                    "agents": records,
+                    "count": len(records),
+                    "state": "ready",
+                    "limitations": [],
+                    "coverage": {},
+                    "operation_id": payload["operation_id"],
+                }
             if len(parts) == 4:
                 return {
                     "agents": records,
@@ -388,7 +411,36 @@ class WorkspaceFixture:
                         self.goals.setdefault(agent_id, []).append(goal)
                         return goal
                     return {"goals": self.goals.get(agent_id, [])}
-                return next(item for item in self.goals[agent_id] if item["id"] == parts[6])
+                goal = next(item for item in self.goals[agent_id] if item["id"] == parts[6])
+                if len(parts) == 8 and parts[7] == "design":
+                    return {"draft": None, "attached_cases": None}
+                if len(parts) == 8 and parts[7] == "runs":
+                    if method == "POST":
+                        assert uuid.UUID(payload["operation_id"])
+                        run = {
+                            "id": "goalrun_started",
+                            "project_id": project_id,
+                            "agent_id": agent_id,
+                            "goal_id": goal["id"],
+                            "state": "running",
+                            "stage": "design",
+                            "active_task_id": None,
+                            "task_ids": [],
+                            "summary": "Starting work toward your goal.",
+                            "details": payload.get("details", ""),
+                            "requirements": [],
+                            "accounting": {"active_seconds": 0, "remaining_seconds": 1800},
+                            "available_actions": ["pause", "cancel"],
+                            "revision": 1,
+                        }
+                        self.goal_runs[run["id"]] = run
+                        return run
+                    return {
+                        "runs": [
+                            run for run in self.goal_runs.values() if run["goal_id"] == goal["id"]
+                        ]
+                    }
+                return goal
             if parts[5] == "overview":
                 return {
                     **self.overview(project_id),
@@ -397,6 +449,21 @@ class WorkspaceFixture:
                 }
         if resource == "overview":
             return self.overview(project_id)
+        if resource == "goal-runs":
+            run = self.goal_runs[parts[4]]
+            if len(parts) == 6 and method == "POST":
+                assert uuid.UUID(payload["operation_id"])
+                action = parts[5]
+                run.update(
+                    state={"pause": "paused", "resume": "running", "cancel": "cancelled"}[action],
+                    available_actions={
+                        "pause": ["resume", "cancel"],
+                        "resume": ["pause", "cancel"],
+                        "cancel": [],
+                    }[action],
+                    revision=run["revision"] + 1,
+                )
+            return run
         if resource == "tasks":
             if len(parts) == 4:
                 if method == "POST":
@@ -415,8 +482,7 @@ class WorkspaceFixture:
                         "conversation": [],
                         "events": [],
                         "question": None,
-                        "can_resume": False,
-                        "can_cancel": True,
+                        "available_actions": ["pause", "cancel", "message"],
                     }
                     self.tasks[project_id].insert(0, task)
                     return {"id": task["id"]}
@@ -434,8 +500,6 @@ class WorkspaceFixture:
                     "events",
                     "question",
                     "result",
-                    "can_resume",
-                    "can_cancel",
                 }
                 return {
                     "tasks": [
@@ -465,20 +529,12 @@ class WorkspaceFixture:
                         "expected_revisions": {
                             "project": "project-revision",
                             "settings": "settings-revision",
-                            "agent": "suggested-agent-revision",
+                            "agent": "agent-revision",
                             "code_source": "source-revision",
                             "brain": "brain-revision",
                         },
                     },
-                    "prerequisites": [
-                        {
-                            "code": "suggested_agent_read_only",
-                            "state": "satisfied",
-                            "blocking": False,
-                            "evidence_refs": [],
-                            "context": {"read_only": True},
-                        }
-                    ],
+                    "prerequisites": [],
                     "limitations": [],
                     "expected_outputs": ["audit_findings", "evidence_report"],
                     "revisions": {},
@@ -555,8 +611,6 @@ class WorkspaceFixture:
                 "settings": {},
                 "profiles": {"local": {"runner": {"kind": "local"}}},
             }
-        if resource == "application-agents" and parts[-1] == "discover":
-            return {"agents": self.agents[project_id], "limitations": []}
         return {}
 
     def overview(self, project_id):
@@ -594,7 +648,7 @@ def webapp_page():
         page.set_default_timeout(8_000)
         fixture = WorkspaceFixture()
         page.route("**/*", fixture.route)
-        page.goto("http://agentagon.test/")
+        page.goto("http://127.0.0.1/")
         page.get_by_role("heading", name="Support platform").wait_for()
         yield page, fixture
         context.close()
@@ -617,126 +671,87 @@ def test_named_agents_and_project_switch_are_scoped(webapp_page):
     assert page.get_by_role("complementary", name="Task details").count() == 0
 
 
-def test_discovered_agents_have_a_clear_review_handoff(webapp_page):
+def test_detection_opens_usable_agents_without_an_acceptance_queue(webapp_page):
     page, fixture = webapp_page
-    sidebar = page.locator(".sidebar")
-    assert sidebar.get_by_role("link", name="Agents 1 suggestions").is_visible()
-    assert page.get_by_text("Review discovered agents", exact=True).is_visible()
-
-    sidebar.get_by_role("link", name="Agents 1 suggestions").click()
+    fixture.agents["project_alpha"] = []
+    page.goto("http://127.0.0.1/projects/project_alpha/onboarding")
+    page.get_by_role("heading", name="Find your agents", exact=True).wait_for()
+    page.get_by_role("button", name="Detect agents", exact=True).click()
     page.wait_for_url("**/projects/project_alpha/agents")
-    page.get_by_role("heading", name="Agents").wait_for()
-    assert page.get_by_role("searchbox", name="Search").is_visible()
-    assert page.get_by_text("Example agent", exact=True).is_visible()
-    page.get_by_role("button", name="Review").click()
-    review = page.get_by_role("dialog", name="Example agent")
-    assert review.get_by_text("Review suggested identity", exact=True).is_visible()
-    assert review.get_by_text("Read only", exact=True).is_visible()
-    assert review.get_by_text("examples/example_agent.py:2", exact=True).is_visible()
-    assert review.get_by_text(
-        'example_agent = Agent(name="Example agent")', exact=True
-    ).is_visible()
-    assert review.get_by_role("button", name="Confirm this exact scope").is_disabled()
-    review.get_by_role("button", name="Run read-only audit").click()
-    page.wait_for_url("**/projects/project_alpha/tasks/task_started")
-    audit_start = next(
-        item for item in fixture.mutations if item["path"] == "/api/projects/project_alpha/tasks"
-    )
-    assert audit_start["payload"]["workflow"] == "audit"
-    assert audit_start["payload"]["agent_id"] == "agent_suggested"
-    assert audit_start["payload"]["expected_revisions"]["agent"] == ("suggested-agent-revision")
-
-    page.goto("http://agentagon.test/projects/project_alpha/tasks/task_assess")
-    panel = page.get_by_role("complementary", name="Task details")
-    panel.get_by_role("heading", name="Project assessed with limits").wait_for()
-    panel.get_by_role("link", name="Review discovered agents").click()
-    page.wait_for_url("**/projects/project_alpha/agents")
-
-    for agent in fixture.agents["project_alpha"]:
-        agent["status"] = "suggested"
-    page.goto("http://agentagon.test/projects/project_alpha/home")
-    page.get_by_text("Review discovered agents", exact=True).wait_for()
-    assert page.get_by_text(
-        "2 suggested identities; choose only the ones you want to use.", exact=True
-    ).is_visible()
-    assert page.get_by_text("Set up", exact=True).count() == 0
-
-
-def test_direct_suggested_agent_route_is_a_read_only_review_gate(webapp_page):
-    page, _ = webapp_page
-    page.goto("http://agentagon.test/projects/project_alpha/agents/agent_suggested/overview")
-    page.get_by_role("heading", name="Example agent").wait_for()
-    assert page.get_by_text("Confirm this identity to open its workspace", exact=True).is_visible()
-    assert page.get_by_role("button", name="Edit identity").count() == 0
-    assert page.get_by_role("link", name="Evaluations").count() == 0
-    page.get_by_role("button", name="Review exact scope").click()
-    review = page.get_by_role("dialog", name="Example agent")
-    assert review.get_by_role("button", name="Run read-only audit").is_visible()
-    assert review.get_by_role("button", name="Confirm this exact scope").is_disabled()
-
-
-def test_agent_goal_workspace_uses_one_stage_rail(webapp_page):
-    page, _ = webapp_page
-    page.locator(".sidebar").get_by_role("link", name="Support agent").click()
-    page.get_by_role("heading", name="Support agent").wait_for()
-    assert page.get_by_role("button", name="Edit identity").count() == 1
-    assert page.get_by_role("button", name="Add goal_record").count() == 0
-    page.get_by_role("link", name="Task success and correctness").click()
-    rail = page.get_by_role("navigation", name="Goal stages")
-    rail.get_by_role("button").first.wait_for()
-    assert rail.get_by_role("button").all_inner_texts() == [
-        "✓\nDefine\nCOMPLETE",
-        "✓\nMeasure\nCOMPLETE",
-        "3\nImprove\nREADY",
-        "4\nReview\nNEEDS_INPUT",
+    page.get_by_text("2 agents are ready to use.", exact=True).wait_for()
+    row = page.locator(".identity-inventory-row").filter(has_text="Example agent")
+    assert row.get_by_text("active", exact=True).is_visible()
+    row.get_by_role("link", name="Open", exact=True).click()
+    page.wait_for_url("**/agents/agent_example/overview")
+    page.get_by_role("heading", name="Example agent", exact=True).wait_for()
+    assert page.get_by_role("button", name="Improve task success", exact=True).is_visible()
+    assert page.get_by_role("button", name="Confirm this exact scope").count() == 0
+    assert [item["path"] for item in fixture.mutations] == [
+        "/api/projects/project_alpha/agents/detect"
     ]
-    page.get_by_role("button", name="Measure").click()
-    page.get_by_text("eval_support", exact=True).wait_for()
-    assert page.get_by_text("baseline_support", exact=True).is_visible()
 
 
-def test_skills_and_goal_actions_share_task_submission(webapp_page):
+def test_direct_detected_agent_route_opens_its_workspace(webapp_page):
+    page, _ = webapp_page
+    page.goto("http://127.0.0.1/projects/project_alpha/agents/agent_example/overview")
+    page.get_by_role("heading", name="Example agent", exact=True).wait_for()
+    assert page.get_by_role("button", name="Edit identity", exact=True).is_visible()
+    assert page.get_by_role("link", name="Evaluations", exact=True).is_visible()
+    assert page.get_by_role("button", name="Write a goal", exact=True).is_visible()
+    assert page.get_by_role("dialog").count() == 0
+
+
+def test_agent_goal_workspace_has_one_go_action_and_optional_evaluation_details(webapp_page):
+    page, _ = webapp_page
+    page.locator(".sidebar").get_by_role("link", name="Support agent", exact=True).click()
+    page.get_by_role("heading", name="Support agent", exact=True).wait_for()
+    assert page.get_by_role("button", name="Edit identity", exact=True).is_visible()
+    page.get_by_role("link", name="Task success and correctness").click()
+    page.get_by_role("button", name="Go", exact=True).wait_for()
+    assert page.get_by_role("button", name="Go", exact=True).is_enabled()
+    assert page.get_by_label("Details Optional").is_visible()
+    assert page.get_by_role("navigation", name="Goal stages").count() == 0
+    assert not page.get_by_role("button", name="Edit evaluation details", exact=True).is_visible()
+    page.get_by_text("Evaluation details Optional", exact=True).click()
+    page.get_by_role("button", name="Edit evaluation details", exact=True).wait_for()
+    assert page.get_by_text("Retries never create duplicate tickets.", exact=True).is_visible()
+
+
+def test_go_submits_one_bound_goal_run_and_controls_that_run(webapp_page):
     page, fixture = webapp_page
     goal = fixture.goals["agent_support"][0]
     goal["measurement_plan"] = None
     goal["measurement"] = None
-    page.goto(
-        "http://agentagon.test/projects/project_alpha/agents/agent_support/goals/goal_correctness"
+    page.goto("http://127.0.0.1/projects/project_alpha/agents/agent_support/goals/goal_correctness")
+    page.get_by_label("Details Optional").fill("Preserve one ticket per request.")
+    page.get_by_role("button", name="Go", exact=True).click()
+    page.wait_for_url("**/goals/goal_correctness?run=goalrun_started")
+    request = fixture.mutations[0]
+    assert request["path"] == (
+        "/api/projects/project_alpha/agents/agent_support/goals/goal_correctness/runs"
     )
-    page.get_by_role("button", name="Design measurements").click()
-    dialog = page.get_by_role("dialog")
-    dialog.get_by_role("button", name="Create evaluation proposal").click()
-    page.wait_for_timeout(100)
-    assert any(item["path"] == "/api/projects/project_alpha/tasks" for item in fixture.mutations)
-    page.wait_for_url("**/projects/project_alpha/tasks/task_started")
-    request = next(
-        item for item in fixture.mutations if item["path"] == "/api/projects/project_alpha/tasks"
-    )
+    assert uuid.UUID(request["payload"]["operation_id"])
     assert request["payload"] == {
         "operation_id": request["payload"]["operation_id"],
-        "workflow": "design",
-        "agent_id": "agent_support",
-        "input": {"type": "goal", "id": "goal_correctness"},
-        "options": {},
-        "limits": {
-            "max_trials": 24,
-            "max_elapsed_seconds": 1800,
-            "trial_timeout_seconds": 60,
-        },
-        "expected_revisions": {
-            "project": "project-revision",
-            "settings": "settings-revision",
-            "agent": "suggested-agent-revision",
-            "code_source": "source-revision",
-            "brain": "brain-revision",
-        },
+        "details": "Preserve one ticket per request.",
     }
-    assert page.get_by_role("complementary", name="Task details").is_visible()
+    assert not any(item["path"].endswith("/tasks") for item in fixture.mutations)
+    assert page.get_by_role("button", name="Go", exact=True).count() == 0
+    page.get_by_role("button", name="Pause", exact=True).click()
+    page.get_by_role("button", name="Continue", exact=True).wait_for()
+    page.get_by_role("button", name="Continue", exact=True).click()
+    page.get_by_role("button", name="Stop", exact=True).click()
+    page.get_by_role("button", name="Start new run", exact=True).wait_for()
+    assert [item["path"].rsplit("/", 1)[-1] for item in fixture.mutations[1:]] == [
+        "pause",
+        "resume",
+        "cancel",
+    ]
 
 
 def test_task_history_has_stable_urls_and_bound_decisions(webapp_page):
     page, fixture = webapp_page
-    page.goto("http://agentagon.test/projects/project_alpha/tasks/task_decision")
+    page.goto("http://127.0.0.1/projects/project_alpha/tasks/task_decision")
     panel = page.get_by_role("complementary", name="Task details")
     panel.get_by_text("Choose the candidate to prepare for delivery.").wait_for()
     panel.get_by_label("Response").fill("Use the safer verified candidate.")
@@ -784,7 +799,7 @@ def test_task_approvals_send_an_explicit_decision(webapp_page):
         "kind": "approval",
         "text": "Approve the proposed command?",
     }
-    page.goto("http://agentagon.test/projects/project_alpha/tasks/task_decision")
+    page.goto("http://127.0.0.1/projects/project_alpha/tasks/task_decision")
     panel = page.get_by_role("complementary", name="Task details")
     panel.get_by_role("button", name="Approve").click()
     page.wait_for_timeout(50)
@@ -796,21 +811,56 @@ def test_task_approvals_send_an_explicit_decision(webapp_page):
     }
 
 
-def test_connectors_are_project_resources(webapp_page):
-    page, _ = webapp_page
+@pytest.mark.parametrize("focus_before_frame", [False, True])
+def test_connectors_are_project_resources(webapp_page, focus_before_frame):
+    page, fixture = webapp_page
     page.get_by_role("link", name="Settings").click()
     page.get_by_role("link", name="Connections", exact=True).click()
     page.get_by_role("heading", name="Connected providers").wait_for()
     assert page.get_by_text("Production support", exact=True).is_visible()
+    page.evaluate("""() => {
+        const requestFrame = window.requestAnimationFrame.bind(window);
+        window.modalFocusFrames = [];
+        window.requestAnimationFrame = callback => {
+            window.modalFocusFrames.push(callback);
+            return -window.modalFocusFrames.length;
+        };
+        window.flushModalFocus = () => {
+            window.requestAnimationFrame = requestFrame;
+            window.modalFocusFrames.splice(0).forEach(callback => callback(performance.now()));
+        };
+    }""")
     page.locator(".connector-card").filter(has_text="LangSmith").get_by_role(
         "button", name="Connect"
     ).click()
     dialog = page.get_by_role("dialog")
+    page.wait_for_function("window.modalFocusFrames.length > 0")
+    if focus_before_frame:
+        # Run the deferred autofocus between focus and keyboard text insertion.
+        dialog.get_by_label("API key").evaluate("""element => {
+            element.addEventListener("focus", () => {
+                queueMicrotask(() => window.flushModalFocus());
+            }, { once: true });
+        }""")
+    else:
+        page.evaluate("window.flushModalFocus()")
+        assert dialog.get_by_label("API URL").evaluate(
+            "element => element === document.activeElement"
+        )
     dialog.get_by_label("API key").fill("secret-value")
+    assert dialog.get_by_label("API key").input_value() == "secret-value"
+    assert dialog.get_by_label("API URL").input_value() == "https://langsmith.example.test"
     dialog.get_by_role("button", name="Find projects").click()
     dialog.get_by_label("Provider project").select_option("remote_one")
     dialog.get_by_role("button", name="Connect").click()
     dialog.wait_for(state="detached")
+    assert fixture.discovery == {
+        "provider": "langsmith",
+        "endpoint": "https://langsmith.example.test",
+        "credentials": {"api_key": "secret-value"},
+    }
+    assert fixture.connections["project_alpha"][-1]["project"] == "remote_one"
+    assert fixture.connections["project_beta"] == []
 
 
 def test_assistant_settings_only_request_relevant_credentials(webapp_page):
@@ -840,12 +890,12 @@ def test_mobile_navigation_and_task_panel_are_full_width(webapp_page):
 
 def test_issue_triage_controls_send_current_revision_and_refresh_projection(webapp_page):
     page, fixture = webapp_page
-    page.goto("http://agentagon.test/projects/project_alpha/issues/issue_missing_citation")
+    page.goto("http://127.0.0.1/projects/project_alpha/issues/issue_missing_citation")
     page.get_by_role("heading", name="Missing citation").wait_for()
 
-    page.get_by_label("Confirmed agent").select_option("agent_support")
-    page.get_by_role("button", name="Assign agent").click()
     triage = page.locator(".issue-triage")
+    triage.get_by_role("combobox").select_option("agent_support")
+    page.get_by_role("button", name="Assign agent").click()
     triage.get_by_text("Support agent", exact=True).wait_for()
 
     triage.get_by_role("textbox", name="Expected behavior").fill(
@@ -892,7 +942,7 @@ def test_new_user_sees_project_onboarding():
         fixture = WorkspaceFixture()
         fixture.projects = []
         page.route("**/*", fixture.route)
-        page.goto("http://agentagon.test/")
+        page.goto("http://127.0.0.1/")
         page.get_by_role("heading", name="Recursive self-improvement for AI agents.").wait_for()
         page.get_by_role("button", name="Open local folder").click()
         page.get_by_role("dialog").get_by_label("Local folder path").fill("/projects/new")
@@ -953,14 +1003,14 @@ def test_real_service_trace_discovery_and_memory(tmp_path):
         dialog.get_by_role("button", name="Discover issues").click()
         page.wait_for_url("**/tasks/task_*")
         page.get_by_text("One supported failure", exact=False).first.wait_for()
-        page.get_by_role("link", name="Overview", exact=True).click()
-        page.get_by_role("link", name="All issues", exact=True).click()
-        page.get_by_role("link", name="Weather times out", exact=True).click()
+        page.locator(".sidebar").get_by_role("link", name="Weather", exact=True).click()
+        page.get_by_role("link", name="Issues", exact=True).click()
+        page.get_by_role("link", name="Weather times out").click()
         page.get_by_role("heading", name="What failed", exact=True).wait_for()
         page.get_by_text("The weather span reports timeout", exact=True).wait_for()
-        page.get_by_role("link", name="Weather", exact=True).click()
+        page.locator(".sidebar").get_by_role("link", name="Weather", exact=True).click()
         page.get_by_role("link", name="Evaluations", exact=True).click()
-        page.get_by_role("button", name="Create evaluation", exact=True).first.wait_for()
+        page.get_by_role("button", name="New goal", exact=True).wait_for()
         assert len(app.runtime.list(project["id"])) == 1
         assert app.runtime.list(project["id"])[0]["kind"] == "discover"
         page.get_by_role("link", name="Settings", exact=True).click()

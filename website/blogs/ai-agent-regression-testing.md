@@ -4,7 +4,6 @@ description: Turn a prompt, model, or tool change into a repeatable comparison w
 author: Gursharan Singh
 published_at: 2026-08-24
 updated_at: 2026-09-10
-original_url: /guides/ai-agent-regression-testing/
 ---
 
 A familiar test still passing is reassuring. It does not tell you whether an agent changed its behavior somewhere the test did not cover.

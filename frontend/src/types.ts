@@ -18,6 +18,12 @@ export type Agent = {
   project_id: string;
   name: string;
   responsibility?: string;
+  origin: "code" | "traces" | "manual";
+  role?: "serving" | "background" | "evaluation" | "development_utility" | "unknown";
+  identity_kind?: "declaration" | "factory";
+  identity_limits?: Array<{ code: string; reason: string; action?: string }>;
+  dependency_proposals?: Array<{ path: string; relationship: "imports"; source_line?: number; approved_for_edits: boolean }>;
+  dependency_proposals_omitted?: number;
   responsibility_inference?: {
     state: "pending" | "inferred" | "edited" | "unavailable" | string;
     reason?: string;
@@ -46,7 +52,6 @@ export type Agent = {
     matched_on?: string[];
     [key: string]: unknown;
   }>;
-  description?: string;
   status: "confirmed" | "suggested" | "archived";
   code_scopes: string[];
   shared_dependencies: string[];
@@ -120,7 +125,7 @@ export type MeasurementPlan = {
     evaluation_id?: string;
     candidate_id?: string;
     framework?: string;
-    command?: string;
+    command?: string | { argv: string[]; cwd?: string };
     entrypoint?: string;
     dataset_snapshot_id?: string;
     scorer?: string;
@@ -385,6 +390,7 @@ export type TaskSummary = {
   agent_name?: string | null;
   goal_id?: string | null;
   goal_name?: string | null;
+  goal_run_id?: string | null;
   title: string;
   state: string;
   needs_attention: boolean;
@@ -393,15 +399,31 @@ export type TaskSummary = {
 };
 
 export type TaskDetail = TaskSummary & {
-  conversation: Array<{ role?: string; text?: string; content?: string }>;
+  conversation: Array<{ role: string; text: string; kind?: string; delivery_state?: "pending" | "delivered" }>;
   events: Array<{ type?: string; text?: string; created_at?: string }>;
-  question?: { id: string; kind?: string; prompt?: string; text?: string; command?: string; options?: string[] } | null;
+  question?: { id: string; kind?: string; text: string; command?: string; options?: string[] } | null;
   progress?: unknown;
   result?: Record<string, unknown> | null;
   workflow_ids?: Partial<Record<"audit_id" | "evaluation_id" | "baseline_id" | "run_id" | "patch_id", string>>;
   next_action?: string | null;
-  can_resume: boolean;
-  can_cancel: boolean;
+  available_actions: string[];
+  recovery?: {
+    resume_allowed: boolean;
+    continuation_allowed: boolean;
+    reason_code: string | null;
+    remaining_seconds: number;
+    suggested_action?: string | null;
+  };
+  accounting?: {
+    active_seconds: number;
+    waiting_seconds: number;
+    queued_seconds: number;
+    paused_seconds: number;
+    offline_seconds: number;
+    unknown_seconds: number;
+    remaining_seconds: number;
+  };
+  continuation_of?: string;
   revision?: number;
   memory_recording?: { state: "retrying" | "needs_attention" | string; message: string; automatic_retry: boolean; attempts?: number; last_attempt_at?: string } | null;
 };

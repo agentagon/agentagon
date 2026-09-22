@@ -40,14 +40,15 @@ def proposal(**values):
     }
 
 
-def test_background_is_observation_list_with_legacy_text_compatibility():
+def test_background_requires_bounded_observation_list():
     canonical = proposal()
     canonical.pop("expected_revision")
     assert validate(canonical)["background"] == canonical["background"]
 
-    legacy = copy.deepcopy(canonical)
-    legacy["background"] = "Preserve the existing behavior."
-    assert validate(legacy)["background"] == ["Preserve the existing behavior."]
+    unstructured = copy.deepcopy(canonical)
+    unstructured["background"] = "Preserve the existing behavior."
+    with pytest.raises(AuditError, match="background must be a bounded list"):
+        validate(unstructured)
 
     optimization = json.loads(
         Designs.background(

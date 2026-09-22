@@ -4,7 +4,6 @@ description: A stable evaluation score can conceal a regression. Inspect the cas
 author: Gursharan Singh
 published_at: 2026-09-07
 updated_at: 2026-09-10
-original_url: /field-notes/what-flat-scores-hide/
 ---
 
 The release that deserves a second look is not always the one with a lower score. Sometimes an improvement on a common path cancels out a regression on a smaller, more consequential one.

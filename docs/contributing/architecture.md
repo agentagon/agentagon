@@ -17,6 +17,8 @@ React source remains in `frontend/`. Workflow resources ship inside their packag
 
 One SQLite database owns mutable application metadata. Project evidence and evaluation snapshots are immutable filesystem artifacts. Named memory groups own versioned entry files in explicitly registered folders. Reads do not reconstruct issues from audits or reconnect to runners. Audit completion publishes findings into independent issue records.
 
+The goal-run coordinator owns the durable Go intent, child task identities, exact measurement acceptance and one shared time/trial allowance. It advances design, evaluation, baseline and optimization through the existing runtime, including required sibling regression measurements. Read projections do not dispatch tasks. Parent controls reconcile any pending child admission before pause, cancellation or explicit recovery.
+
 Assess project and Observe production are ordinary runtime tasks. A service-owned scheduler persists monitor policies, pending windows and stable operation IDs. Completed observation and acquisition checkpoint updates commit together. Interrupted tasks block their monitor until explicit resume or discard.
 
 Production comparisons consume immutable bounded evidence under versioned measurement criteria. Recalled improvement lessons are pinned per task; reported lesson references and recurrence reviews are validated against the supplied versions and trace evidence. Production outcomes feed memory without replacing operational records. See [production monitoring](../production.md).

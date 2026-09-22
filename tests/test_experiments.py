@@ -360,19 +360,47 @@ def test_cli_lifecycle_reuses_status_and_review_continuation(application, specif
     assert git(application.root, "status", "--porcelain") == ""
 
 
-@pytest.mark.parametrize("untracked", [False, True])
-def test_dirty_origin_rejects_before_run_or_worktree_creation(
-    application, specification, untracked
-):
-    path = application.root / ("untracked.txt" if untracked else "app.json")
+@pytest.mark.parametrize("staged", [False, True])
+def test_dirty_origin_rejects_before_run_or_worktree_creation(application, specification, staged):
+    path = application.root / "app.json"
     path.write_text("pre-existing user work")
+    if staged:
+        git(application.root, "add", "app.json")
     before = git(application.root, "worktree", "list", "--porcelain")
-    with pytest.raises(AuditError, match="clean checkout"):
+    with pytest.raises(AuditError, match="tracked files") as error:
         engine.start(application, specification, "local")
+    assert str(application.root) in str(error.value)
     assert path.read_text() == "pre-existing user work"
     assert git(application.root, "worktree", "list", "--porcelain") == before
     assert not (application.state / "runs").exists()
     assert executions() == []
+
+
+def test_untracked_content_is_preserved_and_excluded_from_execution_checkouts(
+    application, specification
+):
+    untracked = ["notes.txt", ".agentagon.backup/state.json", "learn-kernels-pdfs/paper.pdf"]
+    for relative in untracked:
+        path = application.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("untracked user content")
+    before = git(application.root, "status", "--porcelain")
+    original = git(application.root, "rev-parse", "HEAD")
+
+    started = engine.start(application, specification, "local")
+    baseline_checkout = application.root / started["candidate"]["worktree"]
+    assert (baseline_checkout / "app.json").is_file()
+    assert all(not (baseline_checkout / relative).exists() for relative in untracked)
+    verify(application, started["run_id"], started["candidate_id"])
+    candidate, checkout = propose(application, started["run_id"], latency=75)
+    assert (checkout / "app.json").is_file()
+    assert all(not (checkout / relative).exists() for relative in untracked)
+    measured = verify(application, started["run_id"], candidate["candidate_id"])
+    assert measured["candidate"]["state"] == "verified"
+    for relative in untracked:
+        assert (application.root / relative).read_text() == "untracked user content"
+    assert git(application.root, "status", "--porcelain") == before
+    assert git(application.root, "rev-parse", "HEAD") == original
 
 
 def test_leading_space_filename_cannot_bypass_editable_scope(application, specification):

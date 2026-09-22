@@ -14,7 +14,7 @@ python scripts/build_site.py
 python -m http.server 8000 --bind 127.0.0.1 --directory site
 ```
 
-Open `http://127.0.0.1:8000/`. Rebuild after editing content. Stop the server with Ctrl+C. This simple local server previews content; Azure applies the configured redirects and error responses. The docs environment is separate from application/runtime dependencies.
+Open `http://127.0.0.1:8000/`. Rebuild after editing content. Stop the server with Ctrl+C. This simple local server previews content; Azure applies the configured headers and error responses. The docs environment is separate from application/runtime dependencies.
 
 ## Validate and build
 
@@ -51,7 +51,7 @@ Before a domain cutover:
 3. Add both domains in Azure using TXT validation and retain the exact supplied ownership records.
 4. Record the current Namecheap web records for rollback. Set the apex ALIAS and `www` CNAME to the generated Azure hostname, preserving mail and unrelated records. Do not migrate nameservers.
 5. Wait for domain validation and HTTPS, then set `agentagon.ai` as Azure's default domain.
-6. Verify `/docs/getting-started/install/`, docs search, blog links, legacy redirects, and a genuine 404. Retain the old Railway service until its removal is separately authorized.
+6. Verify `/docs/getting-started/install/`, docs search, blog links and a genuine 404. Retain the old Railway service until its removal is separately authorized.
 
 Building the site changes no cloud resources or DNS. See [Azure deployment configuration](https://learn.microsoft.com/en-us/azure/static-web-apps/build-configuration), [custom domains](https://learn.microsoft.com/en-us/azure/static-web-apps/custom-domain), and [default domain redirects](https://learn.microsoft.com/en-us/azure/static-web-apps/custom-domain-default).
 
@@ -59,11 +59,11 @@ Building the site changes no cloud resources or DNS. See [Azure deployment confi
 
 Website source lives in `website/`. The landing template preserves the approved causeway design; shared templates place the logo beside the wordmark, center the Docs and Blogs links, and provide the theme control and article layouts. Get Started opens the Init guide. All required assets are checked in, so builds do not depend on sibling repositories.
 
-Add articles as Markdown in `website/blogs/`. Frontmatter requires `title`, `description`, `author`, `published_at`, `updated_at`, and `original_url`. Filenames become `/blogs/<filename>/` routes. Use the approved publication dates and set the revision date to the actual edit date. The builder creates article metadata, related links, and permanent redirects from each original URL.
+Add articles as Markdown in `website/blogs/`. Frontmatter requires `title`, `description`, `author`, `published_at`, and `updated_at`. Filenames become `/blogs/<filename>/` routes. Use the approved publication dates and set the revision date to the actual edit date. The builder creates article metadata and related links.
 
 The initial articles were adapted from the corresponding files under `aegon/web/src/content/seo/pages/`. They now describe the dashboard, managed workflows and local MCP interface. The old model-comparison study is excluded because its reported rates and counts require reconciliation.
 
-The build routes former sign-in, demo, and workspace entries to `/welcome/`. Unselected legacy articles and unknown paths return the branded 404; there is no catch-all SPA fallback.
+Unknown paths, including retired workspace and article routes, return the branded 404. There are no compatibility redirects or catch-all SPA fallback.
 
 ## Maintain the content
 
@@ -85,4 +85,4 @@ The copied logo and causeway images in `docs/assets/` are self-contained; buildi
 
 The retained `dashboard-example.png` asset captures the bundled `examples/local-audit/demo.py` workspace while awaiting evidence review. Recreate it with that example and a loopback dashboard; any use must retain the unfinished-state caption. Use synthetic evidence only.
 
-Legacy capabilities and local-example routes remain available through contextual links. Moved fix sections retain their old anchors and link to the detailed reference. This configuration adds no analytics integration, external font service, or visitor authentication.
+This configuration adds no analytics integration, external font service, or visitor authentication.

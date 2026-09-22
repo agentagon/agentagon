@@ -91,12 +91,32 @@ class ProductionRuntime:
 
     def onboarding(self, project):
         self.app.state.project(project)
-        return self.db.get_record(project, "onboarding", "setup") or {
+        saved = self.db.get_record(project, "onboarding", "setup") or {
             "id": "setup",
             "state": "configure",
             "scope": {},
             "task_id": None,
         }
+        if saved.get("task_id"):
+            task = self.app.runtime.get(project, saved["task_id"])
+            state = task["state"]
+            discovered = (task.get("preparation") or {}).get("discovery")
+            saved["state"] = (
+                "analyzing"
+                if state in {"queued", "running"}
+                else "needs_input"
+                if state == "needs_input"
+                else "complete"
+                if state in {"completed", "completed_with_limits"}
+                else "partial"
+                if discovered
+                else "cancelled"
+                if state == "cancelled"
+                else "stopped"
+            )
+            saved["task_state"] = state
+            saved["recovery"] = task["recovery"]
+        return saved
 
     def save_onboarding(self, project, payload):
         if not isinstance(payload, dict) or set(payload) - {"scope", "state"}:
@@ -182,7 +202,9 @@ class ProductionRuntime:
                     job, cancelled, "Discovering application agents from repository code."
                 )
                 scope = job["options"]["assessment"]
-                discovery = self.app.catalog.discover(project, snapshot_ids=[])
+                discovery = self.app.catalog.discover(
+                    project, snapshot_ids=[], activate=not job["options"].get("agent_review_scope")
+                )
                 prepared["discovery"] = discovery
                 prepared["limitations"].extend(discovery.get("limitations", []))
                 snapshot_id = scope.get("snapshot_id")
@@ -220,7 +242,9 @@ class ProductionRuntime:
                     if snapshot_id:
                         prepared["snapshot_id"] = snapshot_id
                         prepared["discovery"] = self.app.catalog.discover(
-                            project, snapshot_ids=[snapshot_id]
+                            project,
+                            snapshot_ids=[snapshot_id],
+                            activate=not job["options"].get("agent_review_scope"),
                         )
                 prepared["agent_measurements"] = {}
                 trace_agents = {}
@@ -273,7 +297,11 @@ class ProductionRuntime:
                     suggestions = [
                         agent
                         for agent in self.app.catalog.agents(project)
-                        if agent["status"] == "suggested" and len(agent.get("code_scopes", [])) == 1
+                        if (
+                            agent["status"] == "suggested"
+                            or (agent.get("identity_review") or {}).get("source") == "discovery"
+                        )
+                        and len(agent.get("code_scopes", [])) == 1
                     ]
                 # Subsequent bounded assessments progress to candidates that still lack a
                 # responsibility before revisiting an already enriched suggestion.
@@ -464,6 +492,11 @@ class ProductionRuntime:
             current = self.app.runtime._read(job["project_id"], job["id"])
             if cancelled.is_set() or current["state"] != "running":
                 raise AuditError("Task interrupted during preparation; resume explicitly.")
+            # Accounting checkpoints may advance the task while read-only scanning
+            # is outside the runtime lock. Preserve those retained counters.
+            for key in ("revision", "accounting", "elapsed_seconds"):
+                if key in current:
+                    job[key] = copy.deepcopy(current[key])
             self.app.runtime._write(job)
 
     def complete(self, workspace, job, result):
@@ -735,7 +768,7 @@ class ProductionRuntime:
                         if issue["occurrences"]
                         else "reported_issue"
                     ),
-                    "evidence": issue["evidence"],
+                    "evidence": issue["evidence"] or [issue["issue_id"]],
                     "confidence": issue["confidence"],
                     "prerequisite": prerequisites.get(action, "Review the retained evidence"),
                     "_evidence_material": {
@@ -745,64 +778,69 @@ class ProductionRuntime:
                     },
                 }
             )
+        # Descriptive samples are not proof that an agent needs improvement.
+        # Only a classified regression under accepted production criteria is ranked.
+        agents = {agent["id"]: agent for agent in self.app.catalog.agents(project)}
+        monitors = {monitor["id"]: monitor for monitor in self.db.list_records(project, "monitors")}
         latest_metrics = {}
-        for observation in reversed(self.db.list_records(project, "observations")):
-            for metric in observation["metrics"]:
-                if metric["current"] is not None:
-                    latest_metrics[(observation["agent_id"], metric["definition"]["metric"])] = (
-                        metric,
-                        observation,
-                    )
-        assessment = self.onboarding(project).get("agent_measurements", {})
-        for agent in self.app.catalog.agents(project):
-            for metric in assessment.get(agent["id"], []):
-                latest_metrics.setdefault(
-                    (agent["id"], metric["metric"]),
-                    (
-                        {
-                            "current": metric["value"],
-                            "count": metric["count"],
-                            "coverage": metric["coverage"],
-                        },
-                        {"evidence": metric["source"], "window": "assessment"},
-                    ),
-                )
-            for name, label in [
+        for observation in self.db.list_records(project, "observations"):
+            monitor = monitors.get(observation.get("monitor_id"))
+            if monitor and monitor.get("series") != observation.get("series"):
+                continue
+            for metric in observation.get("metrics", []):
+                key = (observation["agent_id"], observation.get("monitor_id"), metric.get("name"))
+                latest_metrics.setdefault(key, (metric, observation))
+        categories = {"latency_ms": "latency", "failure_rate": "reliability", "cost_usd": "cost"}
+        for (agent_id, monitor_id, metric_name), (metric, observation) in latest_metrics.items():
+            definition = metric.get("definition", {})
+            category = categories.get(definition.get("metric"))
+            agent = agents.get(agent_id)
+            if (
+                not agent
+                or agent["status"] != "confirmed"
+                or metric.get("status") != "regressed"
+                or not definition.get("accepted")
+                or not observation.get("evidence")
+                or not category
+            ):
+                continue
+            result.append(
+                {
+                    "id": identifier("recommendation", agent_id, monitor_id, metric_name),
+                    "agent_id": agent_id,
+                    "title": f"Review {metric_name} regression",
+                    "workflow": "design",
+                    "category": category,
+                    "basis": "production_regression",
+                    "evidence": [observation["evidence"], observation["id"]],
+                    "measurement": {
+                        "value": metric["current"],
+                        "count": metric["count"],
+                        "coverage": metric["coverage"],
+                        "window": observation["window"],
+                    },
+                    "prerequisite": "Review the retained comparison and choose an improvement goal",
+                }
+            )
+        priority = {
+            "production_recurrence": 0,
+            "production_regression": 1,
+            "verified_change": 2,
+            "trace_evidence": 3,
+            "reported_issue": 4,
+        }
+        return sorted(result, key=lambda item: (priority.get(item["basis"], 5), item["id"]))
+
+    def action_templates(self):
+        """Possible objectives stay separate from evidence-backed recommendations."""
+        return [
+            {"id": category, "category": category, "title": title, "workflow": "design"}
+            for category, title in (
                 ("latency", "Make this agent faster"),
                 ("reliability", "Improve task reliability"),
                 ("cost", "Reduce cost"),
-            ]:
-                measured = latest_metrics.get(
-                    (
-                        agent["id"],
-                        {
-                            "latency": "latency_ms",
-                            "cost": "cost_usd",
-                            "reliability": "failure_rate",
-                        }[name],
-                    )
-                )
-                result.append(
-                    {
-                        "id": identifier("recommendation", agent["id"], name),
-                        "agent_id": agent["id"],
-                        "title": label,
-                        "workflow": "design",
-                        "category": name,
-                        "basis": "measured" if measured else "not_measured",
-                        "evidence": [measured[1]["evidence"]] if measured else [],
-                        "measurement": {
-                            "value": measured[0]["current"],
-                            "count": measured[0]["count"],
-                            "coverage": measured[0]["coverage"],
-                            "window": measured[1]["window"],
-                        }
-                        if measured
-                        else None,
-                        "prerequisite": "Create a goal and accept a measurement plan",
-                    }
-                )
-        return result
+            )
+        ]
 
     def recommendations(self, project):
         """Return recommendations with evidence-scoped user dispositions.
@@ -892,7 +930,7 @@ class ProductionRuntime:
             expected_revision=expected_revision,
         )
 
-    def submit(self, project, payload, binding, scheduled=False):
+    def submit(self, project, payload, binding, scheduled=False, *, start_context=None):
         from agentagon.workflows.requests import public_start
 
         source = payload.get("input", {})
@@ -1013,6 +1051,7 @@ class ProductionRuntime:
                     **({"model": payload["model"]} if "model" in payload else {}),
                 },
                 request_binding=binding,
+                start_context=start_context,
             )
             if kind == "assess":
                 if not options.get("agent_review_scope"):

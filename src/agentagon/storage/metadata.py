@@ -14,7 +14,7 @@ from agentagon.core.records import AuditError, encoded, identifier, now
 _PROJECT = re.compile(r"project_[a-f0-9]{24}")
 _NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,159}")
 _REFERENCE = re.compile(r"(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:session|keyring):[a-f0-9]{32})")
-_VERSION = 4
+_VERSION = 5
 _AGENTS = {"default_agent": "codex", "models": {"codex": "", "claude": ""}, "concurrency": 1}
 _SCHEMA = (
     """CREATE TABLE projects (

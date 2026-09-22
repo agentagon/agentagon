@@ -1,7 +1,9 @@
-# Assess your first project
+# Improve your first agent
 
-Open the dashboard, choose **Open local folder**, and review the saved setup before selecting **Analyze project**. Git and GitHub are optional for this read-only assessment. Review the suggested identities under **Agents**, including their responsibility and exact source scope, then confirm only the application agents you want Agentagon to maintain.
+Open the dashboard and add a local project. Select **Detect agents**, then open an agent. Choose a goal, add optional details and click **Go**. Detection makes agents available immediately; no confirmation queue is required.
 
-Use **All issues** for selected trace evidence and focused Fix work. Use an agent's **Evaluations** area for broader behavior goals, accepted measurements, baselines, and Optimize. Full Audit remains available for an explicitly requested fixed-rubric investigation.
+Agentagon prepares measurements, an evaluator and a baseline before searching for verified improvements. The goal page shows progress and any input it needs. Runs share one bounded allowance, and evaluation details remain available for inspection. Evaluation and repair use a committed Git revision with no pending changes to tracked files. Untracked files and folders are allowed and are not automatically included in execution checkouts. Detection also works without Git.
+
+Use **All issues** for selected trace evidence and focused Fix work. Full Audit remains available for an explicitly requested fixed-rubric investigation.
 
 [Dashboard](../app.md) · [Workflows](../workflows.md) · [MCP](../mcp.md)

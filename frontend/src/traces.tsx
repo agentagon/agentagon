@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
+import { AttachEvaluationCaseModal } from "./evaluation-cases";
 import { api, post, projectPath } from "./api";
 import { Button, LaunchWorkflowModal, Modal, PageHeader, Status } from "./components";
 import { useWorkflows } from "./hooks";
@@ -210,6 +211,7 @@ export function TracePage({ projectId }: { projectId: string }) {
 }
 
 function EvaluationCaseModal({ projectId, snapshotId, traceId, traceName, onClose }: { projectId: string; snapshotId: string; traceId: string; traceName?: string; onClose: () => void }) {
+  const [attaching, setAttaching] = useState(false);
   const queryClient = useQueryClient();
   const [name, setName] = useState(traceName ? `${traceName} expected behavior` : `Trace ${traceId.slice(0, 32)} expected behavior`);
   const [expected, setExpected] = useState("");
@@ -223,8 +225,9 @@ function EvaluationCaseModal({ projectId, snapshotId, traceId, traceName, onClos
     }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects", projectId] }),
   });
+  if (attaching && save.data) return <AttachEvaluationCaseModal projectId={projectId} snapshotId={save.data.id} caseName={save.data.name || name} onClose={onClose} />;
   return <Modal title={save.data ? "Evaluation case saved" : "Use trace as an evaluation case"} eyebrow="Proposed evaluation evidence" onClose={onClose}>
-    {save.data ? <div className="evaluation-case-receipt"><Status value="reviewed" /><h3>{save.data.name}</h3><p>The expected behavior was saved separately from the observed output. This immutable case remains a draft until you attach it to a reviewed evaluation.</p><dl className="compact-definition"><div><dt>Dataset snapshot</dt><dd><code>{save.data.id}</code></dd></div><div><dt>Source trace</dt><dd><code>{traceId}</code></dd></div><div><dt>Expectation</dt><dd>Reviewed</dd></div></dl><footer className="form-actions"><Button type="button" onClick={onClose}>Done</Button></footer></div> : <form className="form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
+    {save.data ? <div className="evaluation-case-receipt"><Status value="reviewed" /><h3>{save.data.name}</h3><p>The expected behavior was saved separately from the observed output. This immutable case remains a draft until you attach it to a reviewed evaluation.</p><dl className="compact-definition"><div><dt>Dataset snapshot</dt><dd><code>{save.data.id}</code></dd></div><div><dt>Source trace</dt><dd><code>{traceId}</code></dd></div><div><dt>Expectation</dt><dd>Reviewed</dd></div></dl><footer className="form-actions"><Button type="button" tone="secondary" onClick={onClose}>Done</Button><Button type="button" onClick={() => setAttaching(true)}>Add to evaluation</Button></footer></div> : <form className="form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
       <p className="modal-purpose">Describe what should have happened. Agentagon retains the observed output as source evidence and never promotes it to ground truth.</p>
       <dl className="compact-definition evaluation-case-source"><div><dt>Source trace</dt><dd><code>{traceId}</code></dd></div><div><dt>Source snapshot</dt><dd><code>{snapshotId}</code></dd></div></dl>
       <label>Case name<input value={name} onChange={(event) => setName(event.target.value)} maxLength={200} required autoFocus /></label>

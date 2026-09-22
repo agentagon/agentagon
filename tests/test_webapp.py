@@ -177,18 +177,25 @@ def test_claude_credential_rotation_waits_for_starting_session(app, tmp_path, mo
             assert release.wait(5), "starting session was not released"
         return resolve(reference)
 
-    class ObservedCondition(threading.Condition):
-        def __enter__(self):
-            if threading.current_thread().name.startswith("credential-rotation"):
-                rotating.set()
-            return super().__enter__()
+    condition = app.runtime.condition
+    enter = threading.Condition.__enter__
+
+    def observed_enter(current):
+        if current is condition and threading.current_thread().name.startswith(
+            "credential-rotation"
+        ):
+            rotating.set()
+        return enter(current)
 
     def host(request, *_):
         observed.append(request["api_key"])
         return {"state": "interrupted", "session_id": "saved-session"}
 
     monkeypatch.setattr(app.credentials, "resolve", paused_resolve)
-    app.runtime.condition = ObservedCondition(threading.RLock())
+    # The runtime's accounting thread already owns this condition. Observe its
+    # acquisition without replacing the lock shared by Application and workers.
+    monkeypatch.setattr(threading.Condition, "__enter__", observed_enter)
+    assert app.lock is condition
     app.runtime.execute = host
     saved = project(app, tmp_path)
     job = app.runtime.submit(
@@ -219,6 +226,8 @@ def test_claude_credential_rotation_waits_for_starting_session(app, tmp_path, mo
         assert result["state"] == "interrupted", result["next_action"]
         assert result["session_id"] == "saved-session"
         assert observed == ["old-secret"]
+        assert app.runtime.accounting_thread.is_alive()
+        assert app.runtime.condition is app.lock is condition
         current = app.state.read()["agents"]["claude_api_key_ref"]
         assert resolve(current) == "new-secret"
         with pytest.raises(AuditError, match="unavailable"):

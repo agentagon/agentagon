@@ -41,22 +41,14 @@ def test_public_routes_metadata_and_sitemap(built_site):
         assert 'href="/auth' not in html
 
 
-def test_retired_routes_redirect_without_hiding_missing_pages(built_site):
+def test_unknown_routes_return_the_branded_404(built_site):
     config = json.loads((built_site / "staticwebapp.config.json").read_text())
-    routes = {route["route"]: route for route in config["routes"]}
-    assert len({route.rstrip("/") for route in routes}) == len(config["routes"])
-    assert routes["/resources/"]["redirect"] == "/blogs/"
-    assert (
-        routes["/field-notes/what-flat-scores-hide/"]["redirect"] == "/blogs/what-flat-scores-hide/"
-    )
-    assert routes["/app/*"]["redirect"] == "/welcome/"
-    assert routes["/demo"]["statusCode"] == 301
-    assert config["responseOverrides"]["404"]["statusCode"] == 404
+    assert "routes" not in config
+    assert config["responseOverrides"]["404"] == {"rewrite": "/404.html", "statusCode": 404}
     assert "navigationFallback" not in config
+    assert not (built_site / "welcome").exists()
     assert not (built_site / "field-notes/same-model-different-agent-behavior/index.html").exists()
-    assert (
-        '<meta name="robots" content="noindex"' in (built_site / "welcome/index.html").read_text()
-    )
+    assert '<meta name="robots" content="noindex"' in (built_site / "404.html").read_text()
     assert "X-Robots-Tag" not in config["globalHeaders"]
 
 

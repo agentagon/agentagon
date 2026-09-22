@@ -32,8 +32,12 @@ def git(root: Path, *args: str, data: bytes | None = None) -> str:
 
 
 def clean_revision(root: Path) -> str:
-    if git(root, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"):
-        raise AuditError("fix requires a clean checkout; commit or move existing work first")
+    """Return committed source, allowing untracked content outside execution snapshots."""
+    if git(root, "status", "--porcelain", "--untracked-files=no", "--ignore-submodules=none"):
+        raise AuditError(
+            f"Uncommitted changes to tracked files in {root}. "
+            "Commit or stash those changes before continuing."
+        )
     revision = git(root, "rev-parse", "--verify", "HEAD")
     for line in git(root, "ls-tree", "-r", "-z", revision).split("\0"):
         if not line:

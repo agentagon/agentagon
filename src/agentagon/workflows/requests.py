@@ -1,5 +1,7 @@
 """One typed start contract shared by HTTP and MCP."""
 
+import copy
+
 from agentagon.core.records import AuditError, digest
 from agentagon.domain.issues import assign_agent, link_task
 from agentagon.workflows.operations.preparation import (
@@ -11,11 +13,15 @@ from agentagon.workflows.registry import REGISTRY
 from agentagon.workflows.runtime import operation_id
 
 
-def submit(application, project_id, payload, *, scheduled=False):
+def submit(application, project_id, payload, *, scheduled=False, continuation=None, goal_run=None):
     if not isinstance(payload, dict):
         raise AuditError("unsupported task fields")
     operation = operation_id(payload.get("operation_id"))
-    binding = digest(payload)
+    binding = (
+        digest({"request": payload, "continuation_of": continuation["id"]})
+        if continuation
+        else digest(payload)
+    )
     existing = application.runtime.existing_submission(project_id, operation, binding)
     if existing:
         if not scheduled:
@@ -35,6 +41,14 @@ def submit(application, project_id, payload, *, scheduled=False):
 
         record_intent(application.state, project_id, prepared)
     prepared.require_ready()
+    start_context = {"intent": copy.deepcopy(prepared.normalized_intent)}
+    if goal_run:
+        start_context["goal_run"] = copy.deepcopy(goal_run)
+    if continuation:
+        start_context.update(
+            continuation_of=continuation["id"],
+            preparation=copy.deepcopy(continuation.get("preparation")),
+        )
     workflow = prepared.workflow
     if workflow in {"assess", "observe"}:
         normalized = prepared.normalized_intent
@@ -43,7 +57,9 @@ def submit(application, project_id, payload, *, scheduled=False):
             for key, value in prepared.options.items()
             if key not in {"max_trials", "max_elapsed_seconds", "trial_timeout_seconds"}
         }
-        return application.production.submit(project_id, normalized, binding, scheduled)
+        return application.production.submit(
+            project_id, normalized, binding, scheduled, start_context=start_context
+        )
     source = prepared.source
     options = prepared.options
     workspace = prepared.workspace
@@ -89,7 +105,9 @@ def submit(application, project_id, payload, *, scheduled=False):
             body["memory_snapshot"] = application.memory.snapshot(project_id, agent_id)
             if issue:
                 assign_agent(workspace, issue["issue_id"], agent_id)
-            task = application.runtime.submit(project_id, body, request_binding=binding)
+            task = application.runtime.submit(
+                project_id, body, request_binding=binding, start_context=start_context
+            )
     else:
         # Goal workflows use their accepted measurement plans and the same runtime.
         task = application.submit_job(
@@ -97,10 +115,46 @@ def submit(application, project_id, payload, *, scheduled=False):
             body,
             request_binding=binding,
             suggested_read_only_scope=options.get("agent_review_scope"),
+            start_context=start_context,
         )
     if issue:
         link_task(workspace, issue["issue_id"], task["id"])
     return public_start(project_id, task)
+
+
+def continue_task(application, project_id, task_id, payload):
+    """Admit a new, explicitly bounded assessment against its original reviewed intent."""
+    from agentagon.domain.tasks import TaskControlError, recovery
+
+    if not isinstance(payload, dict) or set(payload) != {"operation_id", "max_elapsed_seconds"}:
+        raise AuditError("choose an operation UUID and explicit max_elapsed_seconds")
+    operation = operation_id(payload["operation_id"])
+    allowance = payload["max_elapsed_seconds"]
+    if type(allowance) is not int or not 1 <= allowance <= 86400:
+        raise AuditError("max_elapsed_seconds must be an integer between 1 and 86400")
+    with application.lock:
+        previous = application.runtime._read(project_id, task_id)
+        intent = copy.deepcopy(previous.get("start_intent"))
+        if not intent:
+            raise TaskControlError(
+                "Only an assessment with a retained start intent can continue. Prepare a new assessment from the project.",
+                "start_intent_unavailable",
+                action="prepare_assessment",
+            )
+        intent["operation_id"] = operation
+        intent["limits"]["max_elapsed_seconds"] = allowance
+        binding = digest({"request": intent, "continuation_of": task_id})
+        existing = application.runtime.existing_submission(project_id, operation, binding)
+        if existing:
+            return public_start(project_id, existing)
+        if not recovery(previous, host_active=(project_id, task_id) in application.runtime.active)[
+            "continuation_allowed"
+        ]:
+            raise TaskControlError(
+                "Only a stopped assessment can start a linked continuation. Inspect the current task before continuing.",
+                "continuation_unavailable",
+            )
+        return submit(application, project_id, intent, continuation=previous)
 
 
 def public_start(project_id, task):
@@ -111,4 +165,4 @@ def public_start(project_id, task):
     }
 
 
-__all__ = ["prepare_workflow_start", "public_start", "submit"]
+__all__ = ["continue_task", "prepare_workflow_start", "public_start", "submit"]
