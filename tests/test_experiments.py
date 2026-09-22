@@ -387,14 +387,17 @@ def test_untracked_content_is_preserved_and_excluded_from_execution_checkouts(
     before = git(application.root, "status", "--porcelain")
     original = git(application.root, "rev-parse", "HEAD")
 
-    started = baseline(application, specification)
+    started = engine.start(application, specification, "local")
+    baseline_checkout = application.root / started["candidate"]["worktree"]
+    assert (baseline_checkout / "app.json").is_file()
+    assert all(not (baseline_checkout / relative).exists() for relative in untracked)
+    verify(application, started["run_id"], started["candidate_id"])
     candidate, checkout = propose(application, started["run_id"], latency=75)
+    assert (checkout / "app.json").is_file()
+    assert all(not (checkout / relative).exists() for relative in untracked)
     measured = verify(application, started["run_id"], candidate["candidate_id"])
     assert measured["candidate"]["state"] == "verified"
-    baseline_checkout = application.root / started["candidate"]["worktree"]
     for relative in untracked:
-        assert not (baseline_checkout / relative).exists()
-        assert not (checkout / relative).exists()
         assert (application.root / relative).read_text() == "untracked user content"
     assert git(application.root, "status", "--porcelain") == before
     assert git(application.root, "rev-parse", "HEAD") == original
