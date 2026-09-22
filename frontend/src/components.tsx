@@ -65,11 +65,11 @@ export function Modal({ title, eyebrow, children, onClose, wide = false }: { tit
   useEffect(() => { close.current = onClose; }, [onClose]);
   useEffect(() => {
     const focusable = () => Array.from(panel.current?.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') || []).filter((element) => !element.hasAttribute("hidden") && element.getClientRects().length > 0);
-    const active = document.activeElement;
-    const initial = active instanceof HTMLElement && panel.current?.contains(active)
-      ? active
-      : panel.current?.querySelector<HTMLElement>("input:not([disabled]), textarea:not([disabled]), select:not([disabled])") || focusable()[0];
-    const frame = window.requestAnimationFrame(() => initial?.focus());
+    const frame = window.requestAnimationFrame(() => {
+      if (panel.current?.contains(document.activeElement)) return;
+      const initial = panel.current?.querySelector<HTMLElement>("input:not([disabled]), textarea:not([disabled]), select:not([disabled])") || focusable()[0];
+      initial?.focus();
+    });
     const contain = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();

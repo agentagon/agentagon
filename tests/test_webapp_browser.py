@@ -811,21 +811,56 @@ def test_task_approvals_send_an_explicit_decision(webapp_page):
     }
 
 
-def test_connectors_are_project_resources(webapp_page):
-    page, _ = webapp_page
+@pytest.mark.parametrize("focus_before_frame", [False, True])
+def test_connectors_are_project_resources(webapp_page, focus_before_frame):
+    page, fixture = webapp_page
     page.get_by_role("link", name="Settings").click()
     page.get_by_role("link", name="Connections", exact=True).click()
     page.get_by_role("heading", name="Connected providers").wait_for()
     assert page.get_by_text("Production support", exact=True).is_visible()
+    page.evaluate("""() => {
+        const requestFrame = window.requestAnimationFrame.bind(window);
+        window.modalFocusFrames = [];
+        window.requestAnimationFrame = callback => {
+            window.modalFocusFrames.push(callback);
+            return -window.modalFocusFrames.length;
+        };
+        window.flushModalFocus = () => {
+            window.requestAnimationFrame = requestFrame;
+            window.modalFocusFrames.splice(0).forEach(callback => callback(performance.now()));
+        };
+    }""")
     page.locator(".connector-card").filter(has_text="LangSmith").get_by_role(
         "button", name="Connect"
     ).click()
     dialog = page.get_by_role("dialog")
+    page.wait_for_function("window.modalFocusFrames.length > 0")
+    if focus_before_frame:
+        # Run the deferred autofocus between focus and keyboard text insertion.
+        dialog.get_by_label("API key").evaluate("""element => {
+            element.addEventListener("focus", () => {
+                queueMicrotask(() => window.flushModalFocus());
+            }, { once: true });
+        }""")
+    else:
+        page.evaluate("window.flushModalFocus()")
+        assert dialog.get_by_label("API URL").evaluate(
+            "element => element === document.activeElement"
+        )
     dialog.get_by_label("API key").fill("secret-value")
+    assert dialog.get_by_label("API key").input_value() == "secret-value"
+    assert dialog.get_by_label("API URL").input_value() == "https://langsmith.example.test"
     dialog.get_by_role("button", name="Find projects").click()
     dialog.get_by_label("Provider project").select_option("remote_one")
     dialog.get_by_role("button", name="Connect").click()
     dialog.wait_for(state="detached")
+    assert fixture.discovery == {
+        "provider": "langsmith",
+        "endpoint": "https://langsmith.example.test",
+        "credentials": {"api_key": "secret-value"},
+    }
+    assert fixture.connections["project_alpha"][-1]["project"] == "remote_one"
+    assert fixture.connections["project_beta"] == []
 
 
 def test_assistant_settings_only_request_relevant_credentials(webapp_page):
