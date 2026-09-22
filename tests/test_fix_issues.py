@@ -108,15 +108,19 @@ def test_audited_defect_repair_requires_exact_clean_origin_before_resolution(wor
     git(workspace.root, "switch", selected["selected_branch"])
     assert (workspace.root / "regression.py").is_file()
     (workspace.root / "unrelated.txt").write_text("uncommitted user work")
-    with pytest.raises(AuditError, match="clean checkout"):
+    tracked = workspace.root / "app.py"
+    original_content = tracked.read_text()
+    tracked.write_text("uncommitted tracked work")
+    with pytest.raises(AuditError, match="tracked files"):
         update_issue(
             workspace, event, run_id=started["run_id"], candidate_id=proposed["candidate_id"]
         )
-    (workspace.root / "unrelated.txt").unlink()
+    tracked.write_text(original_content)
     issue = update_issue(
         workspace, event, run_id=started["run_id"], candidate_id=proposed["candidate_id"]
     )
     assert issue["status"] == "resolved_verified"
+    assert (workspace.root / "unrelated.txt").read_text() == "uncommitted user work"
     receipt = workspace.read_artifact(issue["history"][-1]["verification"])
     assert receipt["provenance"] == "agentagon-engine"
     assert receipt["candidate_id"] == proposed["candidate_id"]

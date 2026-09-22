@@ -32,6 +32,8 @@ Fix accepts an issue, trace or description without a saved goal or full audit. I
 
 Full Audit retains the entire rubric and explicit code/trace scope. Changes-only audits restrict findings to captured changes and default to code-only. Full audits can inspect dirty or non-Git directories. Measurement requires clean committed inputs, trustworthy expectations, sensitivity checks, authorized execution and independent review. An absent finding does not resolve another issue.
 
+Untracked files and folders do not block measured work. Execution checkouts use the committed application revision; untracked source content stays in the original folder and is not automatically copied into those checkouts. Staged or unstaged changes to tracked files still require the user to commit or stash them. Explicitly declared evaluation inputs retain their frozen-input validation.
+
 Evaluation preparation and baseline measurement are composable built-ins. Evaluator edits create versions; changes to data or scoring are not like-for-like application improvement. Candidate code cannot alter frozen evaluation definitions.
 
 ## Goals change emphasis

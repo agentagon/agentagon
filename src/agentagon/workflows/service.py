@@ -247,11 +247,18 @@ class Application:
                     optional=True,
                 )
                 source_revision = git_revision(workspace.root)
+                tracked_status = git_bytes(
+                    workspace.root,
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=no",
+                    "--ignore-submodules=none",
+                )
                 result["source"] = {
                     "kind": "git",
                     "revision": source_revision,
                     "dirty": bool(status),
-                    "measured_work_ready": bool(source_revision and not status),
+                    "measured_work_ready": bool(source_revision and not tracked_status),
                 }
             result["active_tasks"] = sum(
                 j["state"] in ACTIVE for j in self.runtime.list(project["id"])

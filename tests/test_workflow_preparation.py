@@ -442,10 +442,13 @@ def test_dirty_git_content_is_frozen_even_when_dirty_state_does_not_change(app, 
         )
 
 
-def test_measured_fix_requires_a_clean_committed_revision(app, tmp_path):
+@pytest.mark.parametrize("staged", [False, True])
+def test_measured_fix_requires_committed_tracked_changes(app, tmp_path, staged):
     saved, root = git_project(app, tmp_path, "dirty-measured-source")
     owner = agent(app, saved["id"])
     (root / "agent.py").write_text("def answer(question):\n    return question.lower()\n")
+    if staged:
+        git(root, "add", "agent.py")
 
     prepared = prepare_workflow_start(app, saved["id"], fix_intent(owner["id"]))
 
@@ -453,6 +456,43 @@ def test_measured_fix_requires_a_clean_committed_revision(app, tmp_path):
     assert prepared["state"] == "needs_input"
     assert clean_source["state"] == "missing"
     assert clean_source["resolution"]["context"]["dirty"] is True
+    assert str(root) in clean_source["resolution"]["context"]["reason"]
+    assert "tracked files" in clean_source["resolution"]["context"]["reason"]
+    assert app.project_info(saved)["source"]["measured_work_ready"] is False
+
+
+def test_untracked_folders_do_not_block_measured_source_or_change_its_identity(app, tmp_path):
+    saved, root = git_project(app, tmp_path, "untracked-measured-source")
+    owner = agent(app, saved["id"])
+    first = prepare_workflow_start(app, saved["id"], fix_intent(owner["id"]))
+    folder = root / "local-notes"
+    folder.mkdir()
+    note = folder / "notes.txt"
+    note.write_text("Unrelated local notes\n")
+
+    prepared = prepare_workflow_start(app, saved["id"], first["normalized_intent"])
+
+    assert prerequisite(prepared, "clean_source")["state"] == "satisfied"
+    assert prepared["code_source"] == first["code_source"]
+    assert not any(item["code"] == "stale_preparation" for item in prepared["prerequisites"])
+    project_source = app.project_info(saved)["source"]
+    assert project_source["dirty"] is True
+    assert project_source["measured_work_ready"] is True
+    assert git(root, "status", "--porcelain") == "?? local-notes/"
+
+    audit = prepare_workflow_start(app, saved["id"], audit_intent(owner["id"]))
+    assert audit["code_source"]["dirty"] is True
+    assert audit["code_source"]["changed_paths"] == 1
+    note.write_text("Changed local notes\n")
+
+    refreshed = prepare_workflow_start(app, saved["id"], first["normalized_intent"])
+    assert refreshed["code_source"] == first["code_source"]
+    assert not any(item["code"] == "stale_preparation" for item in refreshed["prerequisites"])
+    with pytest.raises(AuditError, match="changed after preparation"):
+        app.submit_task(
+            saved["id"],
+            {**audit["normalized_intent"], "operation_id": str(uuid.uuid4())},
+        )
 
 
 def test_required_coding_backend_is_checked_before_start(app, tmp_path):

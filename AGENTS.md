@@ -33,7 +33,7 @@
 ## Project boundaries
 
 - Keep model reasoning, candidate edits and independent reviews in the coding-agent host; Python handles evidence, validation and bounded execution.
-- Preserve review scope over captured changes and the fixed audit rubric; full audits may inspect uncommitted or non-Git directories, while evaluation/fix workflows require clean committed inputs.
+- Preserve review scope over captured changes and the fixed audit rubric; full audits may inspect uncommitted or non-Git directories, while evaluation/fix workflows require committed inputs without pending tracked changes. Untracked content does not block isolated execution.
 - Preserve frozen benchmark comparisons, failed/dominated experiment evidence and user choice among verified alternatives; selection, publication, merge and deployment remain separate actions.
 - Keep dashboard reads within one checkout's display projections; controls remain opt-in with exact-origin/session validation, and reads must not execute work or reconnect to runners.
 - Preserve explicit invocation > project override > user default precedence; store credential references rather than secret values.

@@ -210,14 +210,15 @@ def _fingerprint_paths(root: Path, paths: list[str]) -> tuple[str, int, int, boo
     return digest(records), len(records), captured_bytes, complete
 
 
-def _git_source_identity(root: Path) -> dict:
+def _git_source_identity(root: Path, *, include_untracked: bool = True) -> dict:
     head = revision(root)
     status = git_bytes(
         root,
         "status",
         "--porcelain=v1",
         "-z",
-        "--untracked-files=all",
+        "--untracked-files=all" if include_untracked else "--untracked-files=no",
+        "--ignore-submodules=none",
     )
     changed: list[str] = []
     comparisons = (
@@ -232,9 +233,10 @@ def _git_source_identity(root: Path) -> dict:
         value = git_bytes(root, *arguments, optional=True)
         if value:
             changed.extend(names(value))
-    untracked = git_bytes(root, "ls-files", "--others", "--exclude-standard", "-z")
-    if untracked:
-        changed.extend(names(untracked))
+    if include_untracked:
+        untracked = git_bytes(root, "ls-files", "--others", "--exclude-standard", "-z")
+        if untracked:
+            changed.extend(names(untracked))
     index_state = (
         git_bytes(root, "diff", "--cached", "--raw", "--no-abbrev", "-z", "HEAD", "--")
         if head
@@ -308,7 +310,10 @@ def _capture_code_source(prepared: PreparedStart) -> None:
     if prepared.workflow not in CODE_SENSITIVE_WORKFLOWS:
         return
     source = (
-        _git_source_identity(prepared.workspace.root)
+        _git_source_identity(
+            prepared.workspace.root,
+            include_untracked=prepared.workflow not in COMMITTED_SOURCE_WORKFLOWS,
+        )
         if prepared.workspace.is_git
         else _folder_source_identity(prepared.workspace.root)
     )
@@ -358,11 +363,13 @@ def _capture_code_source(prepared: PreparedStart) -> None:
                     "dirty": source["dirty"],
                     "revision": source["revision"],
                     "reason": (
-                        "Measured work needs a clean committed Git revision. Assessment and diagnosis remain available for this folder."
+                        f"{prepared.workspace.root} is not a Git checkout. Measured work needs a committed Git revision; assessment and diagnosis remain available."
                         if source["kind"] != "git"
-                        else "Measured work needs a clean committed Git revision. Commit or move the intended changes before starting."
+                        else f"Uncommitted changes to tracked files in {prepared.workspace.root}. Commit or stash those changes before continuing. Untracked files and folders can stay."
                         if source["dirty"]
-                        else "The source revision could not be pinned completely."
+                        else f"{prepared.workspace.root} has no Git commit. Commit the application source before starting measured work."
+                        if not source["revision"]
+                        else f"The source revision in {prepared.workspace.root} could not be pinned completely."
                     ),
                 },
             )
@@ -434,6 +441,8 @@ def _blocking_message(blocker: dict) -> str:
     code = blocker["code"]
     context = blocker.get("resolution", {}).get("context", {})
     names = context.get("names", [])
+    if code == "clean_source":
+        return context["reason"]
     messages = {
         "input_required": "Choose the evidence or objective for this workflow.",
         "agent_selection": "Select the agent that owns this work; ownership is ambiguous.",
@@ -444,7 +453,6 @@ def _blocking_message(blocker: dict) -> str:
         "problem_description": "Describe the problem to fix.",
         "code_binding": "Bind application code before starting measured code changes.",
         "code_scope": "Repair scope must stay inside the confirmed agent binding.",
-        "clean_source": "Use a clean committed Git revision before starting measured work.",
         "coding_backend": "Configure and authenticate the selected coding backend.",
         "measurement_plan": "Accept the measurement plan before preparing an evaluation.",
         "evaluation": "Prepare a reviewed evaluation before running a baseline.",

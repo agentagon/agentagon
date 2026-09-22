@@ -115,10 +115,15 @@ def test_application_exposes_only_reviewed_patch_summary_and_delivery(workspace,
 
 def test_patch_requires_clean_origin_and_declared_scope(workspace):
     (workspace.root / "notes.txt").write_text("user work")
-    with pytest.raises(AuditError, match="clean checkout"):
+    tracked = workspace.root / "app.py"
+    original = tracked.read_text()
+    tracked.write_text("uncommitted user work")
+    with pytest.raises(AuditError, match="tracked files"):
         start(workspace)
-    (workspace.root / "notes.txt").unlink()
+    tracked.write_text(original)
     started = start(workspace)
+    assert (workspace.root / "notes.txt").read_text() == "user work"
+    assert not (workspace.root / started["worktree"] / "notes.txt").exists()
     change(workspace, started)
     (workspace.root / started["worktree"] / "extra.py").write_text("pass")
     with pytest.raises(AuditError, match="outside.*scope"):
