@@ -62,7 +62,7 @@ def assemble(destination, *, preview=False):
     render(
         "index.html",
         "/",
-        "Agentagon: Reliability for the robot age.",
+        "Agentagon - Reliability for the robot age.",
         "AI agents that take the controls when a robot gets stuck, find another way, "
         "and keep it working.",
     )
