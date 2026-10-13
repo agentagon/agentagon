@@ -2,6 +2,7 @@
 :root[data-theme="dark"] { --frost:#161717; --surface-rgb:22,23,23; --rule:#343d40; }
 .hands-page .page::before { display:none; }
 .hands-page .site-header { border-bottom:0; }
+.hands-page .brand { min-height:44px; }
 .hands-page .hero { align-items:center; text-align:center; padding-block:clamp(24px,4svh,44px); }
 .hands-page h1 { margin:0; font-size:clamp(40px,5.75vw,86px); max-width:1250px; flex:none; }
 .hands-page h1 em { display:inline-block; }
