@@ -1,4 +1,4 @@
-"""Publication checks for the generated site; no documentation dependencies in the CLI."""
+"""Publication checks for the landing-only static site."""
 
 import importlib.util
 import json
@@ -8,7 +8,7 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
-pytest.importorskip("mkdocs")
+pytest.importorskip("jinja2")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -29,16 +29,21 @@ def test_public_routes_metadata_and_sitemap(built_site):
     sitemap = ET.parse(built_site / "sitemap.xml")
     urls = [node.text for node in sitemap.findall(".//{*}loc")]
     assert "https://agentagon.ai/" in urls
-    assert "https://agentagon.ai/docs/getting-started/install/" in urls
-    assert len([url for url in urls if url.startswith("https://agentagon.ai/blogs/")]) == 4
-    assert not any("welcome" in url or "404" in url or "docs.agentagon.ai" in url for url in urls)
-    for post in builder.load_posts():
-        html = (built_site / post["path"].strip("/") / "index.html").read_text()
-        assert f'href="https://agentagon.ai{post["path"]}"' in html
-        assert '"@type": "TechArticle"' in html
-        assert 'href="/docs/init/"' in html
-        assert 'href="/docs/getting-started/install/"' in html
-        assert 'href="/auth' not in html
+    assert urls == ["https://agentagon.ai/"]
+    assert {path.relative_to(built_site).as_posix() for path in built_site.rglob("*.html")} == {
+        "index.html",
+        "404.html",
+    }
+    assert not (built_site / "docs").exists()
+    assert not (built_site / "blogs").exists()
+    for page in built_site.rglob("*.html"):
+        html = page.read_text()
+        assert 'href="/docs' not in html
+        assert 'href="/blogs' not in html
+        assert 'href="https://github.com/' not in html
+    html = (built_site / "index.html").read_text()
+    assert 'href="https://agentagon.ai/"' in html
+    assert 'href="mailto:founders@agentagon.ai"' in html
 
 
 def test_unknown_routes_return_the_branded_404(built_site):
@@ -70,8 +75,7 @@ def test_distributed_notices_survive_without_a_visible_generator_credit(built_si
     assert (built_site / "THIRD_PARTY_NOTICES.txt").read_bytes() == (
         ROOT / "THIRD_PARTY_NOTICES.txt"
     ).read_bytes()
-    html = (built_site / "docs/index.html").read_text()
-    assert "MIT license and permission notice: /THIRD_PARTY_NOTICES.txt" in html
+    html = (built_site / "index.html").read_text()
     assert "Made with" not in html
     assert (
         "Copyright (c) 2016-2025 Martin Donath"

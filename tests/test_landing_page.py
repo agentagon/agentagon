@@ -1,4 +1,4 @@
-"""The public landing stays usable without motion and isolates its theme."""
+"""The public landing stays usable without motion and has no secondary navigation."""
 
 import shutil
 import subprocess
@@ -55,17 +55,15 @@ def test_landing_has_static_art_contact_and_accessible_motion_control():
     assert "Reliability <em>for the robot age.</em>" in html
 
 
-def test_fixed_homepage_theme_does_not_remove_article_navigation_or_theme():
+def test_landing_has_fixed_theme_and_only_home_contact_links():
     homepage = Elements(render("index.html", "/")).elements
-    articles = Elements(render("blogs.html", "/blogs/")).elements
     assert next(attrs for tag, attrs in homepage if tag == "html")["data-theme"] == "dark"
     assert not any(attrs.get("class") == "theme-toggle" for _, attrs in homepage)
     assert not any(
         attrs.get("src") in {"/assets/theme-init.js", "/assets/site.js"} for _, attrs in homepage
     )
-    assert any(attrs.get("class") == "theme-toggle" for _, attrs in articles)
-    assert any(attrs.get("href") == "/docs/" for _, attrs in articles)
-    assert any(attrs.get("src") == "/assets/site.js" for _, attrs in articles)
+    links = {attrs["href"] for tag, attrs in homepage if tag == "a"}
+    assert links == {"#main", "/", "mailto:founders@agentagon.ai"}
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is required")
