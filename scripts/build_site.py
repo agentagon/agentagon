@@ -1,4 +1,4 @@
-"""Build the public landing page and its error response as a static deployment."""
+"""Build the public landing page and homepage redirects as a static deployment."""
 
 import argparse
 import json
@@ -27,7 +27,7 @@ def hosting_config(*, preview):
         headers["X-Robots-Tag"] = "noindex"
     return {
         "trailingSlash": "auto",
-        "responseOverrides": {"404": {"rewrite": "/404.html", "statusCode": 404}},
+        "responseOverrides": {"404": {"redirect": "/", "statusCode": 302}},
         "globalHeaders": headers,
     }
 
@@ -52,7 +52,7 @@ def assemble(destination, *, preview=False):
                 title=title,
                 description=description,
                 article=context.pop("article", None),
-                noindex=preview or path == "/404.html",
+                noindex=preview,
                 **context,
             )
         )
@@ -62,18 +62,9 @@ def assemble(destination, *, preview=False):
     render(
         "index.html",
         "/",
-        "Agentagon — Reliability for the robot age.",
+        "Agentagon: Reliability for the robot age.",
         "AI agents that take the controls when a robot gets stuck, find another way, "
         "and keep it working.",
-    )
-    render(
-        "message.html",
-        "/404.html",
-        "Page not found | Agentagon",
-        "Return to the Agentagon landing page.",
-        label="404 · Page not found",
-        heading="That path ends here.",
-        message="This page is not available. Head back to Agentagon.",
     )
     (destination / "staticwebapp.config.json").write_text(
         json.dumps(hosting_config(preview=preview), indent=2) + "\n"

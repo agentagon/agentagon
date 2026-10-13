@@ -1,6 +1,6 @@
 # Build and host the public website
 
-The public website deploys as a static Azure Static Web App containing the landing page and its 404 response. Documentation and blog source remain on GitHub and are excluded from the deployed site.
+The public website deploys as a static Azure Static Web App containing the landing page with homepage redirects. Documentation and blog source remain on GitHub and are excluded from the deployed site.
 
 ## Preview locally
 
@@ -11,10 +11,10 @@ python3 -m venv .venv-docs
 . .venv-docs/bin/activate
 python -m pip install -r requirements-docs.txt
 python scripts/build_site.py
-python -m http.server 8000 --bind 127.0.0.1 --directory site
+python scripts/preview_site.py --port 8000
 ```
 
-Open `http://127.0.0.1:8000/`. Rebuild after editing content. Stop the server with Ctrl+C. This simple local server previews content; Azure applies the configured headers and error responses. The docs environment is separate from application/runtime dependencies.
+Open `http://127.0.0.1:8000/`. Rebuild after editing content. Stop the server with Ctrl+C. The local preview redirects missing URLs to the homepage, matching Azure’s configured redirect. Azure also applies the configured response headers. The docs environment is separate from application/runtime dependencies.
 
 ## Validate and build
 
@@ -23,7 +23,7 @@ python scripts/build_site.py
 python scripts/check_site.py
 ```
 
-The builder renders the landing and 404 templates and checks internal links, anchors, and assets before replacing site/. The output contains no application state and requires no backend. MkDocs can still validate repository documentation separately; its output is not included in the public website.
+The builder renders the landing template and checks internal links, anchors, and assets before replacing site/. The output contains no application state and requires no backend. MkDocs can still validate repository documentation separately; its output is not included in the public website.
 
 Before release, inspect the landing page at desktop and mobile widths, its contact link, finger motion, independent pulses, and reduced-motion response. Verify that documentation and blog directories are absent from the website output.
 
@@ -39,7 +39,7 @@ Use the Free `agentagon-site` Static Web App in resource group `rg-agentagon-sit
 | Output directory | `site` |
 | Primary custom domain | `agentagon.ai` |
 | Alternate custom domain | `www.agentagon.ai`, redirected to the primary domain |
-| Published pages | Landing page and 404 response |
+| Published pages | Landing page only; unknown URLs redirect home |
 | Deployment secret | GitHub Actions secret `AZURE_STATIC_WEB_APPS_API_TOKEN` |
 
 The website workflow builds changes on pushes and pull requests. Successful `main` builds deploy production; same-repository pull requests deploy previews, which are removed when the PR closes. Fork PRs only build and validate. Previews use an `X-Robots-Tag: noindex` header and disallow crawling. The deployment action uploads the already-validated output with its own build disabled.
@@ -51,7 +51,7 @@ Before a domain cutover:
 3. Add both domains in Azure using TXT validation and retain the exact supplied ownership records.
 4. Record the current Namecheap web records for rollback. Set the apex ALIAS and `www` CNAME to the generated Azure hostname, preserving mail and unrelated records. Do not migrate nameservers.
 5. Wait for domain validation and HTTPS, then set `agentagon.ai` as Azure's default domain.
-6. Verify the landing page and a genuine 404 for /docs/, /blogs/, and unknown paths. Retain the old Railway service until its removal is separately authorized.
+6. Verify the landing page and homepage redirects for /docs/, /blogs/, and unknown paths. Retain the old Railway service until its removal is separately authorized.
 
 Building the site changes no cloud resources or DNS. See [Azure deployment configuration](https://learn.microsoft.com/en-us/azure/static-web-apps/build-configuration), [custom domains](https://learn.microsoft.com/en-us/azure/static-web-apps/custom-domain), and [default domain redirects](https://learn.microsoft.com/en-us/azure/static-web-apps/custom-domain-default).
 
@@ -59,7 +59,7 @@ Building the site changes no cloud resources or DNS. See [Azure deployment confi
 
 Website source lives in website/. The landing template presents “Reliability for the robot age.” above transparent titanium and glass-filament hands, with a single Talk to us action. The page uses a fixed charcoal theme and no secondary navigation. All required assets are checked in.
 
-The build publishes only index.html and 404.html, plus local assets, notices, robots policy, sitemap, and hosting configuration. The sitemap lists only the homepage. Unknown paths, including documentation and blog routes, return the branded 404; there are no redirects or catch-all SPA fallback.
+The build publishes only index.html, plus local assets, notices, robots policy, sitemap, and hosting configuration. The sitemap lists only the homepage. Unknown paths, including documentation and blog routes, redirect to the homepage with HTTP 302; there is no catch-all SPA rewrite.
 
 Repository documentation and blog drafts are retained as source material but are not part of the public site.
 

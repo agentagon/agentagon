@@ -3,7 +3,11 @@
 import importlib.util
 import json
 import sys
+from functools import partial
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from xml.etree import ElementTree as ET
 
 import pytest
@@ -15,6 +19,11 @@ sys.path.insert(0, str(ROOT / "scripts"))
 spec = importlib.util.spec_from_file_location("build_site", ROOT / "scripts" / "build_site.py")
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
+preview_spec = importlib.util.spec_from_file_location(
+    "preview_site", ROOT / "scripts" / "preview_site.py"
+)
+preview = importlib.util.module_from_spec(preview_spec)
+preview_spec.loader.exec_module(preview)
 sys.path.remove(str(ROOT / "scripts"))
 
 
@@ -32,7 +41,6 @@ def test_public_routes_metadata_and_sitemap(built_site):
     assert urls == ["https://agentagon.ai/"]
     assert {path.relative_to(built_site).as_posix() for path in built_site.rglob("*.html")} == {
         "index.html",
-        "404.html",
     }
     assert not (built_site / "docs").exists()
     assert not (built_site / "blogs").exists()
@@ -46,15 +54,40 @@ def test_public_routes_metadata_and_sitemap(built_site):
     assert 'href="mailto:founders@agentagon.ai"' in html
 
 
-def test_unknown_routes_return_the_branded_404(built_site):
+def test_unknown_routes_redirect_home(built_site):
     config = json.loads((built_site / "staticwebapp.config.json").read_text())
     assert "routes" not in config
-    assert config["responseOverrides"]["404"] == {"rewrite": "/404.html", "statusCode": 404}
+    assert config["responseOverrides"]["404"] == {"redirect": "/", "statusCode": 302}
     assert "navigationFallback" not in config
     assert not (built_site / "welcome").exists()
     assert not (built_site / "field-notes/same-model-different-agent-behavior/index.html").exists()
-    assert '<meta name="robots" content="noindex"' in (built_site / "404.html").read_text()
+    assert not (built_site / "404.html").exists()
     assert "X-Robots-Tag" not in config["globalHeaders"]
+
+
+def test_local_preview_redirects_missing_paths_and_serves_existing_assets(built_site):
+    handler = partial(preview.HomepagePreviewHandler, directory=str(built_site))
+    with ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        connection = HTTPConnection(*server.server_address, timeout=5)
+        try:
+            for method in ["GET", "HEAD"]:
+                for path in ["/docs/", "/blogs/", "/missing/path?from=old-link", "/404.html"]:
+                    connection.request(method, path)
+                    response = connection.getresponse()
+                    assert response.status == 302
+                    assert response.getheader("Location") == "/"
+                    assert response.read() == b""
+            for path in ["/", "/assets/touch-interaction.js"]:
+                connection.request("GET", path)
+                response = connection.getresponse()
+                assert response.status == 200
+                assert response.read()
+        finally:
+            connection.close()
+            server.shutdown()
+            thread.join(timeout=5)
 
 
 def test_preview_indexing_is_disabled(tmp_path):
