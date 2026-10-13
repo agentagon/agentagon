@@ -10,7 +10,7 @@
 {% block content %}
       <main class="hero" id="main" aria-labelledby="hero-title">
         <h1 id="hero-title">Reliability <em>for the robot age.</em></h1>
-        <button class="ag-touch-stage" id="ag-touch-stage" data-material="titanium" type="button" aria-label="Send light from the AI wrist through both hands to the robot wrist">
+        <button class="ag-touch-stage" id="ag-touch-stage" data-material="titanium" type="button" disabled aria-label="Robot and AI hands (static image)">
           <div class="ag-touch-art">
             <img src="/assets/titanium-hands-transparent.png" width="1774" height="887" alt="A brushed titanium robot hand reaches toward an AI hand formed from glass filaments; a fine cyan signal connects their fingertips." draggable="false" fetchpriority="high" />
             <canvas id="ag-touch-light" aria-hidden="true"></canvas>
@@ -23,6 +23,6 @@
         </div>
         <span class="ag-sr-only" id="ag-touch-status" role="status" aria-live="polite"></span>
       </main>
-      <script src="/assets/touch-interaction.js?v=4" defer></script>
+      <script src="/assets/touch-interaction.js?v=5" defer></script>
 {% endblock %}
 {% block footer %}{% endblock %}

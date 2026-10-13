@@ -9,7 +9,9 @@ const scriptPath = path.join(__dirname, '../website/assets/touch-interaction.js'
 function target(properties = {}) {
   const listeners = new Map();
   return Object.assign({
-    style: {}, dataset: {},
+    style: {}, dataset: {}, attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+    getAttribute(name) { return this.attributes[name]; },
     addEventListener(type, callback) {
       if (!listeners.has(type)) listeners.set(type, []);
       listeners.get(type).push(callback);
@@ -20,7 +22,7 @@ function target(properties = {}) {
   }, properties);
 }
 
-function fixture({ reducedMotion = false } = {}) {
+function fixture({ reducedMotion = false, webgl = 'available' } = {}) {
   let now = 0, frameId = 0;
   const frames = new Map();
   const imageData = (width, height) => ({ data: new Uint8ClampedArray(width * height * 4) });
@@ -33,7 +35,7 @@ function fixture({ reducedMotion = false } = {}) {
   }, { get: (object, key) => key in object ? object[key] : () => {} });
   const gl = new Proxy({
     NO_ERROR: 0,
-    getError: () => 0,
+    getError: () => webgl === 'renderer-failure' ? 1 : 0,
     getShaderParameter: () => true,
     getProgramParameter: () => true,
     getAttribLocation: (_program, name) => name === 'position' ? 0 : 1,
@@ -49,8 +51,11 @@ function fixture({ reducedMotion = false } = {}) {
     querySelector: () => image,
     getBoundingClientRect: () => ({ left: 0, top: 0, width: 887, height: 444 }),
   });
-  const canvas = target({ getContext: () => gl });
-  const stage = target({ querySelector: () => art });
+  const canvas = target({ getContext: () => {
+    if (webgl === 'throws') throw new Error('Context creation failed');
+    return webgl === 'unavailable' ? null : gl;
+  } });
+  const stage = target({ disabled: true, querySelector: () => art });
   const status = target();
   const document = target({
     hidden: false,
@@ -81,7 +86,8 @@ function fixture({ reducedMotion = false } = {}) {
       for (const callback of callbacks) callback(now);
     },
   };
-  assert.equal(stage.dataset.ready, 'true');
+  assert.equal(stage.dataset.ready, String(webgl === 'available'));
+  assert.equal(stage.disabled, webgl !== 'available');
   result.advance(0);
   return result;
 }
@@ -94,9 +100,13 @@ test('an active pulse resumes after WebGL restoration without pointer hover', ()
   page.canvas.emit('webglcontextlost', { preventDefault() {} });
   assert.equal(page.image.style.opacity, '1');
   assert.equal(page.stage.dataset.ready, 'false');
+  assert.equal(page.stage.disabled, true);
+  assert.equal(page.stage.getAttribute('aria-label'), 'Robot and AI hands (static image)');
   page.advance(200);
   page.canvas.emit('webglcontextrestored');
   assert.equal(page.stage.dataset.ready, 'true');
+  assert.equal(page.stage.disabled, false);
+  assert.match(page.stage.getAttribute('aria-label'), /^Send light/);
   assert.equal(page.image.style.opacity, '0');
   page.advance(300);
   assert.ok(page.states()[0].age > ageBeforeLoss, 'the restored signal must progress');
@@ -105,6 +115,19 @@ test('an active pulse resumes after WebGL restoration without pointer hover', ()
   assert.equal(page.stage.dataset.completedPulseCount, '1');
   assert.equal(page.pendingFrames(), 0);
 });
+
+for (const webgl of ['unavailable', 'throws', 'renderer-failure']) {
+  test(`the static image has no active control when WebGL is ${webgl}`, () => {
+    const page = fixture({ webgl });
+    assert.equal(page.stage.disabled, true);
+    assert.equal(page.stage.getAttribute('aria-label'), 'Robot and AI hands (static image)');
+    assert.notEqual(page.image.style.opacity, '0');
+    assert.equal(page.pendingFrames(), 0);
+    page.stage.emit('click');
+    assert.notEqual(page.stage.dataset.pulseActive, 'true');
+    assert.equal(page.pendingFrames(), 0);
+  });
+}
 
 test('successive clicks keep their own progress and finish independently', () => {
   const page = fixture();

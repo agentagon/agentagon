@@ -2,10 +2,18 @@
   'use strict';
   const stage=document.getElementById('ag-touch-stage');
   if(!stage||stage.dataset.touchInitialized)return;
+  function interactionAvailable(available){
+    stage.disabled=!available;
+    stage.setAttribute('aria-label',available?'Send light from the AI wrist through both hands to the robot wrist':'Robot and AI hands (static image)');
+    stage.dataset.ready=String(available);
+  }
+  interactionAvailable(false);
   const art=stage.querySelector('.ag-touch-art'),image=art?.querySelector('img');
   const canvas=document.getElementById('ag-touch-light'),status=document.getElementById('ag-touch-status');
   if(!art||!image||!canvas)return;
-  const gl=canvas.getContext('webgl',{alpha:true,antialias:true,premultipliedAlpha:false});
+  let gl;
+  try{gl=canvas.getContext('webgl',{alpha:true,antialias:true,premultipliedAlpha:false});}
+  catch(error){stage.dataset.rendererError=String(error.message||error);return;}
   if(!gl)return;
   stage.dataset.touchInitialized='true';
   const W=1774,H=887,DEG=Math.PI/180,reduced=matchMedia('(prefers-reduced-motion: reduce)');
@@ -327,12 +335,12 @@
   document.addEventListener('visibilitychange',()=>{visible=!document.hidden;playbackVisibility();});
   window.addEventListener('pagehide',event=>{cancelAnimationFrame(frame);frame=0;if(!event.persisted){destroyed=true;resizeObserver.disconnect();intersectionObserver.disconnect();}else{visible=false;playbackVisibility();}});
   window.addEventListener('pageshow',()=>{visible=!document.hidden;playbackVisibility();});
-  canvas.addEventListener('webglcontextlost',event=>{event.preventDefault();ready=false;cancelAnimationFrame(frame);frame=0;image.style.opacity='1';canvas.style.opacity='0';stage.dataset.ready='false';});
+  canvas.addEventListener('webglcontextlost',event=>{event.preventDefault();ready=false;interactionAvailable(false);cancelAnimationFrame(frame);frame=0;image.style.opacity='1';canvas.style.opacity='0';});
   canvas.addEventListener('webglcontextrestored',()=>{renderer=null;initialize();});
   function initialize(){
     if(ready||!image.naturalWidth)return;
-    try{prepareArt();resize();renderer=setupRenderer();draw(performance.now());if(gl.getError()!==gl.NO_ERROR)throw new Error('Hand renderer failed to initialize');canvas.style.maskImage=getComputedStyle(image).maskImage;canvas.style.webkitMaskImage=getComputedStyle(image).webkitMaskImage;image.style.opacity='0';canvas.style.opacity='1';ready=true;stage.dataset.ready='true';wake();}
-    catch(error){image.style.opacity='1';canvas.style.opacity='0';stage.dataset.rendererError=String(error.message||error);}
+    try{prepareArt();resize();renderer=setupRenderer();draw(performance.now());if(gl.getError()!==gl.NO_ERROR)throw new Error('Hand renderer failed to initialize');canvas.style.maskImage=getComputedStyle(image).maskImage;canvas.style.webkitMaskImage=getComputedStyle(image).webkitMaskImage;image.style.opacity='0';canvas.style.opacity='1';ready=true;interactionAvailable(true);wake();}
+    catch(error){ready=false;interactionAvailable(false);image.style.opacity='1';canvas.style.opacity='0';stage.dataset.rendererError=String(error.message||error);}
   }
   if(image.complete&&image.naturalWidth)initialize();else image.addEventListener('load',initialize,{once:true});
 })();

@@ -52,6 +52,8 @@ def test_landing_has_static_art_contact_and_accessible_motion_control():
     )
     control = next(attrs for tag, attrs in elements if attrs.get("id") == "ag-touch-stage")
     assert control["type"] == "button" and control["aria-label"]
+    assert "disabled" in control  # No dead control before JS/renderer initialization.
+    assert control["aria-label"] == "Robot and AI hands (static image)"
     assert "Reliability <em>for the robot age.</em>" in html
 
 
