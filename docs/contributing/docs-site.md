@@ -57,7 +57,7 @@ Building the site changes no cloud resources or DNS. See [Azure deployment confi
 
 ## Maintain the landing page and articles
 
-Website source lives in `website/`. The landing template preserves the approved causeway design; shared templates place the logo beside the wordmark, center the Docs and Blogs links, and provide the theme control and article layouts. Get Started opens the Init guide. All required assets are checked in, so builds do not depend on sibling repositories.
+Website source lives in `website/`. The landing template presents “Reliability for the robot age.” above transparent titanium and glass-filament hands, with a single Talk to us action. The homepage uses a fixed charcoal theme. Shared article templates retain the Docs and Blogs links, theme control, and reading layouts. All required assets are checked in, so builds do not depend on sibling repositories.
 
 Add articles as Markdown in `website/blogs/`. Frontmatter requires `title`, `description`, `author`, `published_at`, and `updated_at`. Filenames become `/blogs/<filename>/` routes. Use the approved publication dates and set the revision date to the actual edit date. The builder creates article metadata and related links.
 
@@ -79,7 +79,7 @@ Unknown paths, including retired workspace and article routes, return the brande
 
 The brand reference is `agentagon-os/assets/landing-page/index.html`. Docs use its split-crown logo, frost/navy colors, system sans-serif and monospace fonts, rounded primary buttons, and theme controls. The introduction alone uses the approved light/dark causeway artwork and editorial serif emphasis. Articles keep plain reading surfaces.
 
-The copied logo and causeway images in `docs/assets/` are self-contained; building the docs does not require the sibling repository. Keep those copies aligned when the approved landing-page brand changes. The artwork is cropped by CSS, with no animation. All pages initially follow the system theme and offer a light/dark toggle. Documentation uses Material's own saved preference; the landing page and articles share a separate preference. A visitor's explicit choice takes precedence over their system setting.
+The copied logo and causeway images in `docs/assets/` are self-contained; building the docs does not require the sibling repository. The landing page uses its own transparent hands asset and scoped CSS. Hover rotates anatomical joints, and repeated clicks produce independent pulses through both hands. Reduced-motion visitors receive a brief highlight, and a static image remains available without WebGL. Articles follow the system theme and offer a light/dark toggle; documentation uses Material's own saved preference. A visitor's explicit article theme choice takes precedence over their system setting.
 
 `docs_theme/partials/header.html` preserves the Material 9.7.7 header behavior and customizes its first title topic for the wordmark and separate Docs label. The logo returns to the site root. Compare this override with upstream when upgrading Material. CI includes changes to `docs_theme/`.
 

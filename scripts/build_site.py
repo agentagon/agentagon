@@ -98,8 +98,9 @@ def assemble(destination, *, preview=False):
     render(
         "index.html",
         "/",
-        "Agentagon — Improve your AI agents. Continuously.",
-        "Inspect and improve AI agents with measured fixes and custom scores.",
+        "Agentagon — Reliability for the robot age.",
+        "AI agents that take the controls when a robot gets stuck, find another way, "
+        "and keep it working.",
     )
     render(
         "blogs.html",

@@ -1,5 +1,6 @@
 <header class="site-header">
   <a class="brand" href="/" aria-label="Agentagon home"><img src="/assets/logo-split-crown-96.png" width="96" height="96" alt="" /><span translate="no">agentagon</span></a>
+  {% if path != '/' %}
   <nav class="site-nav" aria-label="Main navigation">
     <a href="/docs/">Docs</a>
     <a href="/blogs/"{% if path.startswith('/blogs/') %} aria-current="{{ 'page' if path == '/blogs/' else 'location' }}"{% endif %}>Blogs</a>
@@ -37,4 +38,5 @@
               </svg>
             </a>
   </div>
+  {% endif %}
 </header>
