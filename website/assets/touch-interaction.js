@@ -35,6 +35,11 @@
     ring:digit([[1280,395],[1204,466],[1207,543]],[1227,601],[.45,.95,1.15],17),
     pinky:digit([[1290,410],[1258,440],[1283,465]],[1308,450],[-.3,-.4,-.45],8,6)
   };
+  // Increase finger curls by 50%; keep wrist rotation anchored at its original range.
+  for(const hand of Object.values(hands)){
+    hand.limits=hand.limits.map((limit,index)=>index===0?limit:limit*1.5);
+    for(const finger of Object.values(hand.digits))finger.limits=finger.limits.map(limit=>limit*1.5);
+  }
   const articulations=Object.values(hands).flatMap(hand=>[hand,...Object.values(hand.digits)]);
   const aiGuides=ceramic?[
     [[1768,237],[1695,274],[1637,319],[1572,357],[1490,346],[1414,313],[1332,279],[1255,300],[1142,304],[1041,331],aiTip],
@@ -207,7 +212,9 @@
     gl.uniform1i(gl.getUniformLocation(program,'art'),0);gl.uniform1i(gl.getUniformLocation(program,'lights'),1);gl.uniform1i(gl.getUniformLocation(program,'connection'),2);
     return{program,vertexBuffer,indexBuffer,original,clean,pulse,line};
   }
+  const PULSE_GAIN=1.5;
   function glow(ctx,p,strength,radius=24){
+    strength*=PULSE_GAIN;
     if(strength<=0)return;const g=ctx.createRadialGradient(p[0],p[1],0,p[0],p[1],radius);
     g.addColorStop(0,`rgba(224,255,255,${clamp(strength)})`);g.addColorStop(.14,`rgba(161,245,255,${clamp(strength*.86)})`);g.addColorStop(.45,`rgba(79,211,248,${clamp(strength*.29)})`);g.addColorStop(1,'rgba(66,198,240,0)');
     ctx.fillStyle=g;ctx.fillRect(p[0]-radius,p[1]-radius,radius*2,radius*2);
@@ -215,7 +222,7 @@
   function stroke(ctx,a,b,strength,width=1.6){ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.lineWidth=width;ctx.lineCap='round';ctx.strokeStyle=`rgba(131,237,255,${clamp(strength)})`;ctx.stroke();}
   function routeLight(ctx,path,progress,strength,radius=25){
     const distance=clamp(progress)*path.length;
-    for(let tail=0;tail<10;tail++){const end=distance-tail*8;if(end<0)continue;stroke(ctx,sample(path,end-8),sample(path,end),strength*(1-tail/10)*.62,2.1);}
+    for(let tail=0;tail<10;tail++){const end=distance-tail*8;if(end<0)continue;stroke(ctx,sample(path,end-8),sample(path,end),strength*(1-tail/10)*.62*PULSE_GAIN,2.1);}
     glow(ctx,sample(path,distance),strength,radius);glow(ctx,sample(path,Math.max(0,distance-20)),strength*.3,radius*.6);
   }
   function clear(ctx,target){ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,target.width,target.height);ctx.setTransform(target.width/W,0,0,target.height/H,0,0);}
@@ -243,7 +250,7 @@
         glow(work,[5,213],.35,25);stroke(bridge,rightTip,leftTip,.25,1.4);
       }else{
         if(age>=2){const fade=clamp((4.18-age)/.18);routeLight(work,robotRoute,(age-2)/2,.98*fade,28);if(age>3.9){glow(work,[8,213],.8*clamp((age-3.9)/.1)*fade,35);glow(work,[44,224],.38*fade,20);}}
-        if(age>=1.65&&age<=2.2){const t=clamp((age-1.7)/.3),head=[mix(rightTip[0],leftTip[0],t),mix(rightTip[1],leftTip[1],t)],fade=clamp((age-1.65)/.05)*clamp((2.2-age)/.2);stroke(bridge,rightTip,head,.43*fade,1.35);glow(bridge,head,.95*fade,19);}
+        if(age>=1.65&&age<=2.2){const t=clamp((age-1.7)/.3),head=[mix(rightTip[0],leftTip[0],t),mix(rightTip[1],leftTip[1],t)],fade=clamp((age-1.65)/.05)*clamp((2.2-age)/.2);stroke(bridge,rightTip,head,.43*fade*PULSE_GAIN,1.35);glow(bridge,head,.95*fade,19);}
       }
     }
     compositeMask(robotMask);
