@@ -113,14 +113,14 @@ test('successive clicks keep their own progress and finish independently', () =>
   page.stage.emit('click');
   page.advance(700);
   page.stage.emit('click');
-  page.advance(2100);
+  page.advance(1000);
   const states = page.states();
   assert.deepEqual(states.map(pulse => pulse.id), [1, 2, 3]);
   assert.ok(states[0].age > states[1].age && states[1].age > states[2].age);
-  page.advance(4500);
+  page.advance(1600);
   assert.equal(page.stage.dataset.completedPulseCount, '1');
   assert.deepEqual(page.states().map(pulse => pulse.id), [2, 3]);
-  page.advance(5000);
+  page.advance(2300);
   assert.equal(page.stage.dataset.completedPulseCount, '3');
   assert.equal(page.stage.dataset.activePulseCount, '0');
   assert.equal(page.pendingFrames(), 0);
@@ -141,6 +141,21 @@ test('reduced motion keeps joints still and shows a brief static response', () =
   }
   assert.equal(page.art.style.transform, 'none');
   page.advance(600);
+  assert.equal(page.stage.dataset.completedPulseCount, '1');
+  assert.equal(page.stage.dataset.activePulseCount, '0');
+  assert.equal(page.pendingFrames(), 0);
+});
+
+test('the pulse reaches the far wrist before completing in 1.5 seconds', () => {
+  const page = fixture();
+  page.stage.emit('click');
+  page.advance(650);
+  assert.equal(page.states()[0].phase, 'bridge');
+  page.advance(800);
+  assert.equal(page.states()[0].phase, 'robot-hand');
+  page.advance(1450);
+  assert.equal(page.states()[0].phase, 'robot-wrist');
+  page.advance(1500);
   assert.equal(page.stage.dataset.completedPulseCount, '1');
   assert.equal(page.stage.dataset.activePulseCount, '0');
   assert.equal(page.pendingFrames(), 0);

@@ -148,7 +148,7 @@
   canvas.style.pointerEvents='none';art.style.transform='none';
   function prepareArt(){
     cleanCanvas.width=W;cleanCanvas.height=H;const clean=cleanCanvas.getContext('2d',{willReadFrequently:true});clean.drawImage(image,0,0,W,H);
-    // Erase only the static bridge on an in-memory moving texture. Keep the PNG intact.
+    // Replace the static bridge on the render texture; draw the thread at its selected width.
     try{
       const gapX=robotTip[0]+10,gapWidth=aiTip[0]-gapX-4,strip=clean.getImageData(gapX,robotTip[1]-8,gapWidth,17);
       // Interpolate alpha as well as color: an extracted transparent bridge must
@@ -212,7 +212,7 @@
     gl.uniform1i(gl.getUniformLocation(program,'art'),0);gl.uniform1i(gl.getUniformLocation(program,'lights'),1);gl.uniform1i(gl.getUniformLocation(program,'connection'),2);
     return{program,vertexBuffer,indexBuffer,original,clean,pulse,line};
   }
-  const PULSE_GAIN=1.5;
+  const PULSE_GAIN=1.5,PULSE_DURATION=1500,PULSE_SPEED=4180/PULSE_DURATION,THREAD_WIDTH_GAIN=3;
   function glow(ctx,p,strength,radius=24){
     strength*=PULSE_GAIN;
     if(strength<=0)return;const g=ctx.createRadialGradient(p[0],p[1],0,p[0],p[1],radius);
@@ -230,27 +230,30 @@
     work.setTransform(1,0,0,1,0,0);if(mask){work.globalCompositeOperation='destination-in';work.drawImage(mask,0,0,workCanvas.width,workCanvas.height);work.globalCompositeOperation='source-over';}
     light.setTransform(1,0,0,1,0,0);light.drawImage(workCanvas,0,0);
   }
+  function travelAge(pulse,now){
+    return Math.max(0,(now-pulse.born)/1000)*(pulse.reduced?1:PULSE_SPEED);
+  }
   function phaseFor(pulse,now){
-    const age=Math.max(0,(now-pulse.born)/1000);
-    return{id:pulse.id,age:+age.toFixed(3),phase:pulse.reduced?'highlight':age<1.7?'ai-hand':age<2?'bridge':age<4?'robot-hand':'robot-wrist',progress:+clamp(age/(pulse.duration/1000)).toFixed(3)};
+    const age=Math.max(0,(now-pulse.born)/1000),travel=travelAge(pulse,now);
+    return{id:pulse.id,age:+age.toFixed(3),phase:pulse.reduced?'highlight':travel<1.7?'ai-hand':travel<2?'bridge':travel<4?'robot-hand':'robot-wrist',progress:+clamp(age/(pulse.duration/1000)).toFixed(3)};
   }
   function lighting(now,moving){
     clear(light,lightCanvas);clear(bridge,bridgeCanvas);clear(work,workCanvas);
-    const rightTip=deform(aiTip,'right'),leftTip=deform(robotTip,'left');if(moving)stroke(bridge,rightTip,leftTip,.4,1.05);
+    const rightTip=deform(aiTip,'right'),leftTip=deform(robotTip,'left');stroke(bridge,rightTip,leftTip,.4,1.05*THREAD_WIDTH_GAIN);
     for(const pulse of pulses){
-      const age=(now-pulse.born)/1000;
+      const age=travelAge(pulse,now);
       if(pulse.reduced){for(const path of aiRoutes)for(let i=1;i<path.points.length;i++)stroke(work,path.points[i-1],path.points[i],.15,2.2);}
       else aiRoutes.forEach((path,index)=>{const local=age-index*.024;if(local<0||local>1.85)return;routeLight(work,path,local/1.7,clamp(local/.09)*clamp((1.85-local)/.15)*(index?.85:1),26);});
     }
     compositeMask(aiMask);clear(work,workCanvas);
     for(const pulse of pulses){
-      const age=(now-pulse.born)/1000;
+      const age=travelAge(pulse,now);
       if(pulse.reduced){
         for(let i=1;i<robotRoute.points.length;i++)stroke(work,robotRoute.points[i-1],robotRoute.points[i],.23,2.8);
-        glow(work,[5,213],.35,25);stroke(bridge,rightTip,leftTip,.25,1.4);
+        glow(work,[5,213],.35,25);stroke(bridge,rightTip,leftTip,.25,1.4*THREAD_WIDTH_GAIN);
       }else{
         if(age>=2){const fade=clamp((4.18-age)/.18);routeLight(work,robotRoute,(age-2)/2,.98*fade,28);if(age>3.9){glow(work,[8,213],.8*clamp((age-3.9)/.1)*fade,35);glow(work,[44,224],.38*fade,20);}}
-        if(age>=1.65&&age<=2.2){const t=clamp((age-1.7)/.3),head=[mix(rightTip[0],leftTip[0],t),mix(rightTip[1],leftTip[1],t)],fade=clamp((age-1.65)/.05)*clamp((2.2-age)/.2);stroke(bridge,rightTip,head,.43*fade*PULSE_GAIN,1.35);glow(bridge,head,.95*fade,19);}
+        if(age>=1.65&&age<=2.2){const t=clamp((age-1.7)/.3),head=[mix(rightTip[0],leftTip[0],t),mix(rightTip[1],leftTip[1],t)],fade=clamp((age-1.65)/.05)*clamp((2.2-age)/.2);stroke(bridge,rightTip,head,.43*fade*PULSE_GAIN,1.35*THREAD_WIDTH_GAIN);glow(bridge,head,.95*fade,19);}
       }
     }
     compositeMask(robotMask);
@@ -262,7 +265,7 @@
     const moving=articulations.some(rig=>rig.angles.some(a=>Math.abs(a)>.0001));lighting(now,moving);
     for(let i=0;i<mesh.length;i++){const node=mesh[i],p=moving?deform(node.point,node.name,node.skin):node.point;vertices[i*4]=p[0]/W;vertices[i*4+1]=p[1]/H;vertices[i*4+2]=node.point[0]/W;vertices[i*4+3]=node.point[1]/H;}
     gl.viewport(0,0,canvas.width,canvas.height);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);gl.useProgram(renderer.program);gl.bindBuffer(gl.ARRAY_BUFFER,renderer.vertexBuffer);gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.DYNAMIC_DRAW);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,renderer.indexBuffer);
-    gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,moving?renderer.clean:renderer.original);
+    gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,renderer.clean);
     gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,renderer.pulse);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,lightCanvas);
     gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,renderer.line);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,bridgeCanvas);
     gl.drawElements(gl.TRIANGLES,indices.length,gl.UNSIGNED_SHORT,0);
@@ -313,7 +316,7 @@
   function rest(){hovered=false;stage.dataset.hoverState='rest';for(const rig of articulations)rig.targets.fill(0);wake();}
   stage.addEventListener('pointerenter',pointAt);stage.addEventListener('pointermove',pointAt);stage.addEventListener('pointerleave',rest);stage.addEventListener('pointercancel',rest);stage.addEventListener('blur',rest);
   stage.addEventListener('click',()=>{
-    if(!ready)return;const now=pausedAt??performance.now();pulses.push({id:++pulseCount,born:now,duration:reduced.matches?480:4180,reduced:reduced.matches});telemetry(now);
+    if(!ready)return;const now=pausedAt??performance.now();pulses.push({id:++pulseCount,born:now,duration:reduced.matches?480:PULSE_DURATION,reduced:reduced.matches});telemetry(now);
     if(status)status.textContent=reduced.matches?'Both hands and their connection highlighted.':`Signal ${pulseCount} travels from the right AI wrist through both hands to the left robot wrist.`;wake();
   });
   reduced.addEventListener('change',()=>{

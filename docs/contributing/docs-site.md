@@ -77,6 +77,6 @@ Repository documentation and blog drafts are retained as source material but are
 
 The landing page retains the split-crown logo, Helvetica Neue display typography, editorial serif emphasis, and rounded primary contact button. The hands PNG has real alpha and adopts the surrounding DOM background.
 
-Hover rotates wrists and anatomical finger joints. Finger curls are 50% stronger than the initial PR version; wrist motion stays restrained. Repeated clicks create independent pulses through both hands, with 50% stronger glow and trail intensity. Reduced-motion visitors receive a brief highlight, and the static image remains available without WebGL. The source image, source-coordinate rig, and asset prompt are maintained together in website/assets/.
+Hover rotates wrists and anatomical finger joints. Finger curls are 50% stronger than the initial PR version; wrist motion stays restrained. Repeated clicks create independent pulses through both hands, with 50% stronger glow and trail intensity. Signals complete the full journey in about 1.5 seconds. The connecting fingertip thread and its crossing pulse are twice as thick as the previous 50%-thicker version. Reduced-motion visitors receive a brief highlight, and the static image remains available without WebGL. The source image, source-coordinate rig, and asset prompt are maintained together in website/assets/.
 
 Documentation branding and theme files remain available for independent documentation builds. The public website adds no analytics, external fonts, or visitor authentication.
