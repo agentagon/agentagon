@@ -16,10 +16,14 @@
 .ag-sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
 @media(max-width:700px) {
   .hands-page .site-header { grid-template-columns:minmax(0,1fr) auto; padding-top:0; gap:1rem; }
-  .hands-page .hero { padding:32px var(--gutter); }
-  .hands-page h1 { font-size:clamp(34px,8.2vw,52px); max-width:620px; }
-  .ag-touch-stage { width:calc(90% + 10.8vw); height:auto; aspect-ratio:2.1/1; margin:24px 0 12px; }
-  .hands-page .contact-block { margin-top:24px; }
+  .hands-page .hero { min-width:0; padding:32px var(--gutter); }
+  .hands-page h1 { font-size:clamp(42px,11vw,58px); max-width:620px; }
+  .hands-page h1 em { display:block; font-size:.85em; }
+  /* A larger diagonal crop gives the hands room on a portrait screen. Keep
+     the source ratio and transform the image and its animation together. */
+  .ag-touch-stage { width:100vw; height:clamp(240px,76vw,380px); aspect-ratio:auto; margin:12px 0 0; border-radius:0; overflow:clip; }
+  .ag-touch-art { flex-basis:145%; width:145%; rotate:-24deg; }
+  .hands-page .contact-block { margin-top:12px; }
 }
 @media(min-width:701px) and (max-height:740px) {
   .hands-page .hero { padding-block:22px; }
