@@ -1,6 +1,6 @@
 # Build and host the public website
 
-The landing page, documentation, and blog deploy together as a static Azure Static Web App. Public documentation lives at `/docs/`, rendered from Markdown with Material for MkDocs. Contributor-only material remains on GitHub and is excluded from the site build.
+The public website deploys as a static Azure Static Web App containing the landing page with homepage redirects. Documentation and blog source remain on GitHub and are excluded from the deployed site.
 
 ## Preview locally
 
@@ -11,10 +11,10 @@ python3 -m venv .venv-docs
 . .venv-docs/bin/activate
 python -m pip install -r requirements-docs.txt
 python scripts/build_site.py
-python -m http.server 8000 --bind 127.0.0.1 --directory site
+python scripts/preview_site.py --port 8000
 ```
 
-Open `http://127.0.0.1:8000/`. Rebuild after editing content. Stop the server with Ctrl+C. This simple local server previews content; Azure applies the configured headers and error responses. The docs environment is separate from application/runtime dependencies.
+Open `http://127.0.0.1:8000/`. Rebuild after editing content. Stop the server with Ctrl+C. The local preview redirects missing URLs to the homepage, matching Azure’s configured redirect. Azure also applies the configured response headers. The docs environment is separate from application/runtime dependencies.
 
 ## Validate and build
 
@@ -23,9 +23,9 @@ python scripts/build_site.py
 python scripts/check_site.py
 ```
 
-The builder renders the landing and article templates, runs MkDocs in strict mode, and checks internal links, anchors, and assets before replacing `site/`. That directory and `.venv-docs/` are ignored. The output contains no application state and requires no backend. A plain `python -m mkdocs build --strict` remains useful for checking documentation alone; run the combined build before publishing.
+The builder renders the landing template and checks internal links, anchors, and assets before replacing site/. The output contains no application state and requires no backend. MkDocs can still validate repository documentation separately; its output is not included in the public website.
 
-Run link checks and inspect installation, search, host tabs, code-copy controls, mobile navigation, and both themes before release. The source-link hook maps links outside public docs to their GitHub source locations; publish the matching repository content before publicly releasing those links.
+Before release, inspect the landing page at desktop and mobile widths, its contact link, finger motion, independent pulses, and reduced-motion response. Verify that documentation and blog directories are absent from the website output.
 
 ## Deploy to Azure Static Web Apps
 
@@ -39,7 +39,7 @@ Use the Free `agentagon-site` Static Web App in resource group `rg-agentagon-sit
 | Output directory | `site` |
 | Primary custom domain | `agentagon.ai` |
 | Alternate custom domain | `www.agentagon.ai`, redirected to the primary domain |
-| Documentation canonical URL | `https://agentagon.ai/docs/` in `mkdocs.yml` |
+| Published pages | Landing page only; unknown URLs redirect home |
 | Deployment secret | GitHub Actions secret `AZURE_STATIC_WEB_APPS_API_TOKEN` |
 
 The website workflow builds changes on pushes and pull requests. Successful `main` builds deploy production; same-repository pull requests deploy previews, which are removed when the PR closes. Fork PRs only build and validate. Previews use an `X-Robots-Tag: noindex` header and disallow crawling. The deployment action uploads the already-validated output with its own build disabled.
@@ -51,19 +51,17 @@ Before a domain cutover:
 3. Add both domains in Azure using TXT validation and retain the exact supplied ownership records.
 4. Record the current Namecheap web records for rollback. Set the apex ALIAS and `www` CNAME to the generated Azure hostname, preserving mail and unrelated records. Do not migrate nameservers.
 5. Wait for domain validation and HTTPS, then set `agentagon.ai` as Azure's default domain.
-6. Verify `/docs/getting-started/install/`, docs search, blog links and a genuine 404. Retain the old Railway service until its removal is separately authorized.
+6. Verify the landing page and homepage redirects for /docs/, /blogs/, and unknown paths. Retain the old Railway service until its removal is separately authorized.
 
 Building the site changes no cloud resources or DNS. See [Azure deployment configuration](https://learn.microsoft.com/en-us/azure/static-web-apps/build-configuration), [custom domains](https://learn.microsoft.com/en-us/azure/static-web-apps/custom-domain), and [default domain redirects](https://learn.microsoft.com/en-us/azure/static-web-apps/custom-domain-default).
 
-## Maintain the landing page and articles
+## Maintain the landing page
 
-Website source lives in `website/`. The landing template preserves the approved causeway design; shared templates place the logo beside the wordmark, center the Docs and Blogs links, and provide the theme control and article layouts. Get Started opens the Init guide. All required assets are checked in, so builds do not depend on sibling repositories.
+Website source lives in website/. The landing template presents “Reliability for the robot age.” above transparent titanium and glass-filament hands, with a single Talk to us action. The page uses a fixed charcoal theme and no secondary navigation. All required assets are checked in.
 
-Add articles as Markdown in `website/blogs/`. Frontmatter requires `title`, `description`, `author`, `published_at`, and `updated_at`. Filenames become `/blogs/<filename>/` routes. Use the approved publication dates and set the revision date to the actual edit date. The builder creates article metadata and related links.
+The build publishes only index.html, plus local assets, notices, robots policy, sitemap, and hosting configuration. The sitemap lists only the homepage. Unknown paths, including documentation and blog routes, redirect to the homepage with HTTP 302; there is no catch-all SPA rewrite.
 
-The initial articles were adapted from the corresponding files under `aegon/web/src/content/seo/pages/`. They now describe the dashboard, managed workflows and local MCP interface. The old model-comparison study is excluded because its reported rates and counts require reconciliation.
-
-Unknown paths, including retired workspace and article routes, return the branded 404. There are no compatibility redirects or catch-all SPA fallback.
+Repository documentation and blog drafts are retained as source material but are not part of the public site.
 
 ## Maintain the content
 
@@ -77,12 +75,8 @@ Unknown paths, including retired workspace and article routes, return the brande
 
 ## Brand and assets
 
-The brand reference is `agentagon-os/assets/landing-page/index.html`. Docs use its split-crown logo, frost/navy colors, system sans-serif and monospace fonts, rounded primary buttons, and theme controls. The introduction alone uses the approved light/dark causeway artwork and editorial serif emphasis. Articles keep plain reading surfaces.
+The landing page retains the split-crown logo, Helvetica Neue display typography, editorial serif emphasis, and rounded primary contact button. The hands PNG has real alpha and adopts the surrounding DOM background.
 
-The copied logo and causeway images in `docs/assets/` are self-contained; building the docs does not require the sibling repository. Keep those copies aligned when the approved landing-page brand changes. The artwork is cropped by CSS, with no animation. All pages initially follow the system theme and offer a light/dark toggle. Documentation uses Material's own saved preference; the landing page and articles share a separate preference. A visitor's explicit choice takes precedence over their system setting.
+Hover rotates wrists and anatomical finger joints. Finger curls are 50% stronger than the initial PR version; wrist motion stays restrained. Repeated clicks create independent pulses through both hands, with 50% stronger glow and trail intensity. Signals complete the full journey in about 1.5 seconds. The connecting fingertip thread and its crossing pulse are twice as thick as the previous 50%-thicker version. Reduced-motion visitors receive a brief highlight, and the static image remains available without WebGL. The source image, source-coordinate rig, and asset prompt are maintained together in website/assets/.
 
-`docs_theme/partials/header.html` preserves the Material 9.7.7 header behavior and customizes its first title topic for the wordmark and separate Docs label. The logo returns to the site root. Compare this override with upstream when upgrading Material. CI includes changes to `docs_theme/`.
-
-The retained `dashboard-example.png` asset captures the bundled `examples/local-audit/demo.py` workspace while awaiting evidence review. Recreate it with that example and a loopback dashboard; any use must retain the unfinished-state caption. Use synthetic evidence only.
-
-This configuration adds no analytics integration, external font service, or visitor authentication.
+Documentation branding and theme files remain available for independent documentation builds. The public website adds no analytics, external fonts, or visitor authentication.

@@ -1,0 +1,29 @@
+/* The existing site supplies the header, typography, buttons, and theme system. */
+:root[data-theme="dark"] { --frost:#161717; --surface-rgb:22,23,23; --rule:#343d40; }
+.hands-page .page::before { display:none; }
+.hands-page .site-header { border-bottom:0; }
+.hands-page .brand { min-height:44px; }
+.hands-page .hero { align-items:center; text-align:center; padding-block:clamp(24px,4svh,44px); }
+.hands-page h1 { margin:0; font-size:clamp(40px,5.75vw,86px); max-width:1250px; flex:none; }
+.hands-page h1 em { display:inline-block; }
+.hands-page .contact-block { margin-top:20px; align-items:center; }
+.ag-touch-stage { width:min(calc(90% + 9vw),1242px,max(666px,calc((100svh - 310px)*2.61))); height:auto; aspect-ratio:2.9/1; flex:none; display:flex; align-items:center; justify-content:center; position:relative; margin:22px 0 4px; appearance:none; border:0; padding:0; background:transparent; color:inherit; cursor:pointer; overflow:hidden; -webkit-tap-highlight-color:transparent; }
+.ag-touch-stage { border-radius:8% / 45%; }
+.ag-touch-stage:disabled { cursor:default; }
+.ag-touch-art { position:relative; flex:0 0 100%; width:100%; aspect-ratio:2/1; isolation:isolate; mask-image:linear-gradient(to right,transparent,#000 3%,#000 97%,transparent); }
+.ag-touch-art img { display:block; width:100%; height:100%; object-fit:contain; user-select:none; pointer-events:none; mask-image:linear-gradient(to bottom,transparent,#000 14%,#000 82%,transparent); }
+.ag-touch-art canvas { position:absolute; inset:0; display:block; width:100%; height:100%; pointer-events:none; }
+.ag-sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+@media(max-width:700px) {
+  .hands-page .site-header { grid-template-columns:minmax(0,1fr) auto; padding-top:0; gap:1rem; }
+  .hands-page .hero { padding:32px var(--gutter); }
+  .hands-page h1 { font-size:clamp(34px,8.2vw,52px); max-width:620px; }
+  .ag-touch-stage { width:calc(90% + 10.8vw); height:auto; aspect-ratio:2.1/1; margin:24px 0 12px; }
+  .hands-page .contact-block { margin-top:24px; }
+}
+@media(min-width:701px) and (max-height:740px) {
+  .hands-page .hero { padding-block:22px; }
+  .hands-page h1 { font-size:clamp(38px,8.2svh,66px); }
+  .ag-touch-stage { margin-block:8px 0; }
+  .hands-page .contact-block { margin-top:18px; }
+}

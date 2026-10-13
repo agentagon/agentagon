@@ -1,55 +1,21 @@
-"""Build the public website and MkDocs documentation as one static deployment."""
+"""Build the public landing page and homepage redirects as a static deployment."""
 
 import argparse
 import json
 import shutil
 import sys
 import tempfile
-from datetime import date
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-import markdown
-import yaml
 from check_site import check_site
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
-from mkdocs.commands.build import build as build_docs
-from mkdocs.config import load_config
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "website"
 OUTPUT = ROOT / "site"
 ORIGIN = "https://agentagon.ai"
 SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
-
-
-def load_posts():
-    posts = []
-    for source in sorted((SOURCE / "blogs").glob("*.md")):
-        _, frontmatter, body = source.read_text().split("---", 2)
-        post = yaml.safe_load(frontmatter)
-        for key in ("title", "description", "author"):
-            if not isinstance(post.get(key), str) or not post[key].strip():
-                raise ValueError(f"{source.name}: missing {key}")
-        for key in ("published_at", "updated_at"):
-            value = date.fromisoformat(str(post[key]))
-            post[key] = value.isoformat()
-            post[key.replace("_at", "_label")] = value.strftime("%B %d, %Y").replace(" 0", " ")
-        post["path"] = f"/blogs/{source.stem}/"
-        post["html"] = markdown.markdown(body, extensions=["fenced_code", "tables", "toc"])
-        post["structured_data"] = {
-            "@context": "https://schema.org",
-            "@type": "TechArticle",
-            "headline": post["title"],
-            "description": post["description"],
-            "author": {"@type": "Person", "name": post["author"]},
-            "datePublished": post["published_at"],
-            "dateModified": post["updated_at"],
-            "mainEntityOfPage": ORIGIN + post["path"],
-            "image": ORIGIN + "/assets/tidal-causeway-light-sun.png",
-        }
-        posts.append(post)
-    return sorted(posts, key=lambda post: post["published_at"], reverse=True)
 
 
 def hosting_config(*, preview):
@@ -61,13 +27,12 @@ def hosting_config(*, preview):
         headers["X-Robots-Tag"] = "noindex"
     return {
         "trailingSlash": "auto",
-        "responseOverrides": {"404": {"rewrite": "/404.html", "statusCode": 404}},
+        "responseOverrides": {"404": {"redirect": "/", "statusCode": 302}},
         "globalHeaders": headers,
     }
 
 
 def assemble(destination, *, preview=False):
-    posts = load_posts()
     env = Environment(
         loader=FileSystemLoader([SOURCE / "templates", SOURCE]),
         autoescape=select_autoescape(["html"]),
@@ -87,8 +52,7 @@ def assemble(destination, *, preview=False):
                 title=title,
                 description=description,
                 article=context.pop("article", None),
-                noindex=preview or path == "/404.html",
-                posts=posts,
+                noindex=preview,
                 **context,
             )
         )
@@ -98,43 +62,17 @@ def assemble(destination, *, preview=False):
     render(
         "index.html",
         "/",
-        "Agentagon — Improve your AI agents. Continuously.",
-        "Inspect and improve AI agents with measured fixes and custom scores.",
+        "Agentagon - Reliability for the robot age.",
+        "AI agents that take the controls when a robot gets stuck, find another way, "
+        "and keep it working.",
     )
-    render(
-        "blogs.html",
-        "/blogs/",
-        "Agentagon Blog — Better agents. Measured, not assumed.",
-        "Notes on agent behavior, regression testing, and measured improvements.",
-    )
-    for post in posts:
-        render(
-            "article.html",
-            post["path"],
-            post["title"] + " | Agentagon",
-            post["description"],
-            article=post,
-        )
-    render(
-        "message.html",
-        "/404.html",
-        "Page not found | Agentagon",
-        "Find Agentagon documentation, articles, and installation instructions.",
-        label="404 · Page not found",
-        heading="That path ends here.",
-        message="This page has moved or is no longer available. "
-        "Start with the docs, or head back to Agentagon.",
-    )
-    config = load_config(config_file=str(ROOT / "mkdocs.yml"), site_dir=str(destination / "docs"))
-    build_docs(config)
     (destination / "staticwebapp.config.json").write_text(
         json.dumps(hosting_config(preview=preview), indent=2) + "\n"
     )
     ET.register_namespace("", SITEMAP_NS)
-    sitemap = ET.parse(destination / "docs" / "sitemap.xml").getroot()
-    for path in ("/", "/blogs/", *(post["path"] for post in posts)):
-        entry = ET.SubElement(sitemap, f"{{{SITEMAP_NS}}}url")
-        ET.SubElement(entry, f"{{{SITEMAP_NS}}}loc").text = ORIGIN + path
+    sitemap = ET.Element(f"{{{SITEMAP_NS}}}urlset")
+    entry = ET.SubElement(sitemap, f"{{{SITEMAP_NS}}}url")
+    ET.SubElement(entry, f"{{{SITEMAP_NS}}}loc").text = ORIGIN + "/"
     ET.ElementTree(sitemap).write(
         destination / "sitemap.xml", encoding="utf-8", xml_declaration=True
     )

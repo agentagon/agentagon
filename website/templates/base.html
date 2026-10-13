@@ -1,18 +1,18 @@
 <!doctype html>
-<html lang="en">
+<html lang="en"{% block html_attributes %}{% endblock %}>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{ title }}</title>
     <meta name="description" content="{{ description }}" />
-    <meta name="theme-color" content="#f5f8fb" />
+    <meta name="theme-color" content="{% block theme_color %}#f5f8fb{% endblock %}" />
     {% if noindex %}<meta name="robots" content="noindex" />{% else %}<link rel="canonical" href="{{ origin }}{{ path }}" />{% endif %}
     <meta property="og:title" content="{{ title }}" />
     <meta property="og:description" content="{{ description }}" />
     <meta property="og:type" content="{{ 'article' if article else 'website' }}" />
     <meta property="og:url" content="{{ origin }}{{ path }}" />
-    <meta property="og:image" content="{{ origin }}/assets/tidal-causeway-light-sun.png" />
-    <meta property="og:image:alt" content="A pixel-art causeway leading across the water toward a distant tower." />
+    <meta property="og:image" content="{% block og_image %}{{ origin }}/assets/tidal-causeway-light-sun.png{% endblock %}" />
+    <meta property="og:image:alt" content="{% block og_image_alt %}A pixel-art causeway leading across the water toward a distant tower.{% endblock %}" />
     <meta name="twitter:card" content="summary_large_image" />
     {% if article %}
     <meta property="article:published_time" content="{{ article.published_at }}" />
@@ -21,9 +21,10 @@
     <script type="application/ld+json">{{ article.structured_data | tojson }}</script>
     {% endif %}
     <link rel="icon" type="image/png" href="/assets/logo-split-crown-96.png" />
-    <script src="/assets/theme-init.js"></script>
+    {% block theme_init %}<script src="/assets/theme-init.js"></script>{% endblock %}
     <link rel="stylesheet" href="/assets/site.css" />
-    <script src="/assets/site.js" defer></script>
+    {% block site_script %}<script src="/assets/site.js" defer></script>{% endblock %}
+    {% block extra_head %}{% endblock %}
   </head>
   <body class="{% block page_class %}reading-page{% endblock %}">
     <a class="skip-link" href="#main">Skip to content</a>
@@ -34,12 +35,6 @@
       {% block footer %}
       <footer class="site-footer">
         <span>Agentagon · Apache 2.0</span>
-        <nav aria-label="Footer navigation">
-          <a href="/docs/">Docs</a>
-          <a href="/blogs/">Blogs</a>
-          <a href="/docs/privacy/">Privacy</a>
-          <a href="mailto:founders@agentagon.ai">Talk to us</a>
-        </nav>
       </footer>
       {% endblock %}
     </div>
