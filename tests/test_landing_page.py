@@ -43,7 +43,7 @@ def test_landing_has_static_art_contact_and_accessible_motion_control():
     html = render("index.html", "/")
     elements = Elements(html).elements
     image = next(attrs for tag, attrs in elements if tag == "img" and attrs.get("fetchpriority"))
-    assert image["src"] == "/assets/titanium-hands-transparent.png"
+    assert image["src"] == "/assets/titanium-hands-clean.png"
     assert image["alt"] and image["width"] == "1774" and image["height"] == "887"
     assert (ROOT / "website" / image["src"].lstrip("/")).is_file()
     assert any(
