@@ -16,7 +16,7 @@ dependencies = [
     "referencing>=0.28.4,<1",
     "httpx>=0.28,<1",
     "gepa==0.1.4",
-    "mcp>=1.25,<2",
+    "mcp>=2.2.0,<3",
 ]
 
 [project.urls]
